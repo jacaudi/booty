@@ -1,12 +1,16 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
+	"path/filepath"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
@@ -35,6 +39,12 @@ const (
 	JoinString            = "joinString"
 	Updating              = "updating"
 )
+
+// httpClient is the package-level HTTP client used for DownloadFile.
+// The 5-minute Timeout is a hard ceiling covering the entire request
+// lifecycle (connect + headers + body); ctx-driven cancellation
+// composes on top, so whichever fires first wins.
+var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(Debug, false)
@@ -70,37 +80,48 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(HardwareMap, "hardware.json")
 }
 
-func DownloadFile(url string) error {
-	log.Printf("Downloading %s", url)
-	resp, err := http.Get(url)
+// DownloadFile streams the body at rawURL into <DataDir>/<filename>,
+// where filename is the trailing path segment of rawURL (query
+// strings stripped). The request honors ctx cancellation and the
+// package-level httpClient.Timeout (5 minutes); whichever fires
+// first wins.
+func DownloadFile(ctx context.Context, rawURL string) error {
+	log.Printf("Downloading %s", rawURL)
+
+	u, err := url.Parse(rawURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("config: parse url %q: %w", rawURL, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return fmt.Errorf("config: build request: %w", err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("config: get %s: %w", rawURL, err)
 	}
 	defer resp.Body.Close()
-	filename := fmt.Sprintf("%s/%s", viper.GetString(DataDir), path.Base(url))
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("config: get %s: status %s", rawURL, resp.Status)
+	}
+
+	filename := filepath.Join(viper.GetString(DataDir), path.Base(u.Path))
 	log.Printf("Creating %s", filename)
 
 	f, err := os.Create(filename)
 	if err != nil {
-		return err
+		return fmt.Errorf("config: create %s: %w", filename, err)
 	}
 	defer f.Close()
 
-	_, err = io.Copy(f, resp.Body)
+	n, err := io.Copy(f, resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("config: write %s: %w", filename, err)
 	}
-	fileInfo, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	log.Printf("Download completed for %s (%d)", url, fileInfo.Size())
 
+	log.Printf("Download completed for %s (%d)", rawURL, n)
 	return nil
-}
-
-func EnsureDeps() {
-	DownloadFile("http://ftp.us.debian.org/debian/dists/stable/main/installer-amd64/20230607/images/netboot/pxelinux.0")
-	DownloadFile("http://ftp.us.debian.org/debian/dists/stable/main/installer-amd64/20230607/images/netboot/debian-installer/amd64/boot-screens/ldlinux.c32")
-	DownloadFile("https://raw.githubusercontent.com/jeefy/booty/main/undionly.kpxe")
 }

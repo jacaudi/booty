@@ -146,7 +146,6 @@ func main() {
 func run(cmd *cobra.Command, argv []string) error {
 	log.Println("Starting Booty!")
 	config.LoadConfig(cmd)
-	config.EnsureDeps()
 
 	if err := hardware.Load(); err != nil {
 		return fmt.Errorf("hardware: %w", err)
