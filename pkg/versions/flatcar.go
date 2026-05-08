@@ -33,20 +33,29 @@ func FlatcarVersionCheck() {
 	}
 
 	if viper.GetString(config.CurrentFlatcarVersion) == "" {
-		// Check for an existing version.txt file
-		if oldVer, err := os.Open(fmt.Sprintf("%s/version.txt", viper.GetString(config.DataDir))); err == nil {
-			log.Println("Found old version.txt, setting current version to that")
-			data, _ := godotenv.Parse(oldVer)
-			if _, ok := data["FLATCAR_VERSION"]; !ok {
-				log.Println("Old version.txt file is invalid")
-				if err != nil {
-					log.Println(err.Error())
+		versionPath := fmt.Sprintf("%s/version.txt", viper.GetString(config.DataDir))
+		if oldVer, err := os.Open(versionPath); err == nil {
+			defer oldVer.Close()
+			data, parseErr := godotenv.Parse(oldVer)
+			switch {
+			case parseErr != nil:
+				log.Printf("Error parsing %s: %s; defaulting to 0.0.0", versionPath, parseErr.Error())
+				viper.Set(config.CurrentFlatcarVersion, "0.0.0")
+			default:
+				if v, ok := data["FLATCAR_VERSION"]; ok {
+					viper.Set(config.CurrentFlatcarVersion, v)
+					log.Printf("Flatcar version set to %s", v)
+				} else {
+					log.Printf("%s present but FLATCAR_VERSION key missing; defaulting to 0.0.0", versionPath)
+					viper.Set(config.CurrentFlatcarVersion, "0.0.0")
 				}
 			}
-			log.Printf("Flatcar version set to %s", data["FLATCAR_VERSION"])
-			viper.Set(config.CurrentFlatcarVersion, data["FLATCAR_VERSION"])
 		} else {
-			log.Printf("%s not found, setting current version to 0.0.0", fmt.Sprintf("%s/version.txt", viper.GetString(config.DataDir)))
+			if !os.IsNotExist(err) {
+				log.Printf("Error opening %s: %s", versionPath, err.Error())
+			} else {
+				log.Printf("%s not found, setting current version to 0.0.0", versionPath)
+			}
 			viper.Set(config.CurrentFlatcarVersion, "0.0.0")
 		}
 	}
