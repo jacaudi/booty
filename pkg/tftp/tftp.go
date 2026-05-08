@@ -81,8 +81,9 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 			if host.DoInstall {
 				menuDefault = "install"
 				if filename == "booty.ipxe" {
-					host.DoInstall = false
-					if err := hardware.WriteMacAddress(macAddress, *host); err != nil {
+					modified := *host
+					modified.DoInstall = false
+					if err := hardware.WriteMacAddress(macAddress, modified); err != nil {
 						log.Printf("TFTP: error persisting DoInstall flip for %s: %s", macAddress, err.Error())
 						// Best-effort: continue serving the iPXE script even if
 						// the persist failed; the next boot will retry.
