@@ -83,6 +83,7 @@ func FlatcarVersionCheck() {
 
 func LoadRemoteFlatcarVersion() {
 	if resp, err := http.Get(RemoteFlatcarURL() + "/version.txt"); err == nil {
+		defer resp.Body.Close()
 		data, _ := godotenv.Parse(resp.Body)
 		if _, ok := data["FLATCAR_VERSION"]; !ok {
 			log.Printf("Error retrieving remote flatcar version from %s", resp.Request.URL.String())
