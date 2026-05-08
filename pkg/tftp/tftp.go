@@ -1,10 +1,12 @@
 package tftp
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +16,40 @@ import (
 	"github.com/pin/tftp"
 	"github.com/spf13/viper"
 )
+
+// absDataDir is the absolute, cleaned form of viper's DataDir, resolved once
+// in StartTFTP. safeJoin reads it; do not mutate after StartTFTP returns.
+var absDataDir string
+
+// errPathEscapes is returned by safeJoin when the requested path resolves
+// outside absDataDir (e.g. via "..", absolute paths, or sneaky combinations).
+var errPathEscapes = errors.New("tftp: path escapes dataDir")
+
+// safeJoin resolves requested against absDataDir and returns an absolute,
+// cleaned path under absDataDir, or errPathEscapes if the result would lie
+// outside the root.
+//
+// Note: this does not call filepath.EvalSymlinks. If absDataDir contains a
+// symlink whose target is outside the directory, safeJoin will not detect it.
+// TFTP is read-only and the operator controls dataDir contents; this is an
+// acceptable limitation.
+func safeJoin(requested string) (string, error) {
+	if absDataDir == "" {
+		return "", errors.New("tftp: absDataDir not initialized")
+	}
+	// filepath.Join discards the base when requested is absolute, so reject
+	// absolute paths explicitly before joining.
+	if filepath.IsAbs(requested) {
+		return "", errPathEscapes
+	}
+	joined := filepath.Join(absDataDir, requested)
+	cleaned := filepath.Clean(joined)
+	if cleaned != absDataDir &&
+		!strings.HasPrefix(cleaned, absDataDir+string(filepath.Separator)) {
+		return "", errPathEscapes
+	}
+	return cleaned, nil
+}
 
 // readHandler is called when client starts file download from server
 func readHandler(filename string, rf io.ReaderFrom) error {
@@ -80,10 +116,19 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 		log.Printf("%d bytes sent (%s)\n", n, filename)
 		return nil
 	}
-	file, err := os.Open(fmt.Sprintf("%s/%s", viper.GetString(config.DataDir), filename))
+	path, err := safeJoin(filename)
+	if err != nil {
+		if errors.Is(err, errPathEscapes) {
+			log.Printf("TFTP rejected: client=%s requested=%q (path escapes dataDir)",
+				raddr.String(), filename)
+		}
+		return os.ErrNotExist
+	}
+	file, err := os.Open(path)
 	if err != nil {
 		return err
 	}
+	defer file.Close()
 	n, err := rf.ReadFrom(file)
 	if err != nil {
 		return err
@@ -99,6 +144,12 @@ func writeHandler(filename string, wt io.WriterTo) error {
 }
 
 func StartTFTP() {
+	resolved, err := filepath.Abs(viper.GetString(config.DataDir))
+	if err != nil {
+		log.Fatalf("TFTP: failed to resolve dataDir: %v", err)
+	}
+	absDataDir = resolved
+
 	// use nil in place of handler to disable read or write operations
 	s := tftp.NewServer(readHandler, writeHandler)
 	s.SetBlockSize(512)

@@ -3,6 +3,7 @@ package tftp
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,7 +47,7 @@ func TestSafeJoin(t *testing.T) {
 				return
 			}
 			// Successful resolution must stay under the root.
-			if got != abs && !filepath.HasPrefix(got, abs+string(filepath.Separator)) {
+			if got != abs && !strings.HasPrefix(got, abs+string(filepath.Separator)) {
 				t.Errorf("safeJoin(%q) = %q, escapes root %q", tc.requested, got, abs)
 			}
 		})
