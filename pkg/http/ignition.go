@@ -3,6 +3,7 @@ package http
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -54,7 +55,12 @@ func handleIgnitionRequest(w http.ResponseWriter, r *http.Request) {
 	if viper.GetBool("debug") {
 		log.Printf("Using mac address `%s`", macAddress)
 	}
-	host := hardware.GetMacAddress(macAddress)
+	host, err := hardware.GetMacAddress(macAddress)
+	if err != nil && !errors.Is(err, hardware.ErrNotFound) {
+		log.Printf("Error looking up host %s: %s", macAddress, err.Error())
+		// Treat unexpected errors the same as a miss — fall through to the
+		// reboot-config path so the machine doesn't boot loop on a bad DB.
+	}
 
 	var tpl bytes.Buffer
 
