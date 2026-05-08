@@ -90,6 +90,7 @@ func CoreOSVersionCheck() {
 
 func LoadRemoteCoreOSVersion() {
 	if resp, err := http.Get(RemoteCoreOSJSONURL()); err == nil {
+		defer resp.Body.Close()
 		b, err := io.ReadAll(resp.Body)
 		// b, err := ioutil.ReadAll(resp.Body)  Go.1.15 and earlier
 		if err != nil {

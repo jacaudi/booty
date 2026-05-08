@@ -44,14 +44,23 @@ func LoadConfig(cmd *cobra.Command) {
 	// https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64
 	// https://stable.release.flatcar-linux.net/amd64-usr/current/version.txt
 
-	if file, err := os.Open(fmt.Sprintf("%s/version.txt", viper.GetString(DataDir))); err == nil {
-		data, _ := godotenv.Parse(file)
-		if _, ok := data["FLATCAR_VERSION"]; !ok {
-			viper.Set(CurrentFlatcarVersion, data["FLATCAR_VERSION"])
-			log.Printf("Local version found: %s", data["FLATCAR_VERSION"])
+	versionPath := fmt.Sprintf("%s/version.txt", viper.GetString(DataDir))
+	if file, err := os.Open(versionPath); err == nil {
+		defer file.Close()
+		data, parseErr := godotenv.Parse(file)
+		switch {
+		case parseErr != nil:
+			log.Printf("Error parsing %s: %s", versionPath, parseErr.Error())
+		default:
+			if v, ok := data["FLATCAR_VERSION"]; ok {
+				viper.Set(CurrentFlatcarVersion, v)
+				log.Printf("Local version found: %s", v)
+			} else {
+				log.Printf("%s present but FLATCAR_VERSION key missing", versionPath)
+			}
 		}
-	} else {
-		log.Printf("Error retrieving existing local version: %s", err.Error())
+	} else if !os.IsNotExist(err) {
+		log.Printf("Error opening %s: %s", versionPath, err.Error())
 	}
 
 	viper.BindEnv(IgnitionFile, "IGNITION_FILE")
