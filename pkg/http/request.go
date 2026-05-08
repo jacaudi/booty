@@ -2,7 +2,9 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -16,29 +18,41 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDataRequest(w http.ResponseWriter, r *http.Request) {
-	w.Write(hardware.GetData())
+	data, err := hardware.GetData()
+	if err != nil {
+		log.Printf("Error getting hardware data: %s", err.Error())
+		http.Error(w, "Error getting hardware data", http.StatusInternalServerError)
+		return
+	}
+	w.Write(data)
 }
 
 func handleHostsRequest(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("mac") == "" {
-		w.Write([]byte("MAC address is required"))
+	mac := r.URL.Query().Get("mac")
+	if mac == "" {
+		http.Error(w, "MAC address is required", http.StatusBadRequest)
 		return
 	}
 
-	host := hardware.GetMacAddress(r.URL.Query().Get("mac"))
-	if host == nil {
-		w.Write([]byte("Error retrieving host"))
+	host, err := hardware.GetMacAddress(mac)
+	if errors.Is(err, hardware.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		log.Printf("Error looking up host %s: %s", mac, err.Error())
+		http.Error(w, "Error retrieving host", http.StatusInternalServerError)
 		return
 	}
 
 	data, err := json.Marshal(host)
 	if err != nil {
-		w.Write([]byte("Error marshalling host data"))
+		log.Printf("Error marshalling host %s: %s", mac, err.Error())
+		http.Error(w, "Error marshalling host data", http.StatusInternalServerError)
 		return
 	}
-	if len(data) > 0 {
-		w.Write(data)
-	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }
 
 func handleVersionRequest(w http.ResponseWriter, r *http.Request) {

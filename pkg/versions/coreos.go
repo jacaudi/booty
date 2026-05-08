@@ -1,11 +1,14 @@
 package versions
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/buger/jsonparser"
@@ -53,39 +56,59 @@ func CoreOSVersionCheck() {
 	LoadRemoteCoreOSVersion()
 	oldVersion := viper.GetString(config.CurrentCoreOSVersion)
 	if viper.GetString(config.RemoteCoreOSVersion) != viper.GetString(config.CurrentCoreOSVersion) {
+		ctx := context.Background()
 		viper.Set(config.UpdatingCoreOS, true)
 		log.Printf("Remote coreos version %s is different than local version %s", viper.GetString(config.RemoteCoreOSVersion), oldVersion)
 
-		if err := DownloadCoreOSJSON(); err != nil {
+		if err := DownloadCoreOSJSON(ctx); err != nil {
 			log.Printf("Error downloading coreos json: %s", err.Error())
 		}
 		toDownload := ""
 
 		toDownload = fmt.Sprintf("fedora-coreos-%s-live-initramfs.%s.img", viper.GetString(config.RemoteCoreOSVersion), viper.GetString(config.CoreOSArchitecture))
-		if err := DownloadCoreOSFile(toDownload); err != nil {
+		if err := DownloadCoreOSFile(ctx, toDownload); err != nil {
 			log.Printf("Error downloading %s: %s", toDownload, err.Error())
 		}
 
 		toDownload = fmt.Sprintf("fedora-coreos-%s-live-kernel-%s", viper.GetString(config.RemoteCoreOSVersion), viper.GetString(config.CoreOSArchitecture))
-		if err := DownloadCoreOSFile(toDownload); err != nil {
+		if err := DownloadCoreOSFile(ctx, toDownload); err != nil {
 			log.Printf("Error downloading %s: %s", toDownload, err.Error())
 		}
 
 		toDownload = fmt.Sprintf("fedora-coreos-%s-live-rootfs.%s.img", viper.GetString(config.RemoteCoreOSVersion), viper.GetString(config.CoreOSArchitecture))
-		if err := DownloadCoreOSFile(toDownload); err != nil {
+		if err := DownloadCoreOSFile(ctx, toDownload); err != nil {
 			log.Printf("Error downloading %s: %s", toDownload, err.Error())
 		}
 
 		viper.Set(config.CurrentCoreOSVersion, viper.GetString(config.RemoteCoreOSVersion))
 
-		// Remove old versions once new ones are downloaded
-		os.Remove(fmt.Sprintf("fedora-coreos-%s-live-initramfs.%s.img", oldVersion, viper.GetString(config.CoreOSArchitecture)))
-		os.Remove(fmt.Sprintf("fedora-coreos-%s-live-kernel-%s", oldVersion, viper.GetString(config.CoreOSArchitecture)))
-		os.Remove(fmt.Sprintf("fedora-coreos-%s-live-rootfs.%s.img", oldVersion, viper.GetString(config.CoreOSArchitecture)))
+		removeOldCoreOSArtifacts(
+			viper.GetString(config.DataDir),
+			oldVersion,
+			viper.GetString(config.CoreOSArchitecture),
+		)
 
 		viper.Set(config.UpdatingCoreOS, false)
 	}
 
+}
+
+// removeOldCoreOSArtifacts deletes the three fedora-coreos-<oldVersion>-live-*
+// files from dataDir. Files that don't exist are silently OK (first-run, or
+// systems that ran with the prior bare-relative-path bug never had artifacts
+// in the right place anyway). Other errors log loudly.
+func removeOldCoreOSArtifacts(dataDir, oldVersion, arch string) {
+	files := []string{
+		fmt.Sprintf("fedora-coreos-%s-live-initramfs.%s.img", oldVersion, arch),
+		fmt.Sprintf("fedora-coreos-%s-live-kernel-%s", oldVersion, arch),
+		fmt.Sprintf("fedora-coreos-%s-live-rootfs.%s.img", oldVersion, arch),
+	}
+	for _, f := range files {
+		full := filepath.Join(dataDir, f)
+		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("CoreOS cleanup: remove %s: %s", full, err.Error())
+		}
+	}
 }
 
 func LoadRemoteCoreOSVersion() {
@@ -118,14 +141,14 @@ func RemoteCoreOSURL() string {
 	return fmt.Sprintf(viper.GetString(config.CoreOSURL), viper.GetString(config.CoreOSChannel), viper.GetString(config.RemoteCoreOSVersion), viper.GetString(config.CoreOSArchitecture))
 }
 
-func DownloadCoreOSFile(filename string) error {
-	return config.DownloadFile(fmt.Sprintf(RemoteCoreOSURL()+"/%s", filename))
+func DownloadCoreOSFile(ctx context.Context, filename string) error {
+	return config.DownloadFile(ctx, fmt.Sprintf(RemoteCoreOSURL()+"/%s", filename))
 }
 
 func RemoteCoreOSJSONURL() string {
 	return fmt.Sprintf("https://builds.coreos.fedoraproject.org/streams/%s.json", viper.GetString(config.CoreOSChannel))
 }
 
-func DownloadCoreOSJSON() error {
-	return config.DownloadFile(RemoteCoreOSJSONURL())
+func DownloadCoreOSJSON(ctx context.Context) error {
+	return config.DownloadFile(ctx, RemoteCoreOSJSONURL())
 }

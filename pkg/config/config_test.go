@@ -1,9 +1,14 @@
 package config
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -61,5 +66,75 @@ func TestLoadConfig_VersionFile(t *testing.T) {
 				t.Errorf("CurrentFlatcarVersion = %q, want %q", got, tc.wantVersion)
 			}
 		})
+	}
+}
+
+func TestDownloadFile_TimesOut(t *testing.T) {
+	viper.Reset()
+	viper.Set(DataDir, t.TempDir())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		_, _ = w.Write([]byte("late"))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := DownloadFile(ctx, srv.URL+"/foo.bin")
+	if err == nil {
+		t.Fatalf("DownloadFile: err = nil, want timeout")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("DownloadFile: err = %v, want wrap of context.DeadlineExceeded", err)
+	}
+}
+
+func TestDownloadFile_StripsQueryStringFromFilename(t *testing.T) {
+	viper.Reset()
+	dir := t.TempDir()
+	viper.Set(DataDir, dir)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer srv.Close()
+
+	if err := DownloadFile(context.Background(), srv.URL+"/foo.bin?token=secret"); err != nil {
+		t.Fatalf("DownloadFile: %v", err)
+	}
+
+	want := filepath.Join(dir, "foo.bin")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("expected file at %s, stat err: %v", want, err)
+	}
+
+	bad := filepath.Join(dir, "foo.bin?token=secret")
+	if _, err := os.Stat(bad); err == nil {
+		t.Errorf("query-tainted filename %s should not exist", bad)
+	}
+}
+
+func TestDownloadFile_SuccessRoundTrip(t *testing.T) {
+	viper.Reset()
+	dir := t.TempDir()
+	viper.Set(DataDir, dir)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("hello"))
+	}))
+	defer srv.Close()
+
+	if err := DownloadFile(context.Background(), srv.URL+"/greeting.txt"); err != nil {
+		t.Fatalf("DownloadFile: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "greeting.txt"))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Errorf("body = %q, want %q", string(got), "hello")
 	}
 }
