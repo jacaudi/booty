@@ -108,7 +108,11 @@ func DownloadFile(ctx context.Context, rawURL string) error {
 		return fmt.Errorf("config: get %s: status %s", rawURL, resp.Status)
 	}
 
-	filename := filepath.Join(viper.GetString(DataDir), path.Base(u.Path))
+	base := path.Base(u.Path)
+	if base == "." || base == ".." || base == "/" {
+		return fmt.Errorf("config: url %q yields unsafe filename %q", rawURL, base)
+	}
+	filename := filepath.Join(viper.GetString(DataDir), base)
 	log.Printf("Creating %s", filename)
 
 	f, err := os.Create(filename)
