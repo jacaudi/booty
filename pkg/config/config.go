@@ -33,12 +33,14 @@ const (
 	ServerIP              = "serverIP"
 	ServerHttpPort        = "serverHttpPort"
 	JoinString            = "joinString"
-	Updating              = "updating"
+	UpdatingFlatcar       = "updatingFlatcar"
+	UpdatingCoreOS        = "updatingCoreOS"
 )
 
 func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(Debug, false)
-	viper.SetDefault(Updating, false)
+	viper.SetDefault(UpdatingFlatcar, false)
+	viper.SetDefault(UpdatingCoreOS, false)
 	viper.SetDefault(FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
 	viper.SetDefault(CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
 	// https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64
