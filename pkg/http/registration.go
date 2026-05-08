@@ -36,7 +36,11 @@ func handleRegistrationRequest(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
-	hardware.WriteMacAddress(h.MAC, h)
+	if err := hardware.WriteMacAddress(h.MAC, h); err != nil {
+		log.Printf("Error writing host %s: %s", h.MAC, err.Error())
+		http.Error(w, "Error saving host", http.StatusInternalServerError)
+		return
+	}
 
 	w.Write([]byte("OK"))
 }
@@ -54,6 +58,10 @@ func handleUnregistrationRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hardware.RemoveMacAddress(h.MAC)
+	if err := hardware.RemoveMacAddress(h.MAC); err != nil {
+		log.Printf("Error removing host %s: %s", h.MAC, err.Error())
+		http.Error(w, "Error removing host", http.StatusInternalServerError)
+		return
+	}
 	w.Write([]byte("OK"))
 }

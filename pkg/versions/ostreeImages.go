@@ -54,9 +54,13 @@ func StartOSTreeImageSync() {
 func OSTreeImageSync() {
 	EnsureOCIFolders()
 	pulled := make(map[string]bool)
-	bootyData := hardware.BootyData{}
-	err := json.Unmarshal(hardware.GetData(), &bootyData)
+	data, err := hardware.GetData()
 	if err != nil {
+		log.Printf("Error getting hardware data: %s", err.Error())
+		return
+	}
+	bootyData := hardware.BootyData{}
+	if err := json.Unmarshal(data, &bootyData); err != nil {
 		log.Printf("Error unmarshalling hardware map: %s", err.Error())
 		return
 	}

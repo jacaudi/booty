@@ -70,7 +70,10 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 		log.Printf("Error with ARP request: %s", err)
 	} else {
 		macAddress := hwAddr.String()
-		host := hardware.GetMacAddress(macAddress)
+		host, lookupErr := hardware.GetMacAddress(macAddress)
+		if lookupErr != nil && !errors.Is(lookupErr, hardware.ErrNotFound) {
+			log.Printf("TFTP: error looking up host %s: %s", macAddress, lookupErr.Error())
+		}
 		if host != nil {
 			if host.OS != "" {
 				osToLoad = host.OS
@@ -79,7 +82,11 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 				menuDefault = "install"
 				if filename == "booty.ipxe" {
 					host.DoInstall = false
-					hardware.WriteMacAddress(macAddress, *host)
+					if err := hardware.WriteMacAddress(macAddress, *host); err != nil {
+						log.Printf("TFTP: error persisting DoInstall flip for %s: %s", macAddress, err.Error())
+						// Best-effort: continue serving the iPXE script even if
+						// the persist failed; the next boot will retry.
+					}
 				}
 			}
 		}

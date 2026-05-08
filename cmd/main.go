@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/hardware"
 	bootyHTTP "github.com/jeefy/booty/pkg/http"
 	"github.com/jeefy/booty/pkg/tftp"
 	"github.com/jeefy/booty/pkg/versions"
@@ -146,6 +147,10 @@ func run(cmd *cobra.Command, argv []string) error {
 	log.Println("Starting Booty!")
 	config.LoadConfig(cmd)
 	config.EnsureDeps()
+
+	if err := hardware.Load(); err != nil {
+		return fmt.Errorf("hardware: %w", err)
+	}
 
 	versions.FlatcarVersionCheck()
 	versions.CoreOSVersionCheck()
