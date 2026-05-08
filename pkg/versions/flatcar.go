@@ -25,7 +25,7 @@ func StartFlatcarCron() {
 }
 
 func FlatcarVersionCheck() {
-	if viper.GetBool(config.Updating) {
+	if viper.GetBool(config.UpdatingFlatcar) {
 		log.Println("Already updating, skipping version check")
 		return
 	}
@@ -64,7 +64,7 @@ func FlatcarVersionCheck() {
 	LoadRemoteFlatcarVersion()
 	if viper.GetString(config.RemoteFlatcarVersion) != viper.GetString(config.CurrentFlatcarVersion) {
 		ctx := context.Background()
-		viper.Set(config.Updating, true)
+		viper.Set(config.UpdatingFlatcar, true)
 		log.Printf("Remote flatcar version %s is different than local version %s", viper.GetString(config.RemoteFlatcarVersion), viper.GetString(config.CurrentFlatcarVersion))
 
 		if err := DownloadFlatcarFile(ctx, "version.txt"); err != nil {
@@ -78,7 +78,7 @@ func FlatcarVersionCheck() {
 		}
 
 		viper.Set(config.CurrentFlatcarVersion, viper.GetString(config.RemoteFlatcarVersion))
-		viper.Set(config.Updating, false)
+		viper.Set(config.UpdatingFlatcar, false)
 	}
 
 }

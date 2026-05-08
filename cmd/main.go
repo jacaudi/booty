@@ -117,9 +117,6 @@ func init() {
 		"The kubeadm join string to use to auto-join to a K8s cluster (kubeadm join 192.168.1.10:6443 --token TOKEN --discovery-token-ca-cert-hash sha256:SHA_HASH",
 	)
 
-	Cmd.RegisterFlagCompletionFunc("output-format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return []string{"json", "prom"}, cobra.ShellCompDirectiveDefault
-	})
 	viper.BindPFlags(flags)
 
 	viper.SetDefault("version", "dev")
