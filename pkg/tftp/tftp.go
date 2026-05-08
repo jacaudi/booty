@@ -37,8 +37,10 @@ func safeJoin(requested string) (string, error) {
 	if absDataDir == "" {
 		return "", errors.New("tftp: absDataDir not initialized")
 	}
-	// filepath.Join discards the base when requested is absolute, so reject
-	// absolute paths explicitly before joining.
+	// Reject absolute-path requests as a security policy: TFTP clients must
+	// not be able to address files by absolute path, even though
+	// filepath.Join would in practice keep the result under absDataDir
+	// (Join("/dataDir", "/etc/passwd") returns "/dataDir/etc/passwd").
 	if filepath.IsAbs(requested) {
 		return "", errPathEscapes
 	}
