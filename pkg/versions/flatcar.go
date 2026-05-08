@@ -1,6 +1,7 @@
 package versions
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -62,16 +63,17 @@ func FlatcarVersionCheck() {
 
 	LoadRemoteFlatcarVersion()
 	if viper.GetString(config.RemoteFlatcarVersion) != viper.GetString(config.CurrentFlatcarVersion) {
+		ctx := context.Background()
 		viper.Set(config.Updating, true)
 		log.Printf("Remote flatcar version %s is different than local version %s", viper.GetString(config.RemoteFlatcarVersion), viper.GetString(config.CurrentFlatcarVersion))
 
-		if err := DownloadFlatcarFile("version.txt"); err != nil {
+		if err := DownloadFlatcarFile(ctx, "version.txt"); err != nil {
 			log.Printf("Error downloading version.txt: %s", err.Error())
 		}
-		if err := DownloadFlatcarFile("flatcar_production_pxe_image.cpio.gz"); err != nil {
+		if err := DownloadFlatcarFile(ctx, "flatcar_production_pxe_image.cpio.gz"); err != nil {
 			log.Printf("Error downloading flatcar_production_pxe_image.cpio.gz: %s", err.Error())
 		}
-		if err := DownloadFlatcarFile("flatcar_production_pxe.vmlinuz"); err != nil {
+		if err := DownloadFlatcarFile(ctx, "flatcar_production_pxe.vmlinuz"); err != nil {
 			log.Printf("Error downloading flatcar_production_pxe.vmlinuz: %s", err.Error())
 		}
 
@@ -105,6 +107,6 @@ func RemoteFlatcarURL() string {
 	return fmt.Sprintf(viper.GetString(config.FlatcarURL), viper.GetString(config.FlatcarChannel), viper.GetString(config.FlatcarArchitecture))
 }
 
-func DownloadFlatcarFile(filename string) error {
-	return config.DownloadFile(fmt.Sprintf(RemoteFlatcarURL()+"/%s", filename))
+func DownloadFlatcarFile(ctx context.Context, filename string) error {
+	return config.DownloadFile(ctx, fmt.Sprintf(RemoteFlatcarURL()+"/%s", filename))
 }
