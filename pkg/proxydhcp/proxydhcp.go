@@ -9,6 +9,8 @@
 package proxydhcp
 
 import (
+	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -128,4 +130,107 @@ func clientArch(req *dhcpv4.DHCPv4) iana.Arch {
 		return iana.INTEL_X86PC
 	}
 	return archs[0]
+}
+
+// NewServer validates cfg and returns a non-started Server.
+func NewServer(cfg Config) (*Server, error) {
+	if cfg.ServerIP == nil {
+		return nil, fmt.Errorf("proxydhcp: ServerIP is required")
+	}
+	if cfg.BootfileBIOS == "" || cfg.BootfileUEFI == "" || cfg.BootfileARM64 == "" {
+		return nil, fmt.Errorf("proxydhcp: bootfile names must all be set")
+	}
+	return &Server{cfg: cfg, done: make(chan struct{})}, nil
+}
+
+// Start opens the UDP/67 and UDP/4011 listeners and serves in the background.
+// UDP/67 requires CAP_NET_BIND_SERVICE (or root); the error says so.
+func (s *Server) Start() error {
+	conn67, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 67})
+	if err != nil {
+		return fmt.Errorf("proxydhcp: listen UDP/67: %w (needs root or CAP_NET_BIND_SERVICE)", err)
+	}
+	if err := enableBroadcast(conn67); err != nil {
+		conn67.Close()
+		return fmt.Errorf("proxydhcp: enable broadcast on UDP/67: %w", err)
+	}
+	s.conn67 = conn67
+
+	conn4011, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 4011})
+	if err != nil {
+		conn67.Close()
+		return fmt.Errorf("proxydhcp: listen UDP/4011: %w", err)
+	}
+	s.conn4011 = conn4011
+
+	slog.Info("proxyDHCP listening",
+		"ports", "67+4011", "next-server", s.cfg.ServerIP.String(),
+		"bios", s.cfg.BootfileBIOS, "uefi", s.cfg.BootfileUEFI, "arm64", s.cfg.BootfileARM64)
+
+	s.wg.Add(2)
+	go s.loop(conn67, true)
+	go s.loop(conn4011, false)
+	return nil
+}
+
+// Shutdown stops both listeners and waits for the serve goroutines to exit.
+// Closing the conns unblocks ReadFromUDP, so this is inherently bounded.
+func (s *Server) Shutdown() {
+	close(s.done)
+	if s.conn67 != nil {
+		s.conn67.Close()
+	}
+	if s.conn4011 != nil {
+		s.conn4011.Close()
+	}
+	s.wg.Wait()
+}
+
+// loop reads and answers requests until Shutdown. broadcast picks the reply
+// destination: true (UDP/67) broadcasts to :68, false (UDP/4011) unicasts to
+// the request source.
+func (s *Server) loop(conn *net.UDPConn, broadcast bool) {
+	defer s.wg.Done()
+	buf := make([]byte, 1500)
+	for {
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+		n, src, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			select {
+			case <-s.done:
+				return // expected: conn closed by Shutdown
+			default:
+			}
+			slog.Warn("proxyDHCP read error", "err", err)
+			continue
+		}
+		req, err := dhcpv4.FromBytes(buf[:n])
+		if err != nil {
+			slog.Warn("proxyDHCP parse error", "err", err)
+			continue
+		}
+		s.handle(conn, src, req, broadcast)
+	}
+}
+
+func (s *Server) handle(conn *net.UDPConn, src *net.UDPAddr, req *dhcpv4.DHCPv4, broadcast bool) {
+	resp, ok := buildReply(req, s.cfg)
+	if !ok {
+		return
+	}
+	dst := &net.UDPAddr{IP: net.IPv4bcast, Port: 68}
+	if !broadcast {
+		dst = src
+	}
+	if _, err := conn.WriteToUDP(resp.ToBytes(), dst); err != nil {
+		slog.Warn("proxyDHCP send error", "err", err)
+		return
+	}
+	slog.Info("proxyDHCP offer",
+		"client", req.ClientHWAddr.String(), "type", req.MessageType().String(),
+		"bootfile", resp.BootFileName)
 }
