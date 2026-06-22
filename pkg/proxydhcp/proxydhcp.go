@@ -36,11 +36,12 @@ type Config struct {
 
 // Server is the running proxyDHCP responder (two UDP listeners).
 type Server struct {
-	cfg      Config
-	conn67   *net.UDPConn
-	conn4011 *net.UDPConn
-	wg       sync.WaitGroup
-	done     chan struct{}
+	cfg       Config
+	conn67    *net.UDPConn
+	conn4011  *net.UDPConn
+	wg        sync.WaitGroup
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // selectBootfile picks the bootfile for a request. The iPXE user-class
@@ -167,31 +168,36 @@ func (s *Server) Start() error {
 		"ports", "67+4011", "next-server", s.cfg.ServerIP.String(),
 		"bios", s.cfg.BootfileBIOS, "uefi", s.cfg.BootfileUEFI, "arm64", s.cfg.BootfileARM64)
 
-	s.wg.Add(2)
-	go s.loop(conn67, true)
-	go s.loop(conn4011, false)
+	s.wg.Go(func() { s.loop(conn67, true) })
+	s.wg.Go(func() { s.loop(conn4011, false) })
 	return nil
 }
 
 // Shutdown stops both listeners and waits for the serve goroutines to exit.
-// Closing the conns unblocks ReadFromUDP, so this is inherently bounded.
+// Closing the conns unblocks ReadFromUDP, so this is inherently bounded. It is
+// idempotent: the close runs once, but every caller blocks until the goroutines
+// have exited.
 func (s *Server) Shutdown() {
-	close(s.done)
-	if s.conn67 != nil {
-		s.conn67.Close()
-	}
-	if s.conn4011 != nil {
-		s.conn4011.Close()
-	}
+	s.closeOnce.Do(func() {
+		close(s.done)
+		if s.conn67 != nil {
+			s.conn67.Close()
+		}
+		if s.conn4011 != nil {
+			s.conn4011.Close()
+		}
+	})
 	s.wg.Wait()
 }
 
 // loop reads and answers requests until Shutdown. broadcast picks the reply
 // destination: true (UDP/67) broadcasts to :68, false (UDP/4011) unicasts to
 // the request source.
+// maxPacketSize bounds a single DHCP datagram read; 1500 is the Ethernet MTU.
+const maxPacketSize = 1500
+
 func (s *Server) loop(conn *net.UDPConn, broadcast bool) {
-	defer s.wg.Done()
-	buf := make([]byte, 1500)
+	buf := make([]byte, maxPacketSize)
 	for {
 		select {
 		case <-s.done:
