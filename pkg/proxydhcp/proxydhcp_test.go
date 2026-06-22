@@ -3,6 +3,7 @@ package proxydhcp
 import (
 	"net"
 	"testing"
+	"time"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/insomniacslk/dhcp/iana"
@@ -119,4 +120,50 @@ func TestBuildReply_EchoesClientMachineID(t *testing.T) {
 	resp, ok := buildReply(req, replyCfg())
 	require.True(t, ok)
 	require.Equal(t, guid, resp.Options.Get(dhcpv4.OptionClientMachineIdentifier))
+}
+
+// TestNewServerThenShutdown verifies the lifecycle invariant that a server which
+// was constructed but never Start()ed can still be Shutdown() cleanly — no panic,
+// no deadlock. T5 starts proxyDHCP best-effort, so a never-started server reaching
+// Shutdown is a real, reachable state.
+func TestNewServerThenShutdown(t *testing.T) {
+	s, err := NewServer(replyCfg())
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	done := make(chan struct{})
+	go func() { s.Shutdown(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown on a never-started server hung")
+	}
+}
+
+// TestHandleWritesReplyToSource proves handle wires buildReply to the socket: it
+// sends the reply to the request source (the UDP/4011 path, bootp=false) where a
+// loopback reader can observe it. Uses unprivileged 127.0.0.1 sockets so it runs
+// without root in CI. The bootp broadcast path (UDP/67 -> 255.255.255.255:68) is
+// integration glue, not loopback-observable, and is left to build/vet/race.
+func TestHandleWritesReplyToSource(t *testing.T) {
+	srvConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer srvConn.Close()
+
+	cliConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer cliConn.Close()
+
+	s := &Server{cfg: replyCfg(), done: make(chan struct{})}
+	s.handle(srvConn, cliConn.LocalAddr().(*net.UDPAddr), reqWithArch(t, iana.EFI_X86_64), false)
+
+	require.NoError(t, cliConn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	buf := make([]byte, 1500)
+	n, _, err := cliConn.ReadFromUDP(buf)
+	require.NoError(t, err, "no reply delivered to the request source")
+
+	resp, err := dhcpv4.FromBytes(buf[:n])
+	require.NoError(t, err)
+	require.Equal(t, dhcpv4.MessageTypeOffer, resp.MessageType())
+	require.Equal(t, "ipxe.efi", resp.BootFileName)
 }
