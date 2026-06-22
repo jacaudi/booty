@@ -213,7 +213,15 @@ func run(cmd *cobra.Command, argv []string) error {
 		{name: "flatcar-cron", stop: flatcarCron.Stop},
 		{name: "coreos-cron", stop: coreOSCron.Stop},
 		{name: "ostree-cron", stop: schedulerStop(ostreeCron)},
-		{name: "tftp", stop: tftpServer.Shutdown},
+		// Bound the TFTP stop: in single-port mode pin/tftp's Shutdown() does
+		// not close the listening socket and the serve loop blocks on ReadFrom
+		// with no read deadline, so Shutdown() can hang until the next packet.
+		// Cap the wait so run() returns within a bounded window regardless.
+		{name: "tftp", stop: func() {
+			if !stopWithTimeout(tftpServer.Shutdown, 5*time.Second) {
+				slog.Warn("TFTP shutdown timed out; exiting anyway", "timeout", 5*time.Second)
+			}
+		}},
 	})
 
 	slog.Info("Booty stopped")

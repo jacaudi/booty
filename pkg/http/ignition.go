@@ -40,8 +40,8 @@ func handleIgnitionRequest(w http.ResponseWriter, r *http.Request) {
 		if hwAddr, _, err := arping.Ping(remoteIP); err != nil {
 			slog.Warn("error with ARP request", "err", err)
 		} else {
-			slog.Debug("mac address from ARP", "mac", macAddress)
 			macAddress = hwAddr.String()
+			slog.Debug("mac address from ARP", "mac", macAddress)
 		}
 	} else {
 		macAddress = r.URL.Query().Get("mac")
@@ -49,11 +49,20 @@ func handleIgnitionRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Debug("using mac address", "mac", macAddress)
-	host, err := hardware.GetMacAddress(macAddress)
-	if err != nil && !errors.Is(err, hardware.ErrNotFound) {
-		slog.Warn("error looking up host", "mac", macAddress, "err", err)
-		// Treat unexpected errors the same as a miss — fall through to the
-		// reboot-config path so the machine doesn't boot loop on a bad DB.
+	var host *hardware.Host
+	// An empty MAC means we never identified the host (no ?mac= and ARP found
+	// nothing). That is the expected unidentified-host case, not an error: skip
+	// the lookup so host stays nil and we serve the reboot config below without
+	// logging a spurious warning. A non-empty but malformed MAC still flows
+	// through GetMacAddress and a genuine lookup error is worth a Warn.
+	if macAddress != "" {
+		var err error
+		host, err = hardware.GetMacAddress(macAddress)
+		if err != nil && !errors.Is(err, hardware.ErrNotFound) {
+			slog.Warn("error looking up host", "mac", macAddress, "err", err)
+			// Treat unexpected errors the same as a miss — fall through to the
+			// reboot-config path so the machine doesn't boot loop on a bad DB.
+		}
 	}
 
 	var tpl bytes.Buffer

@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o bi
 
 
 ### Stage Two
-FROM node:lts-alpine as build-web
+FROM node:lts-alpine AS build-web
 WORKDIR /app
 COPY web/package*.json ./
 RUN npm install

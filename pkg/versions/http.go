@@ -15,9 +15,12 @@ import (
 var versionCheckTimeout = 30 * time.Second
 
 // versionCheckClient is the package-level client reused by every remote
-// version check. The Timeout is a hard ceiling on the whole request; the
-// per-call context deadline in fetchVersionMetadata composes on top.
-var versionCheckClient = &http.Client{Timeout: versionCheckTimeout}
+// version check. It carries no Timeout of its own: the per-call context
+// deadline in fetchVersionMetadata is the single source of truth, since it
+// reads versionCheckTimeout live (a client.Timeout would freeze the value at
+// init and decouple from the test-overridable var). Every request path goes
+// through fetchVersionMetadata, so the context deadline always applies.
+var versionCheckClient = &http.Client{}
 
 // fetchVersionMetadata issues a timeout-bounded GET for url and returns the
 // fully read response body. A non-2xx status or any transport/timeout failure
