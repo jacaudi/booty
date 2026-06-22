@@ -3,11 +3,11 @@ WHOAMI=$(shell whoami)
 PLATFORMS ?= linux/amd64,linux/arm64
 
 build:
-	go build -o bin/booty cmd/main.go
+	go build -o bin/booty ./cmd
 
 run:
 	cd web && npm run build && cd ..
-	go run cmd/main.go --dataDir=data/
+	go run ./cmd --dataDir=data/
 
 image:
 	docker build -t ${WHOAMI}/booty .
