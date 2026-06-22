@@ -121,6 +121,8 @@ func init() {
 		"The kubeadm join string to use to auto-join to a K8s cluster (kubeadm join 192.168.1.10:6443 --token TOKEN --discovery-token-ca-cert-hash sha256:SHA_HASH",
 	)
 
+	Cmd.AddCommand(newVersionCmd())
+
 	viper.BindPFlags(flags)
 
 	viper.SetDefault("version", "dev")
