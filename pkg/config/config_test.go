@@ -69,6 +69,26 @@ func TestLoadConfig_VersionFile(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_ProxyDHCPDefaults(t *testing.T) {
+	viper.Reset()
+	viper.Set(DataDir, t.TempDir())
+
+	LoadConfig(&cobra.Command{})
+
+	if got := viper.GetBool(ProxyDHCPEnabled); got != false {
+		t.Errorf("ProxyDHCPEnabled = %v, want false", got)
+	}
+	if got := viper.GetString(ProxyDHCPBootfileBIOS); got != "undionly.kpxe" {
+		t.Errorf("ProxyDHCPBootfileBIOS = %q, want %q", got, "undionly.kpxe")
+	}
+	if got := viper.GetString(ProxyDHCPBootfileUEFI); got != "ipxe.efi" {
+		t.Errorf("ProxyDHCPBootfileUEFI = %q, want %q", got, "ipxe.efi")
+	}
+	if got := viper.GetString(ProxyDHCPBootfileARM64); got != "ipxe-arm64.efi" {
+		t.Errorf("ProxyDHCPBootfileARM64 = %q, want %q", got, "ipxe-arm64.efi")
+	}
+}
+
 func TestDownloadFile_TimesOut(t *testing.T) {
 	viper.Reset()
 	viper.Set(DataDir, t.TempDir())

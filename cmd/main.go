@@ -38,6 +38,11 @@ var args struct {
 	joinString          string
 	flatcarChannel      string
 	coreOSChannel       string
+
+	proxyDHCPEnabled       bool
+	proxyDHCPBootfileBIOS  string
+	proxyDHCPBootfileUEFI  string
+	proxyDHCPBootfileARM64 string
 }
 
 var (
@@ -119,6 +124,31 @@ func init() {
 		"joinString",
 		"",
 		"The kubeadm join string to use to auto-join to a K8s cluster (kubeadm join 192.168.1.10:6443 --token TOKEN --discovery-token-ca-cert-hash sha256:SHA_HASH",
+	)
+
+	flags.BoolVar(
+		&args.proxyDHCPEnabled,
+		"proxyDHCPEnabled",
+		false,
+		"Enable the proxyDHCP responder (PXEClient-only, assigns no leases; UDP/67 needs CAP_NET_BIND_SERVICE)",
+	)
+	flags.StringVar(
+		&args.proxyDHCPBootfileBIOS,
+		"proxyDHCPBootfileBIOS",
+		"undionly.kpxe",
+		"proxyDHCP pass-1 BIOS iPXE binary (staged in dataDir)",
+	)
+	flags.StringVar(
+		&args.proxyDHCPBootfileUEFI,
+		"proxyDHCPBootfileUEFI",
+		"ipxe.efi",
+		"proxyDHCP pass-1 UEFI iPXE binary (staged in dataDir)",
+	)
+	flags.StringVar(
+		&args.proxyDHCPBootfileARM64,
+		"proxyDHCPBootfileARM64",
+		"ipxe-arm64.efi",
+		"proxyDHCP pass-1 ARM64 iPXE binary (staged in dataDir)",
 	)
 
 	Cmd.AddCommand(newVersionCmd())
