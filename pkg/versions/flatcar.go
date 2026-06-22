@@ -1,10 +1,10 @@
 package versions
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"time"
 
@@ -83,21 +83,24 @@ func FlatcarVersionCheck() {
 }
 
 func LoadRemoteFlatcarVersion() {
-	if resp, err := http.Get(RemoteFlatcarURL() + "/version.txt"); err == nil {
-		defer resp.Body.Close()
-		data, _ := godotenv.Parse(resp.Body)
-		if _, ok := data["FLATCAR_VERSION"]; !ok {
-			slog.Warn("error retrieving remote flatcar version", "url", resp.Request.URL.String())
-			if err != nil {
-				slog.Warn("flatcar version fetch error", "err", err)
-			}
-			return
-		}
-		viper.Set(config.RemoteFlatcarVersion, data["FLATCAR_VERSION"])
-		slog.Debug("remote flatcar version found", "version", data["FLATCAR_VERSION"])
-	} else {
-		slog.Warn("error retrieving remote flatcar version", "url", RemoteFlatcarURL(), "err", err)
+	url := RemoteFlatcarURL() + "/version.txt"
+	b, err := fetchVersionMetadata(url)
+	if err != nil {
+		slog.Warn("error retrieving remote flatcar version", "url", url, "err", err)
+		return
 	}
+
+	data, err := godotenv.Parse(bytes.NewReader(b))
+	if err != nil {
+		slog.Warn("error parsing remote flatcar version", "url", url, "err", err)
+		return
+	}
+	if _, ok := data["FLATCAR_VERSION"]; !ok {
+		slog.Warn("error retrieving remote flatcar version", "url", url)
+		return
+	}
+	viper.Set(config.RemoteFlatcarVersion, data["FLATCAR_VERSION"])
+	slog.Debug("remote flatcar version found", "version", data["FLATCAR_VERSION"])
 }
 
 func RemoteFlatcarURL() string {

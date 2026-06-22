@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -111,24 +109,20 @@ func removeOldCoreOSArtifacts(dataDir, oldVersion, arch string) {
 }
 
 func LoadRemoteCoreOSVersion() {
-	if resp, err := http.Get(RemoteCoreOSJSONURL()); err == nil {
-		defer resp.Body.Close()
-		b, err := io.ReadAll(resp.Body)
-		// b, err := ioutil.ReadAll(resp.Body)  Go.1.15 and earlier
-		if err != nil {
-			slog.Warn("error reading remote coreos response", "err", err)
-		}
-
-		remoteVersion, err := jsonparser.GetString(b, "architectures", viper.GetString(config.CoreOSArchitecture), "artifacts", "metal", "release")
-		if err != nil {
-			slog.Warn("error retrieving remote coreos version", "url", resp.Request.URL.String(), "err", err)
-			return
-		}
-		viper.Set(config.RemoteCoreOSVersion, remoteVersion)
-		slog.Debug("remote coreos version found", "version", remoteVersion)
-	} else {
-		slog.Warn("error retrieving remote coreos version", "url", RemoteCoreOSURL(), "err", err)
+	url := RemoteCoreOSJSONURL()
+	b, err := fetchVersionMetadata(url)
+	if err != nil {
+		slog.Warn("error retrieving remote coreos version", "url", url, "err", err)
+		return
 	}
+
+	remoteVersion, err := jsonparser.GetString(b, "architectures", viper.GetString(config.CoreOSArchitecture), "artifacts", "metal", "release")
+	if err != nil {
+		slog.Warn("error retrieving remote coreos version", "url", url, "err", err)
+		return
+	}
+	viper.Set(config.RemoteCoreOSVersion, remoteVersion)
+	slog.Debug("remote coreos version found", "version", remoteVersion)
 }
 
 // https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64
