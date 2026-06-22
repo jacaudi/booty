@@ -111,3 +111,12 @@ func TestBuildReply_UnknownMessageTypeDropped(t *testing.T) {
 	_, ok := buildReply(req, replyCfg())
 	require.False(t, ok)
 }
+
+func TestBuildReply_EchoesClientMachineID(t *testing.T) {
+	req := reqWithArch(t, iana.EFI_X86_64)
+	guid := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
+	req.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionClientMachineIdentifier, guid))
+	resp, ok := buildReply(req, replyCfg())
+	require.True(t, ok)
+	require.Equal(t, guid, resp.Options.Get(dhcpv4.OptionClientMachineIdentifier))
+}
