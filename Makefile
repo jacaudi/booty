@@ -1,5 +1,6 @@
 TOPDIR=$(PWD)
 WHOAMI=$(shell whoami)
+PLATFORMS ?= linux/amd64,linux/arm64
 
 build:
 	go build -o bin/booty cmd/main.go
@@ -16,4 +17,7 @@ image-push: image
 
 image-run: image
 	docker run -ti --rm -v ${TOPDIR}/data:/data -p 8080:8080 -p 69:69/udp ${WHOAMI}/booty --debug=true --dataDir=/data
+
+docker-buildx:
+	docker buildx build --platform $(PLATFORMS) -t ${WHOAMI}/booty .
 
