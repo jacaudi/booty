@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,24 +55,21 @@ func safeJoin(requested string) (string, error) {
 
 // readHandler is called when client starts file download from server
 func readHandler(filename string, rf io.ReaderFrom) error {
-	log.Printf("TFTP Get: %s\n", filename)
+	slog.Info("TFTP get", "file", filename)
 	raddr := rf.(tftp.OutgoingTransfer).RemoteAddr()
 	laddr := rf.(tftp.RequestPacketInfo).LocalIP()
-	if viper.GetBool("debug") {
-		log.Println("RRQ from", raddr.String(), "To ", laddr.String())
-		log.Println("")
-	}
+	slog.Debug("RRQ", "from", raddr.String(), "to", laddr.String())
 
 	osToLoad := "flatcar"
 	menuDefault := "run-from-disk"
 
 	if hwAddr, _, err := arping.Ping(raddr.IP); err != nil {
-		log.Printf("Error with ARP request: %s", err)
+		slog.Warn("error with ARP request", "err", err)
 	} else {
 		macAddress := hwAddr.String()
 		host, lookupErr := hardware.GetMacAddress(macAddress)
 		if lookupErr != nil && !errors.Is(lookupErr, hardware.ErrNotFound) {
-			log.Printf("TFTP: error looking up host %s: %s", macAddress, lookupErr.Error())
+			slog.Warn("TFTP: error looking up host", "mac", macAddress, "err", lookupErr)
 		}
 		if host != nil {
 			if host.OS != "" {
@@ -84,7 +81,7 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 					modified := *host
 					modified.DoInstall = false
 					if err := hardware.WriteMacAddress(macAddress, modified); err != nil {
-						log.Printf("TFTP: error persisting DoInstall flip for %s: %s", macAddress, err.Error())
+						slog.Warn("TFTP: error persisting DoInstall flip", "mac", macAddress, "err", err)
 						// Best-effort: continue serving the iPXE script even if
 						// the persist failed; the next boot will retry.
 					}
@@ -109,10 +106,10 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 		r := strings.NewReader(toServe)
 		n, err := rf.ReadFrom(r)
 		if err != nil {
-			log.Printf("Error reading iPXE config: %v\n", err)
+			slog.Warn("error reading iPXE config", "err", err)
 			return err
 		}
-		log.Printf("%d bytes sent (%s)\n", n, filename)
+		slog.Info("bytes sent", "bytes", n, "file", filename)
 		return nil
 	}
 
@@ -120,17 +117,16 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 		r := strings.NewReader(strings.Replace(PXEConfig[osToLoad], "[[server]]", urlHost, -1))
 		n, err := rf.ReadFrom(r)
 		if err != nil {
-			log.Printf("Error reading PXE config: %v\n", err)
+			slog.Warn("error reading PXE config", "err", err)
 			return err
 		}
-		log.Printf("%d bytes sent (%s)\n", n, filename)
+		slog.Info("bytes sent", "bytes", n, "file", filename)
 		return nil
 	}
 	path, err := safeJoin(filename)
 	if err != nil {
 		if errors.Is(err, errPathEscapes) {
-			log.Printf("TFTP rejected: client=%s requested=%q (path escapes dataDir)",
-				raddr.String(), filename)
+			slog.Warn("TFTP rejected: path escapes dataDir", "client", raddr.String(), "requested", filename)
 		}
 		return os.ErrNotExist
 	}
@@ -143,20 +139,24 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("%d bytes sent (%s)\n", n, filename)
+	slog.Info("bytes sent", "bytes", n, "file", filename)
 	return nil
 }
 
 // writeHandler is called when client starts file upload to server
 func writeHandler(filename string, wt io.WriterTo) error {
-	log.Printf("TFTP writes are not supported: %s\n", filename)
+	slog.Info("TFTP writes are not supported", "file", filename)
 	return nil
 }
 
-func StartTFTP() {
+// StartTFTP starts the TFTP server in a background goroutine and returns it so
+// the caller can Shutdown() it during graceful shutdown. The returned server's
+// Shutdown drains outstanding transfers before stopping the listener.
+func StartTFTP() *tftp.Server {
 	resolved, err := filepath.Abs(viper.GetString(config.DataDir))
 	if err != nil {
-		log.Fatalf("TFTP: failed to resolve dataDir: %v", err)
+		slog.Error("TFTP: failed to resolve dataDir", "err", err)
+		os.Exit(1)
 	}
 	absDataDir = resolved
 
@@ -168,8 +168,10 @@ func StartTFTP() {
 	go func() {
 		err := s.ListenAndServe(":69") // blocks until s.Shutdown() is called
 		if err != nil {
-			log.Fatalf("TFTP Server error: %v\n", err)
+			slog.Error("TFTP server error", "err", err)
+			os.Exit(1)
 		}
 	}()
-	log.Println("TFTP Server started")
+	slog.Info("TFTP server started")
+	return s
 }

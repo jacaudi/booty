@@ -260,7 +260,8 @@ func TestRemoveMacAddress_RemovesAndPersists(t *testing.T) {
 func TestRemoveMacAddress_OnMissingMacIsIdempotent(t *testing.T) {
 	setupTempDB(t)
 
-	if err := RemoveMacAddress("does-not-exist"); err != nil {
+	// A valid-but-absent MAC: remove is idempotent and returns nil.
+	if err := RemoveMacAddress("11:22:33:44:55:66"); err != nil {
 		t.Errorf("RemoveMacAddress on missing: err = %v, want nil", err)
 	}
 }

@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -17,38 +15,40 @@ import (
 	"github.com/spf13/viper"
 )
 
-func StartCoreOSCron() {
-	log.Println("Starting CRON version check")
+// StartCoreOSCron starts the CoreOS version-check scheduler and returns it so
+// the caller can Stop() it during graceful shutdown.
+func StartCoreOSCron() *gocron.Scheduler {
+	slog.Info("starting CoreOS CRON version check")
 	cron := gocron.NewScheduler(time.UTC)
 	_, err := cron.Cron(viper.GetString(config.UpdateSchedule)).Do(CoreOSVersionCheck)
 	if err != nil {
-		log.Fatalf("Error creating prune cronjob: %s", err.Error())
+		slog.Error("error creating prune cronjob", "err", err)
+		os.Exit(1)
 	}
 	cron.StartAsync()
+	return cron
 }
 
 func CoreOSVersionCheck() {
 	if viper.GetBool(config.UpdatingCoreOS) {
-		log.Println("Already updating, skipping version check")
+		slog.Info("already updating, skipping version check")
 		return
 	}
-	if viper.GetBool("debug") {
-		log.Println("Checking remote coreos version")
-	}
+	slog.Debug("checking remote coreos version")
 
 	if viper.GetString(config.CurrentCoreOSVersion) == "" {
 		// Check for an existing coreos.json file
-		if b, err := os.ReadFile(fmt.Sprintf("%s/%s.json", viper.GetString(config.DataDir), viper.GetString(config.CoreOSChannel))); err == nil {
-			log.Println("Found old coreos json, setting current version to that")
+		jsonPath := fmt.Sprintf("%s/%s.json", viper.GetString(config.DataDir), viper.GetString(config.CoreOSChannel))
+		if b, err := os.ReadFile(jsonPath); err == nil {
+			slog.Info("found old coreos json, setting current version to that")
 			oldVersion, err := jsonparser.GetString(b, "architectures", viper.GetString(config.CoreOSArchitecture), "artifacts", "metal", "release")
 			if err != nil {
-				log.Printf("Old %s.json file is invalid", viper.GetString(config.CoreOSChannel))
-				log.Println(err.Error())
+				slog.Warn("old coreos json file is invalid", "channel", viper.GetString(config.CoreOSChannel), "err", err)
 			}
 			viper.Set(config.CurrentCoreOSVersion, oldVersion)
-			log.Printf("CoreOS version set to %s", oldVersion)
+			slog.Info("coreos version set", "version", oldVersion)
 		} else {
-			log.Printf("%s not found, setting current version to 0.0.0", fmt.Sprintf("%s/%s.json", viper.GetString(config.DataDir), viper.GetString(config.CoreOSChannel)))
+			slog.Info("coreos json not found, setting current version to 0.0.0", "path", jsonPath)
 			viper.Set(config.CurrentCoreOSVersion, "0.0.0")
 		}
 	}
@@ -58,26 +58,26 @@ func CoreOSVersionCheck() {
 	if viper.GetString(config.RemoteCoreOSVersion) != viper.GetString(config.CurrentCoreOSVersion) {
 		ctx := context.Background()
 		viper.Set(config.UpdatingCoreOS, true)
-		log.Printf("Remote coreos version %s is different than local version %s", viper.GetString(config.RemoteCoreOSVersion), oldVersion)
+		slog.Info("remote coreos version differs from local", "remote", viper.GetString(config.RemoteCoreOSVersion), "local", oldVersion)
 
 		if err := DownloadCoreOSJSON(ctx); err != nil {
-			log.Printf("Error downloading coreos json: %s", err.Error())
+			slog.Warn("error downloading coreos json", "err", err)
 		}
 		toDownload := ""
 
 		toDownload = fmt.Sprintf("fedora-coreos-%s-live-initramfs.%s.img", viper.GetString(config.RemoteCoreOSVersion), viper.GetString(config.CoreOSArchitecture))
 		if err := DownloadCoreOSFile(ctx, toDownload); err != nil {
-			log.Printf("Error downloading %s: %s", toDownload, err.Error())
+			slog.Warn("error downloading coreos file", "file", toDownload, "err", err)
 		}
 
 		toDownload = fmt.Sprintf("fedora-coreos-%s-live-kernel-%s", viper.GetString(config.RemoteCoreOSVersion), viper.GetString(config.CoreOSArchitecture))
 		if err := DownloadCoreOSFile(ctx, toDownload); err != nil {
-			log.Printf("Error downloading %s: %s", toDownload, err.Error())
+			slog.Warn("error downloading coreos file", "file", toDownload, "err", err)
 		}
 
 		toDownload = fmt.Sprintf("fedora-coreos-%s-live-rootfs.%s.img", viper.GetString(config.RemoteCoreOSVersion), viper.GetString(config.CoreOSArchitecture))
 		if err := DownloadCoreOSFile(ctx, toDownload); err != nil {
-			log.Printf("Error downloading %s: %s", toDownload, err.Error())
+			slog.Warn("error downloading coreos file", "file", toDownload, "err", err)
 		}
 
 		viper.Set(config.CurrentCoreOSVersion, viper.GetString(config.RemoteCoreOSVersion))
@@ -106,33 +106,26 @@ func removeOldCoreOSArtifacts(dataDir, oldVersion, arch string) {
 	for _, f := range files {
 		full := filepath.Join(dataDir, f)
 		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Printf("CoreOS cleanup: remove %s: %s", full, err.Error())
+			slog.Warn("coreos cleanup: remove failed", "file", full, "err", err)
 		}
 	}
 }
 
 func LoadRemoteCoreOSVersion() {
-	if resp, err := http.Get(RemoteCoreOSJSONURL()); err == nil {
-		defer resp.Body.Close()
-		b, err := io.ReadAll(resp.Body)
-		// b, err := ioutil.ReadAll(resp.Body)  Go.1.15 and earlier
-		if err != nil {
-			log.Println(err.Error())
-		}
-
-		remoteVersion, err := jsonparser.GetString(b, "architectures", viper.GetString(config.CoreOSArchitecture), "artifacts", "metal", "release")
-		if err != nil {
-			log.Printf("Error retrieving remote coreos version from %s", resp.Request.URL.String())
-			log.Println(err.Error())
-			return
-		}
-		viper.Set(config.RemoteCoreOSVersion, remoteVersion)
-		if viper.GetBool("debug") {
-			log.Printf("Remote coreos version found: %s", remoteVersion)
-		}
-	} else {
-		log.Printf("Error retrieving remote coreos version from %s: %s", RemoteCoreOSURL(), err.Error())
+	url := RemoteCoreOSJSONURL()
+	b, err := fetchVersionMetadata(url)
+	if err != nil {
+		slog.Warn("error retrieving remote coreos version", "url", url, "err", err)
+		return
 	}
+
+	remoteVersion, err := jsonparser.GetString(b, "architectures", viper.GetString(config.CoreOSArchitecture), "artifacts", "metal", "release")
+	if err != nil {
+		slog.Warn("error retrieving remote coreos version", "url", url, "err", err)
+		return
+	}
+	viper.Set(config.RemoteCoreOSVersion, remoteVersion)
+	slog.Debug("remote coreos version found", "version", remoteVersion)
 }
 
 // https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64

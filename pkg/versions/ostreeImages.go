@@ -3,7 +3,7 @@ package versions
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -21,34 +21,43 @@ import (
 func EnsureOCIFolders() {
 	err := os.Mkdir(viper.GetString(config.DataDir)+"/registry/", 0755)
 	if err != nil && !os.IsExist(err) {
-		log.Fatalf("Error creating registry directory: %s", err.Error())
+		slog.Error("error creating registry directory", "err", err)
+		os.Exit(1)
 	}
 	err = os.Mkdir(viper.GetString(config.DataDir)+"/registry/blobs/", 0755)
 	if err != nil && !os.IsExist(err) {
-		log.Fatalf("Error creating registry directory: %s", err.Error())
+		slog.Error("error creating registry directory", "err", err)
+		os.Exit(1)
 	}
 	err = os.Mkdir(viper.GetString(config.DataDir)+"/registry/blobs/sha256", 0755)
 	if err != nil && !os.IsExist(err) {
-		log.Fatalf("Error creating registry directory: %s", err.Error())
+		slog.Error("error creating registry directory", "err", err)
+		os.Exit(1)
 	}
 	symSrc, err := filepath.Abs(viper.GetString(config.DataDir) + "/registry/blobs/sha256")
 	if err != nil {
-		log.Fatalf("Error creating registry symlink abs path: %s", err.Error())
+		slog.Error("error creating registry symlink abs path", "err", err)
+		os.Exit(1)
 	}
 	err = os.Symlink(symSrc, viper.GetString(config.DataDir)+"/registry/sha256")
 	if err != nil && !os.IsExist(err) {
-		log.Fatalf("Error creating registry symlink: %s", err.Error())
+		slog.Error("error creating registry symlink", "err", err)
+		os.Exit(1)
 	}
 }
 
-func StartOSTreeImageSync() {
-	log.Println("Starting CRON version check for OCI Images")
+// StartOSTreeImageSync starts the OCI image-sync scheduler and returns it so
+// the caller can Stop() it during graceful shutdown.
+func StartOSTreeImageSync() *gocron.Scheduler {
+	slog.Info("starting CRON version check for OCI images")
 	cron := gocron.NewScheduler(time.UTC)
 	_, err := cron.Cron(viper.GetString(config.UpdateSchedule)).Do(OSTreeImageSync)
 	if err != nil {
-		log.Fatalf("Error creating OSTreeImageSync cronjob: %s", err.Error())
+		slog.Error("error creating OSTreeImageSync cronjob", "err", err)
+		os.Exit(1)
 	}
 	cron.StartAsync()
+	return cron
 }
 
 func OSTreeImageSync() {
@@ -56,12 +65,12 @@ func OSTreeImageSync() {
 	pulled := make(map[string]bool)
 	data, err := hardware.GetData()
 	if err != nil {
-		log.Printf("Error getting hardware data: %s", err.Error())
+		slog.Warn("error getting hardware data", "err", err)
 		return
 	}
 	bootyData := hardware.BootyData{}
 	if err := json.Unmarshal(data, &bootyData); err != nil {
-		log.Printf("Error unmarshalling hardware map: %s", err.Error())
+		slog.Warn("error unmarshalling hardware map", "err", err)
 		return
 	}
 
@@ -71,10 +80,10 @@ func OSTreeImageSync() {
 			ociImage := fmt.Sprintf("%s:%s/%s", viper.GetString(config.ServerIP), viper.GetString(config.HttpPort), host.OSTreeImage)
 			//err := crane.Copy(host.OSTreeImage, ociImage, opts...)
 			if err := OSTreeImagePull(host.OSTreeImage); err != nil {
-				log.Printf("Error copying %s: %s", ociImage, err.Error())
+				slog.Warn("error copying image", "image", ociImage, "err", err)
 				continue
 			}
-			log.Printf("Done copying %s", ociImage)
+			slog.Info("done copying image", "image", ociImage)
 			pulled[host.OSTreeImage] = true
 		}
 	}
@@ -98,7 +107,7 @@ func OSTreeImagePull(src string, opts ...crane.Option) error {
 		return fmt.Errorf("fetching image %q: %w", srcRef, err)
 	}
 
-	log.Printf("Saving image %s", srcRef)
+	slog.Info("saving image", "image", srcRef)
 
 	err = crane.SaveOCI(img, viper.GetString(config.DataDir)+"/registry/")
 	if err != nil {
@@ -111,14 +120,14 @@ func OSTreeImagePull(src string, opts ...crane.Option) error {
 		return fmt.Errorf("error copying image %q: %w", srcRef, err)
 	}
 
-	log.Printf("Done saving image %s", srcRef)
+	slog.Info("done saving image", "image", srcRef)
 
 	digest, err := crane.Digest(localImage)
 	if err != nil {
-		log.Printf("Error getting %s from cache: %s", localImage, err)
+		slog.Warn("error getting image from cache", "image", localImage, "err", err)
 	}
 	if digest == "" {
-		log.Printf("Image (%s) not found in local cache yet...", localImage)
+		slog.Warn("image not found in local cache yet", "image", localImage)
 	}
 
 	return nil

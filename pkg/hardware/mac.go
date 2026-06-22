@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,6 +30,21 @@ type Host struct {
 type BootyData struct {
 	Hosts        map[string]*Host `json:"hosts"`
 	UnknownHosts map[string]*Host `json:"unknownHosts"`
+}
+
+// NormalizeMAC parses mac in any form net.ParseMAC accepts (colon-, hyphen-,
+// or Cisco dot-delimited) and returns the single canonical representation used
+// as the host-store key: lowercase, colon-delimited (net.HardwareAddr.String()).
+// It is the one source of truth for MAC canonicalization in booty: every DB
+// key boundary funnels through it so that, e.g., "AA-BB-CC-DD-EE-FF" and
+// "aa:bb:cc:dd:ee:ff" address the same record. An empty or invalid MAC returns
+// a wrapped error and is never stored.
+func NormalizeMAC(mac string) (string, error) {
+	hw, err := net.ParseMAC(mac)
+	if err != nil {
+		return "", fmt.Errorf("hardware: invalid MAC %q: %w", mac, err)
+	}
+	return hw.String(), nil
 }
 
 // ErrNotFound is returned by GetMacAddress when the MAC isn't registered.
@@ -72,8 +89,33 @@ func Load() error {
 		return fmt.Errorf("hardware: read %s: %w", path, err)
 	}
 
-	if err := json.Unmarshal(data, &HostDB); err != nil {
+	// Unmarshal into a local map keyed by whatever is on disk, then rebuild
+	// HostDB with canonical keys. Existing files may hold non-canonical keys
+	// (e.g. "AA-BB-CC-DD-EE-FF") from before MAC normalization; canonicalizing
+	// on read keeps post-upgrade lookups (which arrive canonical) matching old
+	// records. This is best-effort: valid keys are migrated and their host.MAC
+	// is canonicalized to match; invalid keys are logged and skipped rather
+	// than failing the whole load. Migration is in-memory only — the canonical
+	// form is rewritten to disk on the next WriteMacAddress.
+	var onDisk map[string]*Host
+	if err := json.Unmarshal(data, &onDisk); err != nil {
 		return fmt.Errorf("hardware: parse %s: %w", path, err)
+	}
+
+	for rawKey, host := range onDisk {
+		key, err := NormalizeMAC(rawKey)
+		if err != nil {
+			slog.Warn("hardware: skipping host with invalid MAC key", "rawKey", rawKey, "path", path, "err", err)
+			continue
+		}
+		if host == nil {
+			host = &Host{}
+		}
+		if _, dup := HostDB[key]; dup {
+			slog.Warn("hardware: duplicate MAC after normalization; keeping last", "mac", key, "path", path)
+		}
+		host.MAC = key
+		HostDB[key] = host
 	}
 	return nil
 }
@@ -95,78 +137,101 @@ func GetData() ([]byte, error) {
 }
 
 // GetMacAddress returns the host registered for mac, or (nil, ErrNotFound)
-// if the MAC isn't registered. On a miss, the MAC is added to UnknownHosts
-// for the UI's pending list (existing behavior).
+// if the MAC isn't registered. The MAC is canonicalized first, so a lookup in
+// any accepted form matches a record stored in any other form. On a miss, the
+// canonical MAC is added to UnknownHosts for the UI's pending list (existing
+// behavior). An invalid/empty MAC returns a wrapped validation error distinct
+// from ErrNotFound and does NOT pollute UnknownHosts.
 //
 // The returned *Host aliases the live map entry; callers must not mutate it.
 func GetMacAddress(mac string) (*Host, error) {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return nil, err
+	}
+
 	fileMutex.Lock()
 	defer fileMutex.Unlock()
 
-	if h, ok := HostDB[mac]; ok {
-		delete(UnknownHosts, mac)
+	if h, ok := HostDB[key]; ok {
+		delete(UnknownHosts, key)
 		return h, nil
 	}
-	UnknownHosts[mac] = &Host{}
+	UnknownHosts[key] = &Host{}
 	return nil, ErrNotFound
 }
 
 // WriteMacAddress upserts host for mac, persists atomically, and removes
-// the MAC from UnknownHosts on success. On persist failure, in-memory
-// state is rolled back so HostDB and disk remain consistent.
+// the MAC from UnknownHosts on success. The MAC is canonicalized first and
+// used both as the store key and as host.MAC, so an invalid/empty MAC is
+// rejected with a wrapped error and never stored. On persist failure,
+// in-memory state is rolled back so HostDB and disk remain consistent.
 func WriteMacAddress(mac string, host Host) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	host.MAC = key
+
 	fileMutex.Lock()
 	defer fileMutex.Unlock()
 
-	prev, existed := HostDB[mac]
-	HostDB[mac] = &host
+	prev, existed := HostDB[key]
+	HostDB[key] = &host
 
 	payload, err := json.Marshal(HostDB)
 	if err != nil {
 		// Restore in-memory state.
 		if existed {
-			HostDB[mac] = prev
+			HostDB[key] = prev
 		} else {
-			delete(HostDB, mac)
+			delete(HostDB, key)
 		}
 		return fmt.Errorf("hardware: marshal: %w", err)
 	}
 
 	if err := persist(payload); err != nil {
 		if existed {
-			HostDB[mac] = prev
+			HostDB[key] = prev
 		} else {
-			delete(HostDB, mac)
+			delete(HostDB, key)
 		}
 		return err
 	}
 
 	// Success path: only now do we remove the MAC from UnknownHosts.
-	delete(UnknownHosts, mac)
+	delete(UnknownHosts, key)
 	return nil
 }
 
-// RemoveMacAddress removes the host record from HostDB and persists.
-// On persist failure, in-memory state is restored. Idempotent: a remove
-// against a not-present MAC is a no-op and returns nil.
+// RemoveMacAddress removes the host record from HostDB and persists. The MAC
+// is canonicalized first, so a record stored under any accepted form is removed
+// regardless of the form supplied here; an invalid/empty MAC is rejected with a
+// wrapped error. On persist failure, in-memory state is restored. Idempotent: a
+// remove against a valid-but-absent MAC is a no-op and returns nil.
 func RemoveMacAddress(mac string) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+
 	fileMutex.Lock()
 	defer fileMutex.Unlock()
 
-	prev, existed := HostDB[mac]
+	prev, existed := HostDB[key]
 	if !existed {
 		return nil
 	}
-	delete(HostDB, mac)
+	delete(HostDB, key)
 
 	payload, err := json.Marshal(HostDB)
 	if err != nil {
-		HostDB[mac] = prev
+		HostDB[key] = prev
 		return fmt.Errorf("hardware: marshal: %w", err)
 	}
 
 	if err := persist(payload); err != nil {
-		HostDB[mac] = prev
+		HostDB[key] = prev
 		return err
 	}
 	return nil

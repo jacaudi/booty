@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -62,17 +62,17 @@ func LoadConfig(cmd *cobra.Command) {
 		data, parseErr := godotenv.Parse(file)
 		switch {
 		case parseErr != nil:
-			log.Printf("Error parsing %s: %s", versionPath, parseErr.Error())
+			slog.Warn("error parsing version file", "path", versionPath, "err", parseErr)
 		default:
 			if v, ok := data["FLATCAR_VERSION"]; ok {
 				viper.Set(CurrentFlatcarVersion, v)
-				log.Printf("Local version found: %s", v)
+				slog.Info("local version found", "version", v)
 			} else {
-				log.Printf("%s present but FLATCAR_VERSION key missing", versionPath)
+				slog.Warn("version file present but FLATCAR_VERSION key missing", "path", versionPath)
 			}
 		}
 	} else if !os.IsNotExist(err) {
-		log.Printf("Error opening %s: %s", versionPath, err.Error())
+		slog.Warn("error opening version file", "path", versionPath, "err", err)
 	}
 
 	viper.BindEnv(IgnitionFile, "IGNITION_FILE")
@@ -88,7 +88,7 @@ func LoadConfig(cmd *cobra.Command) {
 // package-level httpClient.Timeout (5 minutes); whichever fires
 // first wins.
 func DownloadFile(ctx context.Context, rawURL string) error {
-	log.Printf("Downloading %s", rawURL)
+	slog.Info("downloading", "url", rawURL)
 
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -115,7 +115,7 @@ func DownloadFile(ctx context.Context, rawURL string) error {
 		return fmt.Errorf("config: url %q yields unsafe filename %q", rawURL, base)
 	}
 	filename := filepath.Join(viper.GetString(DataDir), base)
-	log.Printf("Creating %s", filename)
+	slog.Info("creating file", "file", filename)
 
 	f, err := os.Create(filename)
 	if err != nil {
@@ -128,6 +128,6 @@ func DownloadFile(ctx context.Context, rawURL string) error {
 		return fmt.Errorf("config: write %s: %w", filename, err)
 	}
 
-	log.Printf("Download completed for %s (%d)", rawURL, n)
+	slog.Info("download complete", "url", rawURL, "bytes", n)
 	return nil
 }

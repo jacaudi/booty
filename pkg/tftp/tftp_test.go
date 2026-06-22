@@ -25,8 +25,8 @@ func TestSafeJoin(t *testing.T) {
 	}{
 		{"simple file", "flatcar_production_pxe.vmlinuz", false},
 		{"subdir file", "pxelinux.cfg/default", false},
-		{"empty", "", false},        // resolves to absDataDir itself; os.Open would fail later — OK here
-		{"dot", ".", false},         // same
+		{"empty", "", false}, // resolves to absDataDir itself; os.Open would fail later — OK here
+		{"dot", ".", false},  // same
 		{"double slash", "a//b", false},
 		{"parent traversal", "../etc/passwd", true},
 		{"deep parent traversal", "a/../../etc/passwd", true},

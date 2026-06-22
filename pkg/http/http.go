@@ -1,14 +1,12 @@
 package http
 
 import (
-	"context"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/registry"
@@ -16,9 +14,12 @@ import (
 	"github.com/spf13/viper"
 )
 
-func StartHTTP() {
+// StartHTTP starts the HTTP server in a background goroutine and returns it so
+// the caller can Shutdown() it during graceful shutdown. Signal handling and
+// the ordered shutdown live with the caller; this function only starts serving.
+func StartHTTP() *http.Server {
 	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
-	log.Printf("Starting HTTP server on %s", port)
+	slog.Info("starting HTTP server", "addr", port)
 	// Create a mux for routing incoming requests
 	myHandler := http.NewServeMux()
 
@@ -48,36 +49,22 @@ func StartHTTP() {
 		MaxHeaderBytes: 1 << 20,
 	}
 
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
-		if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %s\n", err)
+		if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("listen", "err", err)
+			os.Exit(1)
 		}
 	}()
-	log.Print("Server Started")
+	slog.Info("server started")
 
-	<-done
-	log.Print("Server Stopped")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer func() {
-		// extra handling here
-		cancel()
-	}()
-
-	if err := s.Shutdown(ctx); err != nil {
-		log.Fatalf("Server Shutdown Failed:%+v", err)
-	}
-	log.Print("Server Exited Properly")
+	return s
 }
 
 func logRequest(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Don't log OCI registry requests
 		if !strings.Contains(r.URL.Path, "/v2/") {
-			log.Printf("%s %s %s\n", r.RemoteAddr, r.Method, r.URL.Path)
+			slog.Info("request", "remote", r.RemoteAddr, "method", r.Method, "path", r.URL.Path)
 		}
 		handler.ServeHTTP(w, r)
 	})
