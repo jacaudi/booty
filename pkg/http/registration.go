@@ -3,7 +3,7 @@ package http
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -31,13 +31,13 @@ func handleRegistrationRequest(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			err := versions.OSTreeImagePull(h.OSTreeImage)
 			if err != nil {
-				log.Printf("Error pulling %s: %s", ociImage, err.Error())
+				slog.Warn("error pulling image", "image", ociImage, "err", err)
 			}
 		}()
 	}
 
 	if err := hardware.WriteMacAddress(h.MAC, h); err != nil {
-		log.Printf("Error writing host %s: %s", h.MAC, err.Error())
+		slog.Error("error writing host", "mac", h.MAC, "err", err)
 		http.Error(w, "Error saving host", http.StatusInternalServerError)
 		return
 	}
@@ -59,7 +59,7 @@ func handleUnregistrationRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := hardware.RemoveMacAddress(h.MAC); err != nil {
-		log.Printf("Error removing host %s: %s", h.MAC, err.Error())
+		slog.Error("error removing host", "mac", h.MAC, "err", err)
 		http.Error(w, "Error removing host", http.StatusInternalServerError)
 		return
 	}

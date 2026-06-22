@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -105,14 +105,14 @@ func Load() error {
 	for rawKey, host := range onDisk {
 		key, err := NormalizeMAC(rawKey)
 		if err != nil {
-			log.Printf("hardware: skipping host with invalid MAC key %q in %s: %v", rawKey, path, err)
+			slog.Warn("hardware: skipping host with invalid MAC key", "rawKey", rawKey, "path", path, "err", err)
 			continue
 		}
 		if host == nil {
 			host = &Host{}
 		}
 		if _, dup := HostDB[key]; dup {
-			log.Printf("hardware: duplicate MAC %q after normalization in %s; keeping last", key, path)
+			slog.Warn("hardware: duplicate MAC after normalization; keeping last", "mac", key, "path", path)
 		}
 		host.MAC = key
 		HostDB[key] = host

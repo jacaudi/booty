@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -20,7 +20,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 func handleDataRequest(w http.ResponseWriter, r *http.Request) {
 	data, err := hardware.GetData()
 	if err != nil {
-		log.Printf("Error getting hardware data: %s", err.Error())
+		slog.Error("error getting hardware data", "err", err)
 		http.Error(w, "Error getting hardware data", http.StatusInternalServerError)
 		return
 	}
@@ -40,14 +40,14 @@ func handleHostsRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		log.Printf("Error looking up host %s: %s", mac, err.Error())
+		slog.Error("error looking up host", "mac", mac, "err", err)
 		http.Error(w, "Error retrieving host", http.StatusInternalServerError)
 		return
 	}
 
 	data, err := json.Marshal(host)
 	if err != nil {
-		log.Printf("Error marshalling host %s: %s", mac, err.Error())
+		slog.Error("error marshalling host", "mac", mac, "err", err)
 		http.Error(w, "Error marshalling host data", http.StatusInternalServerError)
 		return
 	}

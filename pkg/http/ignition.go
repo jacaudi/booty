@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"text/template"
@@ -26,38 +26,32 @@ func handleIgnitionRequest(w http.ResponseWriter, r *http.Request) {
 	// Cool so, we want to have logic based around a recognized MAC address
 	// Therefore what we need to do is collect the MAC address
 
-	log.Printf("Ignition Request URI: %s", r.RequestURI)
+	slog.Info("ignition request", "uri", r.RequestURI)
 
 	macAddress := ""
 
 	if r.URL.Query().Get("mac") == "" {
 		ip, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
-			log.Printf("Error splitting user ip: %v is not IP:port", r.RemoteAddr)
+			slog.Warn("error splitting user ip; not IP:port", "remote", r.RemoteAddr)
 		}
 		remoteIP := net.ParseIP(ip)
 
 		if hwAddr, _, err := arping.Ping(remoteIP); err != nil {
-			log.Printf("Error with ARP request: %s", err)
+			slog.Warn("error with ARP request", "err", err)
 		} else {
-			if viper.GetBool("debug") {
-				log.Printf("Mac address from ARP `%s`", macAddress)
-			}
+			slog.Debug("mac address from ARP", "mac", macAddress)
 			macAddress = hwAddr.String()
 		}
 	} else {
 		macAddress = r.URL.Query().Get("mac")
-		if viper.GetBool("debug") {
-			log.Printf("Mac address url override `%s`", macAddress)
-		}
+		slog.Debug("mac address url override", "mac", macAddress)
 	}
 
-	if viper.GetBool("debug") {
-		log.Printf("Using mac address `%s`", macAddress)
-	}
+	slog.Debug("using mac address", "mac", macAddress)
 	host, err := hardware.GetMacAddress(macAddress)
 	if err != nil && !errors.Is(err, hardware.ErrNotFound) {
-		log.Printf("Error looking up host %s: %s", macAddress, err.Error())
+		slog.Warn("error looking up host", "mac", macAddress, "err", err)
 		// Treat unexpected errors the same as a miss — fall through to the
 		// reboot-config path so the machine doesn't boot loop on a bad DB.
 	}
@@ -90,10 +84,10 @@ func handleIgnitionRequest(w http.ResponseWriter, r *http.Request) {
 			localImage := fmt.Sprintf("%s:%s/%s", viper.GetString(config.ServerIP), viper.GetString(config.HttpPort), host.OSTreeImage)
 			digest, err := crane.Digest(localImage)
 			if err != nil {
-				log.Printf("Error getting %s from cache: %s", localImage, err)
+				slog.Warn("error getting image from cache", "image", localImage, "err", err)
 			}
 			if digest == "" {
-				log.Printf("Image (%s) not found in local cache yet...", localImage)
+				slog.Warn("image not found in local cache yet", "image", localImage)
 			} else {
 				templateData.OSTreeImage = localImage
 			}
@@ -143,20 +137,20 @@ WantedBy=default.target
 	})
 	if err != nil {
 		errMsg := fmt.Sprintf("Error parsing coreos ignition: %s", err.Error())
-		log.Println(errMsg)
-		log.Printf("%s", tpl.Bytes())
+		slog.Error("error parsing coreos ignition", "err", err)
+		slog.Error("rendered ignition template", "template", tpl.String())
 		for _, entry := range report.Entries {
-			log.Printf("%s", entry.String())
+			slog.Error("ignition report entry", "entry", entry.String())
 		}
 		w.Write([]byte(errMsg))
 		return
 	}
 	if len(report.Entries) > 0 {
 		errMsg := fmt.Sprintf("Problems parsing coreos ignition: %s", report.String())
-		log.Println(errMsg)
-		log.Printf("%s", tpl.Bytes())
+		slog.Warn("problems parsing coreos ignition", "report", report.String())
+		slog.Warn("rendered ignition template", "template", tpl.String())
 		for _, entry := range report.Entries {
-			log.Printf("%s", entry.String())
+			slog.Warn("ignition report entry", "entry", entry.String())
 		}
 		if report.IsFatal() {
 			w.Write([]byte(errMsg))

@@ -3,7 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,7 +18,7 @@ import (
 
 func StartHTTP() {
 	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
-	log.Printf("Starting HTTP server on %s", port)
+	slog.Info("starting HTTP server", "addr", port)
 	// Create a mux for routing incoming requests
 	myHandler := http.NewServeMux()
 
@@ -53,13 +53,14 @@ func StartHTTP() {
 
 	go func() {
 		if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %s\n", err)
+			slog.Error("listen", "err", err)
+			os.Exit(1)
 		}
 	}()
-	log.Print("Server Started")
+	slog.Info("server started")
 
 	<-done
-	log.Print("Server Stopped")
+	slog.Info("server stopped")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer func() {
@@ -68,16 +69,17 @@ func StartHTTP() {
 	}()
 
 	if err := s.Shutdown(ctx); err != nil {
-		log.Fatalf("Server Shutdown Failed:%+v", err)
+		slog.Error("server shutdown failed", "err", err)
+		os.Exit(1)
 	}
-	log.Print("Server Exited Properly")
+	slog.Info("server exited properly")
 }
 
 func logRequest(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Don't log OCI registry requests
 		if !strings.Contains(r.URL.Path, "/v2/") {
-			log.Printf("%s %s %s\n", r.RemoteAddr, r.Method, r.URL.Path)
+			slog.Info("request", "remote", r.RemoteAddr, "method", r.Method, "path", r.URL.Path)
 		}
 		handler.ServeHTTP(w, r)
 	})
