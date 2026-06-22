@@ -227,7 +227,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	slog.Info("Booty started")
 
 	// Block until a signal arrives, then shut down in order:
-	// drain HTTP -> stop schedulers -> stop TFTP.
+	// stop proxyDHCP (if running) -> drain HTTP -> stop schedulers -> stop TFTP.
 	<-ctx.Done()
 	slog.Info("shutdown signal received")
 
