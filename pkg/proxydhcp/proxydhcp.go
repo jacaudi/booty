@@ -58,6 +58,59 @@ func selectBootfile(req *dhcpv4.DHCPv4, cfg Config) string {
 	}
 }
 
+// buildReply constructs the proxyDHCP reply for a request, or returns ok=false
+// when the request must be ignored (not a PXEClient, or an unhandled message
+// type). It never assigns an IP lease: YourIPAddr stays 0.0.0.0. This function
+// is pure (no I/O) — it is the unit-tested core.
+func buildReply(req *dhcpv4.DHCPv4, cfg Config) (*dhcpv4.DHCPv4, bool) {
+	if !strings.HasPrefix(req.ClassIdentifier(), "PXEClient") {
+		return nil, false
+	}
+
+	var respType dhcpv4.MessageType
+	switch req.MessageType() {
+	case dhcpv4.MessageTypeDiscover:
+		respType = dhcpv4.MessageTypeOffer
+	case dhcpv4.MessageTypeRequest, dhcpv4.MessageTypeInform:
+		respType = dhcpv4.MessageTypeAck
+	default:
+		return nil, false
+	}
+
+	bootfile := selectBootfile(req, cfg)
+	resp, err := dhcpv4.NewReplyFromRequest(req,
+		dhcpv4.WithMessageType(respType),
+		dhcpv4.WithServerIP(cfg.ServerIP),
+		dhcpv4.WithOption(dhcpv4.OptServerIdentifier(cfg.ServerIP)),
+		dhcpv4.WithOption(dhcpv4.OptClassIdentifier("PXEClient")),
+		dhcpv4.WithOption(dhcpv4.OptTFTPServerName(cfg.ServerIP.String())),
+		dhcpv4.WithOption(dhcpv4.OptBootFileName(bootfile)),
+		dhcpv4.WithOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, pxeVendorOptions())),
+	)
+	if err != nil {
+		return nil, false
+	}
+
+	// No lease: this is proxyDHCP, the real DHCP server assigns the address.
+	resp.YourIPAddr = net.IPv4zero
+	// BOOTP fields some PXE firmwares read directly.
+	resp.ServerHostName = cfg.ServerIP.String()
+	resp.BootFileName = bootfile
+	// Echo the client machine GUID when present so firmware can correlate.
+	if guid := req.Options.Get(dhcpv4.OptionClientMachineIdentifier); guid != nil {
+		resp.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionClientMachineIdentifier, guid))
+	}
+	return resp, true
+}
+
+// pxeVendorOptions returns the PXE vendor-specific information (option 43):
+// PXE discovery control = 0x08 (boot from the supplied bootfile, skip the
+// boot-server menu/prompt), terminated by 0xff. Copied verbatim from standard
+// proxyDHCP practice.
+func pxeVendorOptions() []byte {
+	return []byte{0x06, 0x01, 0x08, 0xff}
+}
+
 // isIPXE reports whether the request came from iPXE itself. iPXE sets the
 // User Class option (77) to "iPXE"; check for the substring to tolerate both
 // the raw and RFC-3004 length-prefixed encodings.

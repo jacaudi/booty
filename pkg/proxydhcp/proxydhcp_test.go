@@ -1,6 +1,7 @@
 package proxydhcp
 
 import (
+	"net"
 	"testing"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
@@ -59,4 +60,54 @@ func TestSelectBootfile_IPXELengthPrefixedUserClass(t *testing.T) {
 	// RFC-3004 length-prefixed: one class, len 4, "iPXE"
 	req.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionUserClassInformation, []byte{0x04, 'i', 'P', 'X', 'E'}))
 	require.Equal(t, bootfileIPXEScript, selectBootfile(req, cfg))
+}
+
+func replyCfg() Config {
+	c := testCfg()
+	c.ServerIP = net.IPv4(192, 168, 1, 10)
+	return c
+}
+
+func TestBuildReply_IgnoresNonPXEClient(t *testing.T) {
+	req, err := dhcpv4.New(
+		dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
+		dhcpv4.WithOption(dhcpv4.OptClassIdentifier("not-pxe")),
+	)
+	require.NoError(t, err)
+	_, ok := buildReply(req, replyCfg())
+	require.False(t, ok, "non-PXEClient requests must be dropped")
+}
+
+func TestBuildReply_DiscoverBecomesOffer(t *testing.T) {
+	resp, ok := buildReply(reqWithArch(t, iana.EFI_X86_64), replyCfg())
+	require.True(t, ok)
+	require.Equal(t, dhcpv4.MessageTypeOffer, resp.MessageType())
+}
+
+func TestBuildReply_RequestBecomesAck(t *testing.T) {
+	req := reqWithArch(t, iana.EFI_X86_64)
+	req.UpdateOption(dhcpv4.OptMessageType(dhcpv4.MessageTypeRequest))
+	resp, ok := buildReply(req, replyCfg())
+	require.True(t, ok)
+	require.Equal(t, dhcpv4.MessageTypeAck, resp.MessageType())
+}
+
+func TestBuildReply_NeverAssignsLease(t *testing.T) {
+	resp, ok := buildReply(reqWithArch(t, iana.EFI_X86_64), replyCfg())
+	require.True(t, ok)
+	require.True(t, resp.YourIPAddr.Equal(net.IPv4zero), "must not offer an IP address")
+}
+
+func TestBuildReply_SetsNextServerAndBootfile(t *testing.T) {
+	resp, ok := buildReply(reqWithArch(t, iana.EFI_X86_64), replyCfg())
+	require.True(t, ok)
+	require.Equal(t, "ipxe.efi", resp.BootFileName)
+	require.Equal(t, "192.168.1.10", resp.ServerHostName)
+}
+
+func TestBuildReply_UnknownMessageTypeDropped(t *testing.T) {
+	req := reqWithArch(t, iana.EFI_X86_64)
+	req.UpdateOption(dhcpv4.OptMessageType(dhcpv4.MessageTypeRelease))
+	_, ok := buildReply(req, replyCfg())
+	require.False(t, ok)
 }
