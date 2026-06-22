@@ -149,7 +149,10 @@ func writeHandler(filename string, wt io.WriterTo) error {
 	return nil
 }
 
-func StartTFTP() {
+// StartTFTP starts the TFTP server in a background goroutine and returns it so
+// the caller can Shutdown() it during graceful shutdown. The returned server's
+// Shutdown drains outstanding transfers before stopping the listener.
+func StartTFTP() *tftp.Server {
 	resolved, err := filepath.Abs(viper.GetString(config.DataDir))
 	if err != nil {
 		slog.Error("TFTP: failed to resolve dataDir", "err", err)
@@ -170,4 +173,5 @@ func StartTFTP() {
 		}
 	}()
 	slog.Info("TFTP server started")
+	return s
 }

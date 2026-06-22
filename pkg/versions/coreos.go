@@ -15,7 +15,9 @@ import (
 	"github.com/spf13/viper"
 )
 
-func StartCoreOSCron() {
+// StartCoreOSCron starts the CoreOS version-check scheduler and returns it so
+// the caller can Stop() it during graceful shutdown.
+func StartCoreOSCron() *gocron.Scheduler {
 	slog.Info("starting CoreOS CRON version check")
 	cron := gocron.NewScheduler(time.UTC)
 	_, err := cron.Cron(viper.GetString(config.UpdateSchedule)).Do(CoreOSVersionCheck)
@@ -24,6 +26,7 @@ func StartCoreOSCron() {
 		os.Exit(1)
 	}
 	cron.StartAsync()
+	return cron
 }
 
 func CoreOSVersionCheck() {

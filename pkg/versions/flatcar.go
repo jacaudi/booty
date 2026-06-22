@@ -14,7 +14,9 @@ import (
 	"github.com/spf13/viper"
 )
 
-func StartFlatcarCron() {
+// StartFlatcarCron starts the Flatcar version-check scheduler and returns it so
+// the caller can Stop() it during graceful shutdown.
+func StartFlatcarCron() *gocron.Scheduler {
 	slog.Info("starting Flatcar CRON version check")
 	cron := gocron.NewScheduler(time.UTC)
 	_, err := cron.Cron(viper.GetString(config.UpdateSchedule)).Do(FlatcarVersionCheck)
@@ -23,6 +25,7 @@ func StartFlatcarCron() {
 		os.Exit(1)
 	}
 	cron.StartAsync()
+	return cron
 }
 
 func FlatcarVersionCheck() {

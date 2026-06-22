@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/go-co-op/gocron"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/hardware"
 	bootyHTTP "github.com/jeefy/booty/pkg/http"
@@ -147,27 +151,78 @@ func run(cmd *cobra.Command, argv []string) error {
 		return fmt.Errorf("hardware: %w", err)
 	}
 
+	// Take ownership of the process lifecycle: a single signal context drives an
+	// ordered graceful shutdown of every subsystem started below.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	versions.FlatcarVersionCheck()
 	versions.CoreOSVersionCheck()
 
-	versions.StartFlatcarCron()
-	versions.StartCoreOSCron()
+	flatcarCron := versions.StartFlatcarCron()
+	coreOSCron := versions.StartCoreOSCron()
 
+	// The OCI image sync pre-syncs once before starting its scheduler, after a
+	// delay so the HTTP registry is up. The scheduler is created late, so hand
+	// it back over a buffered channel; skip starting it if we are already
+	// shutting down so we never leak a scheduler past shutdown.
+	ostreeCronCh := make(chan *gocron.Scheduler, 1)
 	go func() {
-		time.Sleep(3 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
 
 		// Pre-sync the images
 		versions.OSTreeImageSync()
 
 		// Then start the CRON job
-		versions.StartOSTreeImageSync()
+		ostreeCronCh <- versions.StartOSTreeImageSync()
 	}()
 
-	tftp.StartTFTP()
+	tftpServer := tftp.StartTFTP()
 
-	// Start the HTTP server
-	// This is a blocking operation
-	bootyHTTP.StartHTTP()
+	// Start the HTTP server (non-blocking; returns the running server).
+	httpServer := bootyHTTP.StartHTTP()
 
+	slog.Info("Booty started")
+
+	// Block until a signal arrives, then shut down in order:
+	// drain HTTP -> stop schedulers -> stop TFTP.
+	<-ctx.Done()
+	slog.Info("shutdown signal received")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var ostreeCron *gocron.Scheduler
+	select {
+	case ostreeCron = <-ostreeCronCh:
+	default:
+	}
+
+	shutdown(slog.Default(), []shutdownStep{
+		{name: "http", stop: func() {
+			if err := httpServer.Shutdown(shutdownCtx); err != nil {
+				slog.Error("HTTP shutdown failed", "err", err)
+			}
+		}},
+		{name: "flatcar-cron", stop: flatcarCron.Stop},
+		{name: "coreos-cron", stop: coreOSCron.Stop},
+		{name: "ostree-cron", stop: schedulerStop(ostreeCron)},
+		{name: "tftp", stop: tftpServer.Shutdown},
+	})
+
+	slog.Info("Booty stopped")
 	return nil
+}
+
+// schedulerStop returns the scheduler's Stop method, or nil if the scheduler
+// was never created (so shutdown skips it).
+func schedulerStop(s *gocron.Scheduler) func() {
+	if s == nil {
+		return nil
+	}
+	return s.Stop
 }

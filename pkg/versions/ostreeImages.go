@@ -46,7 +46,9 @@ func EnsureOCIFolders() {
 	}
 }
 
-func StartOSTreeImageSync() {
+// StartOSTreeImageSync starts the OCI image-sync scheduler and returns it so
+// the caller can Stop() it during graceful shutdown.
+func StartOSTreeImageSync() *gocron.Scheduler {
 	slog.Info("starting CRON version check for OCI images")
 	cron := gocron.NewScheduler(time.UTC)
 	_, err := cron.Cron(viper.GetString(config.UpdateSchedule)).Do(OSTreeImageSync)
@@ -55,6 +57,7 @@ func StartOSTreeImageSync() {
 		os.Exit(1)
 	}
 	cron.StartAsync()
+	return cron
 }
 
 func OSTreeImageSync() {
