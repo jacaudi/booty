@@ -52,3 +52,11 @@ func TestSelectBootfile_IPXEUserClassWinsOverArch(t *testing.T) {
 	req.UpdateOption(dhcpv4.OptUserClass("iPXE"))
 	require.Equal(t, bootfileIPXEScript, selectBootfile(req, cfg))
 }
+
+func TestSelectBootfile_IPXELengthPrefixedUserClass(t *testing.T) {
+	cfg := testCfg()
+	req := reqWithArch(t, iana.EFI_X86_64)
+	// RFC-3004 length-prefixed: one class, len 4, "iPXE"
+	req.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionUserClassInformation, []byte{0x04, 'i', 'P', 'X', 'E'}))
+	require.Equal(t, bootfileIPXEScript, selectBootfile(req, cfg))
+}

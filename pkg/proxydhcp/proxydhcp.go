@@ -67,7 +67,8 @@ func isIPXE(req *dhcpv4.DHCPv4) bool {
 }
 
 // clientArch returns the first client architecture (DHCP option 93), or
-// INTEL_X86PC (legacy BIOS) when the option is absent.
+// INTEL_X86PC (legacy BIOS) when the option is absent. Multi-arch option-93
+// lists are deliberately collapsed to the first entry.
 func clientArch(req *dhcpv4.DHCPv4) iana.Arch {
 	archs := req.ClientArch()
 	if len(archs) == 0 {
