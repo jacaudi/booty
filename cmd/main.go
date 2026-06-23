@@ -44,6 +44,12 @@ var args struct {
 	proxyDHCPBootfileBIOS  string
 	proxyDHCPBootfileUEFI  string
 	proxyDHCPBootfileARM64 string
+
+	talosArchitecture string
+	talosSchematic    string
+	talosRetainMinors int
+	talosConfigFile   string
+	talosFactoryURL   string
 }
 
 var (
@@ -152,6 +158,37 @@ func init() {
 		"proxyDHCP pass-1 ARM64 iPXE binary (staged in dataDir)",
 	)
 
+	flags.StringVar(
+		&args.talosArchitecture,
+		"talosArchitecture",
+		"amd64",
+		"Architecture token for Talos artifacts (amd64/arm64)",
+	)
+	flags.StringVar(
+		&args.talosSchematic,
+		"talosSchematic",
+		"376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba",
+		"Default Talos Image Factory schematic ID",
+	)
+	flags.IntVar(
+		&args.talosRetainMinors,
+		"talosRetainMinors",
+		3,
+		"Number of newest Talos minor lines to cache",
+	)
+	flags.StringVar(
+		&args.talosConfigFile,
+		"talosConfigFile",
+		"config/machineconfig.yaml",
+		"Talos machineconfig template (relative to dataDir)",
+	)
+	flags.StringVar(
+		&args.talosFactoryURL,
+		"talosFactoryURL",
+		"https://factory.talos.dev",
+		"Talos Image Factory base URL (private-factory override)",
+	)
+
 	Cmd.AddCommand(newVersionCmd())
 
 	viper.BindPFlags(flags)
@@ -191,9 +228,11 @@ func run(cmd *cobra.Command, argv []string) error {
 
 	versions.FlatcarVersionCheck()
 	versions.CoreOSVersionCheck()
+	versions.TalosSync()
 
 	flatcarCron := versions.StartFlatcarCron()
 	coreOSCron := versions.StartCoreOSCron()
+	talosCron := versions.StartTalosCron()
 
 	tftpServer := tftp.StartTFTP()
 
@@ -228,6 +267,7 @@ func run(cmd *cobra.Command, argv []string) error {
 		}},
 		shutdownStep{name: "flatcar-cron", stop: flatcarCron.Stop},
 		shutdownStep{name: "coreos-cron", stop: coreOSCron.Stop},
+		shutdownStep{name: "talos-cron", stop: talosCron.Stop},
 		// Bound the TFTP stop: in single-port mode pin/tftp's Shutdown() does
 		// not close the listening socket and the serve loop blocks on ReadFrom
 		// with no read deadline, so Shutdown() can hang until the next packet.
