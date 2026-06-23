@@ -21,7 +21,7 @@ func cacheRoot() string {
 // cacheSegments is the ONE source of truth for the cache layout ordering:
 // <os>/<schematic-or-dash>/<arch>/<version>. schematic is "-" for OSes
 // without a schematic concept (Flatcar, CoreOS). Both cacheDir and
-// cacheURLBase build on this so the disk path and the client URL cannot
+// CacheURLBase build on this so the disk path and the client URL cannot
 // silently diverge and produce boot 404s.
 func cacheSegments(osName, schematic, arch, version string) []string {
 	return []string{osName, schematic, arch, version}
@@ -32,9 +32,12 @@ func cacheDir(osName, schematic, arch, version string) string {
 	return filepath.Join(append([]string{cacheRoot()}, cacheSegments(osName, schematic, arch, version)...)...)
 }
 
-// cacheURLBase returns the client-facing base URL for the same directory,
-// e.g. <server>/data/cache/<os>/<schematic>/<arch>/<version>.
-func cacheURLBase(server, osName, schematic, arch, version string) string {
+// CacheURLBase returns the client-facing base URL for the same directory,
+// e.g. <server>/data/cache/<os>/<schematic>/<arch>/<version>. Both cacheDir
+// (disk path) and CacheURLBase (client URL) derive their layout from
+// cacheSegments, so the path a client fetches and the path artifacts are
+// written to cannot drift and produce boot 404s.
+func CacheURLBase(server, osName, schematic, arch, version string) string {
 	return server + "/data/cache/" + path.Join(cacheSegments(osName, schematic, arch, version)...)
 }
 

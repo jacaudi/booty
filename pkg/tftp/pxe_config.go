@@ -18,14 +18,14 @@ func init() {
 
 	PXEConfig["talos.ipxe"] = `#!ipxe
 	echo Hello from Booty!
-	set BASEURL http://[[server]]/data/cache/talos/[[talos-schematic]]/[[talos-arch]]/[[talos-version]]
+	set BASEURL [[talos-baseurl]]
 	kernel ${BASEURL}/kernel-[[talos-arch]] talos.platform=metal slab_nomerge pti=on talos.config=http://[[server]]/machineconfig?uuid=${uuid}&serial=${serial}&mac=${mac}&hostname=${hostname}
 	initrd ${BASEURL}/initramfs-[[talos-arch]].xz
 	boot`
 
 	PXEConfig["flatcar.ipxe"] = `#!ipxe
 	echo Hello from Booty!
-	set BASEURL http://[[server]]/data/cache/flatcar/-/[[flatcar-arch]]/[[flatcar-version]]
+	set BASEURL [[flatcar-baseurl]]
 	kernel ${BASEURL}/flatcar_production_pxe.vmlinuz flatcar.first_boot=1 ignition.config.url=http://[[server]]/ignition.json
 	initrd ${BASEURL}/flatcar_production_pxe_image.cpio.gz
 	boot`
@@ -40,7 +40,7 @@ func init() {
 
 	PXEConfig["coreos.ipxe"] = `#!ipxe
 	echo Hello from Booty!
-	set BASEURL http://[[server]]/data/cache/coreos/-/[[coreos-arch]]/[[coreos-version]]
+	set BASEURL [[coreos-baseurl]]
 	set CONFIGURL http://[[server]]/ignition.json
 	set STREAM [[coreos-channel]]
 	set VERSION [[coreos-version]]

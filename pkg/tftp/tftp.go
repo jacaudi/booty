@@ -160,23 +160,31 @@ func bootTokens(osToLoad, urlHost, menuDefault string, host *hardware.Host) map[
 	}
 	switch osToLoad {
 	case "coreos":
+		arch := viper.GetString(config.CoreOSArchitecture)
+		version := viper.GetString(config.CurrentCoreOSVersion)
 		tokens["[[coreos-channel]]"] = viper.GetString(config.CoreOSChannel)
-		tokens["[[coreos-arch]]"] = viper.GetString(config.CoreOSArchitecture)
-		tokens["[[coreos-version]]"] = viper.GetString(config.CurrentCoreOSVersion)
+		tokens["[[coreos-arch]]"] = arch
+		tokens["[[coreos-version]]"] = version
+		tokens["[[coreos-baseurl]]"] = "http://" + versions.CacheURLBase(urlHost, "coreos", "-", arch, version)
 	case "flatcar":
-		tokens["[[flatcar-arch]]"] = viper.GetString(config.FlatcarArchitecture)
-		tokens["[[flatcar-version]]"] = viper.GetString(config.CurrentFlatcarVersion)
+		arch := viper.GetString(config.FlatcarArchitecture)
+		version := viper.GetString(config.CurrentFlatcarVersion)
+		tokens["[[flatcar-arch]]"] = arch
+		tokens["[[flatcar-version]]"] = version
+		tokens["[[flatcar-baseurl]]"] = "http://" + versions.CacheURLBase(urlHost, "flatcar", "-", arch, version)
 	case "talos":
 		schematic := viper.GetString(config.TalosSchematic)
 		if host != nil && host.Schematic != "" {
 			schematic = host.Schematic
 		}
 		arch := viper.GetString(config.TalosArchitecture)
-		tokens["[[talos-schematic]]"] = schematic
-		tokens["[[talos-arch]]"] = arch
 		// Empty when nothing is cached yet (pre-first-sync) → BASEURL 404s, same
 		// failure mode as the other OSes before their first version check.
-		tokens["[[talos-version]]"] = versions.NewestCachedTalos(schematic, arch)
+		version := versions.NewestCachedTalos(schematic, arch)
+		tokens["[[talos-schematic]]"] = schematic
+		tokens["[[talos-arch]]"] = arch
+		tokens["[[talos-version]]"] = version
+		tokens["[[talos-baseurl]]"] = "http://" + versions.CacheURLBase(urlHost, "talos", schematic, arch, version)
 	}
 	return tokens
 }

@@ -2,12 +2,14 @@ package tftp
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/versions"
 	"github.com/spf13/viper"
 )
 
@@ -83,6 +85,24 @@ func TestBootTokensTalosUsesHostSchematic(t *testing.T) {
 	}
 	if _, ok := tokens["[[talos-version]]"]; !ok {
 		t.Errorf("talos-version token absent: %v", tokens)
+	}
+}
+
+func TestBootTokensTalosBaseURL(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.TalosSchematic, "schem1")
+	viper.Set(config.TalosArchitecture, "amd64")
+	// seed a cached version so NewestCachedTalos resolves it
+	if err := os.MkdirAll(filepath.Join(root, "cache", "talos", "schem1", "amd64", "v1.10.5"), 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	tokens := bootTokens("talos", "10.0.0.1", "install", nil)
+	want := "http://" + versions.CacheURLBase("10.0.0.1", "talos", "schem1", "amd64", "v1.10.5")
+	if tokens["[[talos-baseurl]]"] != want {
+		t.Errorf("[[talos-baseurl]] = %q, want %q", tokens["[[talos-baseurl]]"], want)
 	}
 }
 

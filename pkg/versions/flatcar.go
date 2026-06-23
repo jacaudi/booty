@@ -21,7 +21,7 @@ func StartFlatcarCron() *gocron.Scheduler {
 	cron := gocron.NewScheduler(time.UTC)
 	_, err := cron.Cron(viper.GetString(config.UpdateSchedule)).Do(FlatcarVersionCheck)
 	if err != nil {
-		slog.Error("error creating prune cronjob", "err", err)
+		slog.Error("error creating cronjob", "err", err)
 		os.Exit(1)
 	}
 	cron.StartAsync()

@@ -17,7 +17,7 @@ func TestCacheDirAndURLShareSegments(t *testing.T) {
 	viper.Set(config.DataDir, "/data")
 
 	dir := cacheDir("talos", "abc123", "amd64", "v1.10.5")
-	url := cacheURLBase("10.0.0.1", "talos", "abc123", "amd64", "v1.10.5")
+	url := CacheURLBase("10.0.0.1", "talos", "abc123", "amd64", "v1.10.5")
 
 	wantDir := filepath.Join("/data", "cache", "talos", "abc123", "amd64", "v1.10.5")
 	if dir != wantDir {
