@@ -13,6 +13,7 @@ import (
 	"github.com/j-keck/arping"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/versions"
 	"github.com/pin/tftp"
 	"github.com/spf13/viper"
 )
@@ -63,11 +64,13 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	osToLoad := "flatcar"
 	menuDefault := "run-from-disk"
 
+	var host *hardware.Host
 	if hwAddr, _, err := arping.Ping(raddr.IP); err != nil {
 		slog.Warn("error with ARP request", "err", err)
 	} else {
 		macAddress := hwAddr.String()
-		host, lookupErr := hardware.GetMacAddress(macAddress)
+		var lookupErr error
+		host, lookupErr = hardware.GetMacAddress(macAddress)
 		if lookupErr != nil && !errors.Is(lookupErr, hardware.ErrNotFound) {
 			slog.Warn("TFTP: error looking up host", "mac", macAddress, "err", lookupErr)
 		}
@@ -97,12 +100,7 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	}
 
 	if filename == "booty.ipxe" {
-		toServe := strings.Replace(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], "[[server]]", urlHost, -1)
-		toServe = strings.Replace(toServe, "[[menu-default]]", menuDefault, -1)
-		toServe = strings.Replace(toServe, "[[coreos-channel]]", viper.GetString(config.CoreOSChannel), -1)
-		toServe = strings.Replace(toServe, "[[coreos-arch]]", viper.GetString(config.CoreOSArchitecture), -1)
-		toServe = strings.Replace(toServe, "[[coreos-version]]", viper.GetString(config.CurrentCoreOSVersion), -1)
-
+		toServe := applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, menuDefault, host))
 		r := strings.NewReader(toServe)
 		n, err := rf.ReadFrom(r)
 		if err != nil {
@@ -114,7 +112,7 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	}
 
 	if filename == "pxelinux.cfg/default" {
-		r := strings.NewReader(strings.Replace(PXEConfig[osToLoad], "[[server]]", urlHost, -1))
+		r := strings.NewReader(applyTokens(PXEConfig[osToLoad], map[string]string{"[[server]]": urlHost}))
 		n, err := rf.ReadFrom(r)
 		if err != nil {
 			slog.Warn("error reading PXE config", "err", err)
@@ -141,6 +139,46 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	}
 	slog.Info("bytes sent", "bytes", n, "file", filename)
 	return nil
+}
+
+// applyTokens replaces every [[token]] in s with its value. Tokens are distinct
+// bracketed keys, so replacement order does not matter.
+func applyTokens(s string, tokens map[string]string) string {
+	for k, v := range tokens {
+		s = strings.ReplaceAll(s, k, v)
+	}
+	return s
+}
+
+// bootTokens builds the per-request substitution map: shared tokens plus the
+// OS-specific tokens for osToLoad. Talos resolves its boot version from the
+// cache dir (newest retained), keyed by the host's schematic or the default.
+func bootTokens(osToLoad, urlHost, menuDefault string, host *hardware.Host) map[string]string {
+	tokens := map[string]string{
+		"[[server]]":       urlHost,
+		"[[menu-default]]": menuDefault,
+	}
+	switch osToLoad {
+	case "coreos":
+		tokens["[[coreos-channel]]"] = viper.GetString(config.CoreOSChannel)
+		tokens["[[coreos-arch]]"] = viper.GetString(config.CoreOSArchitecture)
+		tokens["[[coreos-version]]"] = viper.GetString(config.CurrentCoreOSVersion)
+	case "flatcar":
+		tokens["[[flatcar-arch]]"] = viper.GetString(config.FlatcarArchitecture)
+		tokens["[[flatcar-version]]"] = viper.GetString(config.CurrentFlatcarVersion)
+	case "talos":
+		schematic := viper.GetString(config.TalosSchematic)
+		if host != nil && host.Schematic != "" {
+			schematic = host.Schematic
+		}
+		arch := viper.GetString(config.TalosArchitecture)
+		tokens["[[talos-schematic]]"] = schematic
+		tokens["[[talos-arch]]"] = arch
+		// Empty when nothing is cached yet (pre-first-sync) → BASEURL 404s, same
+		// failure mode as the other OSes before their first version check.
+		tokens["[[talos-version]]"] = versions.NewestCachedTalos(schematic, arch)
+	}
+	return tokens
 }
 
 // writeHandler is called when client starts file upload to server
