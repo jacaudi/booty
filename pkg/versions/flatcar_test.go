@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -11,6 +13,28 @@ import (
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/spf13/viper"
 )
+
+func TestFlatcarCleanupRemovesOldVersionDir(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.FlatcarArchitecture, "amd64")
+
+	old := cacheDir("flatcar", "-", "amd64", "3000.0.0")
+	if err := os.MkdirAll(old, 0o755); err != nil {
+		t.Fatalf("seed old: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(old, "flatcar_production_pxe.vmlinuz"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed artifact: %v", err)
+	}
+
+	if err := removeVersionDir("flatcar", "-", "amd64", "3000.0.0"); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("old flatcar version dir survived cleanup")
+	}
+}
 
 // counterServer returns an httptest.Server that increments hits per request
 // and serves the given version.txt body for any path ending in /version.txt.

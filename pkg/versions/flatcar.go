@@ -64,6 +64,7 @@ func FlatcarVersionCheck() {
 	}
 
 	LoadRemoteFlatcarVersion()
+	oldVersion := viper.GetString(config.CurrentFlatcarVersion)
 	if viper.GetString(config.RemoteFlatcarVersion) != viper.GetString(config.CurrentFlatcarVersion) {
 		ctx := context.Background()
 		viper.Set(config.UpdatingFlatcar, true)
@@ -80,6 +81,13 @@ func FlatcarVersionCheck() {
 		}
 
 		viper.Set(config.CurrentFlatcarVersion, viper.GetString(config.RemoteFlatcarVersion))
+
+		if oldVersion != "" && oldVersion != "0.0.0" {
+			if err := removeVersionDir("flatcar", "-", viper.GetString(config.FlatcarArchitecture), oldVersion); err != nil {
+				slog.Warn("flatcar cleanup: remove old version dir failed", "version", oldVersion, "err", err)
+			}
+		}
+
 		viper.Set(config.UpdatingFlatcar, false)
 	}
 
@@ -111,5 +119,9 @@ func RemoteFlatcarURL() string {
 }
 
 func DownloadFlatcarFile(ctx context.Context, filename string) error {
-	return config.DownloadFile(ctx, viper.GetString(config.DataDir), fmt.Sprintf(RemoteFlatcarURL()+"/%s", filename))
+	dir := cacheDir("flatcar", "-", viper.GetString(config.FlatcarArchitecture), viper.GetString(config.RemoteFlatcarVersion))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return config.DownloadFile(ctx, dir, fmt.Sprintf(RemoteFlatcarURL()+"/%s", filename))
 }
