@@ -2,9 +2,15 @@ package tftp
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/versions"
+	"github.com/spf13/viper"
 )
 
 func TestSafeJoin(t *testing.T) {
@@ -51,5 +57,73 @@ func TestSafeJoin(t *testing.T) {
 				t.Errorf("safeJoin(%q) = %q, escapes root %q", tc.requested, got, abs)
 			}
 		})
+	}
+}
+
+func TestApplyTokens(t *testing.T) {
+	got := applyTokens("a [[x]] b [[y]]", map[string]string{"[[x]]": "1", "[[y]]": "2"})
+	if got != "a 1 b 2" {
+		t.Errorf("applyTokens = %q, want %q", got, "a 1 b 2")
+	}
+}
+
+func TestBootTokensTalosUsesHostSchematic(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.TalosSchematic, "defaultschematic")
+	viper.Set(config.TalosArchitecture, "amd64")
+
+	host := &hardware.Host{OS: "talos", Schematic: "customschematic"}
+	tokens := bootTokens("talos", "10.0.0.1", "install", host)
+
+	if tokens["[[talos-schematic]]"] != "customschematic" {
+		t.Errorf("schematic = %q, want customschematic", tokens["[[talos-schematic]]"])
+	}
+	if tokens["[[talos-arch]]"] != "amd64" {
+		t.Errorf("arch token missing/wrong: %v", tokens)
+	}
+	if _, ok := tokens["[[talos-version]]"]; !ok {
+		t.Errorf("talos-version token absent: %v", tokens)
+	}
+}
+
+func TestBootTokensTalosBaseURL(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.TalosSchematic, "schem1")
+	viper.Set(config.TalosArchitecture, "amd64")
+	// seed a cached version so NewestCachedTalos resolves it
+	if err := os.MkdirAll(filepath.Join(root, "cache", "talos", "schem1", "amd64", "v1.10.5"), 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	tokens := bootTokens("talos", "10.0.0.1", "install", nil)
+	want := "http://" + versions.CacheURLBase("10.0.0.1", "talos", "schem1", "amd64", "v1.10.5")
+	if tokens["[[talos-baseurl]]"] != want {
+		t.Errorf("[[talos-baseurl]] = %q, want %q", tokens["[[talos-baseurl]]"], want)
+	}
+}
+
+func TestBootTokensTalosFallsBackToDefaultSchematic(t *testing.T) {
+	viper.Reset()
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.TalosSchematic, "defaultschematic")
+	viper.Set(config.TalosArchitecture, "amd64")
+
+	// nil host → default schematic; nothing cached → empty version token.
+	tokens := bootTokens("talos", "10.0.0.1", "install", nil)
+	if tokens["[[talos-schematic]]"] != "defaultschematic" {
+		t.Errorf("schematic = %q, want defaultschematic", tokens["[[talos-schematic]]"])
+	}
+	if tokens["[[talos-version]]"] != "" {
+		t.Errorf("talos-version = %q, want empty (nothing cached)", tokens["[[talos-version]]"])
+	}
+
+	// host present but no schematic set → still the default.
+	tokens = bootTokens("talos", "10.0.0.1", "install", &hardware.Host{OS: "talos"})
+	if tokens["[[talos-schematic]]"] != "defaultschematic" {
+		t.Errorf("empty-schematic host: got %q, want defaultschematic", tokens["[[talos-schematic]]"])
 	}
 }

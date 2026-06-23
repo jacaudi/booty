@@ -22,8 +22,8 @@ type Host struct {
 	Booted       string `json:"booted"`
 	IgnitionFile string `json:"ignitionFile,omitempty"`
 	OS           string `json:"os,omitempty"`
-	OSTreeImage  string `json:"ostreeImage,omitempty"`
 	DoInstall    bool   `json:"doInstall,omitempty"`
+	Schematic    string `json:"schematic,omitempty"`
 }
 
 // BootyData is the JSON shape returned by GetData and consumed by the UI.

@@ -2,11 +2,9 @@ package versions
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/buger/jsonparser"
@@ -22,7 +20,7 @@ func StartCoreOSCron() *gocron.Scheduler {
 	cron := gocron.NewScheduler(time.UTC)
 	_, err := cron.Cron(viper.GetString(config.UpdateSchedule)).Do(CoreOSVersionCheck)
 	if err != nil {
-		slog.Error("error creating prune cronjob", "err", err)
+		slog.Error("error creating cronjob", "err", err)
 		os.Exit(1)
 	}
 	cron.StartAsync()
@@ -82,33 +80,15 @@ func CoreOSVersionCheck() {
 
 		viper.Set(config.CurrentCoreOSVersion, viper.GetString(config.RemoteCoreOSVersion))
 
-		removeOldCoreOSArtifacts(
-			viper.GetString(config.DataDir),
-			oldVersion,
-			viper.GetString(config.CoreOSArchitecture),
-		)
+		if oldVersion != "" && oldVersion != "0.0.0" {
+			if err := removeVersionDir("coreos", "-", viper.GetString(config.CoreOSArchitecture), oldVersion); err != nil {
+				slog.Warn("coreos cleanup: remove old version dir failed", "version", oldVersion, "err", err)
+			}
+		}
 
 		viper.Set(config.UpdatingCoreOS, false)
 	}
 
-}
-
-// removeOldCoreOSArtifacts deletes the three fedora-coreos-<oldVersion>-live-*
-// files from dataDir. Files that don't exist are silently OK (first-run, or
-// systems that ran with the prior bare-relative-path bug never had artifacts
-// in the right place anyway). Other errors log loudly.
-func removeOldCoreOSArtifacts(dataDir, oldVersion, arch string) {
-	files := []string{
-		fmt.Sprintf("fedora-coreos-%s-live-initramfs.%s.img", oldVersion, arch),
-		fmt.Sprintf("fedora-coreos-%s-live-kernel-%s", oldVersion, arch),
-		fmt.Sprintf("fedora-coreos-%s-live-rootfs.%s.img", oldVersion, arch),
-	}
-	for _, f := range files {
-		full := filepath.Join(dataDir, f)
-		if err := os.Remove(full); err != nil && !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("coreos cleanup: remove failed", "file", full, "err", err)
-		}
-	}
 }
 
 func LoadRemoteCoreOSVersion() {
@@ -135,7 +115,11 @@ func RemoteCoreOSURL() string {
 }
 
 func DownloadCoreOSFile(ctx context.Context, filename string) error {
-	return config.DownloadFile(ctx, fmt.Sprintf(RemoteCoreOSURL()+"/%s", filename))
+	dir := cacheDir("coreos", "-", viper.GetString(config.CoreOSArchitecture), viper.GetString(config.RemoteCoreOSVersion))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return config.DownloadFile(ctx, dir, fmt.Sprintf(RemoteCoreOSURL()+"/%s", filename))
 }
 
 func RemoteCoreOSJSONURL() string {
@@ -143,5 +127,5 @@ func RemoteCoreOSJSONURL() string {
 }
 
 func DownloadCoreOSJSON(ctx context.Context) error {
-	return config.DownloadFile(ctx, RemoteCoreOSJSONURL())
+	return config.DownloadFile(ctx, viper.GetString(config.DataDir), RemoteCoreOSJSONURL())
 }

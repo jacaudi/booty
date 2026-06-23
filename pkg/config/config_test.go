@@ -91,7 +91,8 @@ func TestLoadConfig_ProxyDHCPDefaults(t *testing.T) {
 
 func TestDownloadFile_TimesOut(t *testing.T) {
 	viper.Reset()
-	viper.Set(DataDir, t.TempDir())
+	dir := t.TempDir()
+	viper.Set(DataDir, dir)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
@@ -102,7 +103,7 @@ func TestDownloadFile_TimesOut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	err := DownloadFile(ctx, srv.URL+"/foo.bin")
+	err := DownloadFile(ctx, dir, srv.URL+"/foo.bin")
 	if err == nil {
 		t.Fatalf("DownloadFile: err = nil, want timeout")
 	}
@@ -121,7 +122,7 @@ func TestDownloadFile_StripsQueryStringFromFilename(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := DownloadFile(context.Background(), srv.URL+"/foo.bin?token=secret"); err != nil {
+	if err := DownloadFile(context.Background(), dir, srv.URL+"/foo.bin?token=secret"); err != nil {
 		t.Fatalf("DownloadFile: %v", err)
 	}
 
@@ -146,7 +147,7 @@ func TestDownloadFile_SuccessRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := DownloadFile(context.Background(), srv.URL+"/greeting.txt"); err != nil {
+	if err := DownloadFile(context.Background(), dir, srv.URL+"/greeting.txt"); err != nil {
 		t.Fatalf("DownloadFile: %v", err)
 	}
 
@@ -156,5 +157,22 @@ func TestDownloadFile_SuccessRoundTrip(t *testing.T) {
 	}
 	if string(got) != "hello" {
 		t.Errorf("body = %q, want %q", string(got), "hello")
+	}
+}
+
+func TestDownloadFile_RejectsErrorStatus(t *testing.T) {
+	viper.Reset()
+	dir := t.TempDir()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	if err := DownloadFile(context.Background(), dir, srv.URL+"/boom.bin"); err == nil {
+		t.Fatalf("DownloadFile: err = nil, want error for 500 status")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "boom.bin")); statErr == nil {
+		t.Errorf("rejected download must not create %s", filepath.Join(dir, "boom.bin"))
 	}
 }

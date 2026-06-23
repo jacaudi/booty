@@ -32,7 +32,7 @@ func TestShutdownSkipsNilStops(t *testing.T) {
 	var calls []string
 	steps := []shutdownStep{
 		{name: "http", stop: func() { calls = append(calls, "http") }},
-		{name: "ostree-never-started", stop: nil},
+		{name: "scheduler-never-started", stop: nil},
 		{name: "tftp", stop: func() { calls = append(calls, "tftp") }},
 	}
 
