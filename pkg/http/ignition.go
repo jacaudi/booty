@@ -84,13 +84,12 @@ func handleIgnitionRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := template.ParseFiles(fmt.Sprintf("%s/%s", viper.GetString(config.DataDir), ignitionFile))
 	if err != nil {
-		w.Write([]byte(err.Error()))
+		writeError(w, http.StatusInternalServerError, "ignition template unavailable", err)
 		return
 	}
 
-	err = t.Execute(&tpl, templateData)
-	if err != nil {
-		w.Write([]byte(err.Error()))
+	if err = t.Execute(&tpl, templateData); err != nil {
+		writeError(w, http.StatusInternalServerError, "ignition render failed", err)
 		return
 	}
 
@@ -111,10 +110,9 @@ WantedBy=default.target
 			Enabled:  &truePointer,
 			Contents: &contentsPointer,
 		})
-		var dataOut []byte
 		dataOut, err := json.Marshal(&coreosConfig)
 		if err != nil {
-			w.Write([]byte(fmt.Sprintf("Failed to marshal output: %v", err)))
+			writeError(w, http.StatusInternalServerError, "failed to marshal reboot config", err)
 			return
 		}
 		w.Write(dataOut)
@@ -125,26 +123,22 @@ WantedBy=default.target
 		Pretty: true,
 	})
 	if err != nil {
-		errMsg := fmt.Sprintf("Error parsing coreos ignition: %s", err.Error())
-		slog.Error("error parsing coreos ignition", "err", err)
 		slog.Error("rendered ignition template", "template", tpl.String())
 		for _, entry := range report.Entries {
 			slog.Error("ignition report entry", "entry", entry.String())
 		}
-		w.Write([]byte(errMsg))
+		writeError(w, http.StatusInternalServerError, "error parsing coreos ignition", err)
 		return
 	}
 	if len(report.Entries) > 0 {
-		errMsg := fmt.Sprintf("Problems parsing coreos ignition: %s", report.String())
 		slog.Warn("problems parsing coreos ignition", "report", report.String())
-		slog.Warn("rendered ignition template", "template", tpl.String())
 		for _, entry := range report.Entries {
 			slog.Warn("ignition report entry", "entry", entry.String())
 		}
 		if report.IsFatal() {
-			w.Write([]byte(errMsg))
+			slog.Error("rendered ignition template", "template", tpl.String())
+			writeError(w, http.StatusInternalServerError, "fatal coreos ignition report", errors.New(report.String()))
 			return
-
 		}
 	}
 
