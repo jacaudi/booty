@@ -13,7 +13,6 @@ import (
 	butaneConfig "github.com/coreos/butane/config"
 	butaneCommon "github.com/coreos/butane/config/common"
 	coreOSType "github.com/coreos/ignition/v2/config/v3_5_experimental/types"
-	"github.com/google/go-containerregistry/pkg/crane"
 	"github.com/j-keck/arping"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/hardware"
@@ -68,10 +67,9 @@ func handleIgnitionRequest(w http.ResponseWriter, r *http.Request) {
 	var tpl bytes.Buffer
 
 	templateData := struct {
-		JoinString  string
-		ServerIP    string
-		OSTreeImage string
-		Hostname    string
+		JoinString string
+		ServerIP   string
+		Hostname   string
 	}{
 		JoinString: viper.GetString(config.JoinString),
 		ServerIP:   fmt.Sprintf("%s:%s", viper.GetString(config.ServerIP), viper.GetString(config.ServerHttpPort)),
@@ -83,24 +81,6 @@ func handleIgnitionRequest(w http.ResponseWriter, r *http.Request) {
 			ignitionFile = host.IgnitionFile
 		}
 		templateData.Hostname = host.Hostname
-
-		// Ingelligently rewrite what image to send to the client depending on cache state
-		// First, default to the remote image location
-		templateData.OSTreeImage = host.OSTreeImage
-
-		// If we have a local image, use that instead
-		if host.OSTreeImage != "" {
-			localImage := fmt.Sprintf("%s:%s/%s", viper.GetString(config.ServerIP), viper.GetString(config.HttpPort), host.OSTreeImage)
-			digest, err := crane.Digest(localImage)
-			if err != nil {
-				slog.Warn("error getting image from cache", "image", localImage, "err", err)
-			}
-			if digest == "" {
-				slog.Warn("image not found in local cache yet", "image", localImage)
-			} else {
-				templateData.OSTreeImage = localImage
-			}
-		}
 	}
 	t, err := template.ParseFiles(fmt.Sprintf("%s/%s", viper.GetString(config.DataDir), ignitionFile))
 	if err != nil {
