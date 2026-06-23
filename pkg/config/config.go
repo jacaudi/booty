@@ -43,6 +43,12 @@ const (
 	ProxyDHCPBootfileBIOS  = "proxyDHCPBootfileBIOS"
 	ProxyDHCPBootfileUEFI  = "proxyDHCPBootfileUEFI"
 	ProxyDHCPBootfileARM64 = "proxyDHCPBootfileARM64"
+	UpdatingTalos          = "updatingTalos"
+	TalosArchitecture      = "talosArchitecture"
+	TalosSchematic         = "talosSchematic"
+	TalosRetainMinors      = "talosRetainMinors"
+	TalosConfigFile        = "talosConfigFile"
+	TalosFactoryURL        = "talosFactoryURL"
 )
 
 // httpClient is the package-level HTTP client used for DownloadFile.
@@ -59,6 +65,12 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(ProxyDHCPBootfileBIOS, "undionly.kpxe")
 	viper.SetDefault(ProxyDHCPBootfileUEFI, "ipxe.efi")
 	viper.SetDefault(ProxyDHCPBootfileARM64, "ipxe-arm64.efi")
+	viper.SetDefault(UpdatingTalos, false)
+	viper.SetDefault(TalosArchitecture, "amd64")
+	viper.SetDefault(TalosSchematic, "376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba")
+	viper.SetDefault(TalosRetainMinors, 3)
+	viper.SetDefault(TalosConfigFile, "config/machineconfig.yaml")
+	viper.SetDefault(TalosFactoryURL, "https://factory.talos.dev")
 	viper.SetDefault(FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
 	viper.SetDefault(CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
 	// https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64
