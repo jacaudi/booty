@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +14,7 @@ import (
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/hardware"
 	bootyHTTP "github.com/jeefy/booty/pkg/http"
+	"github.com/jeefy/booty/pkg/proxydhcp"
 	"github.com/jeefy/booty/pkg/tftp"
 	"github.com/jeefy/booty/pkg/versions"
 	"github.com/spf13/cobra"
@@ -38,6 +40,11 @@ var args struct {
 	joinString          string
 	flatcarChannel      string
 	coreOSChannel       string
+
+	proxyDHCPEnabled       bool
+	proxyDHCPBootfileBIOS  string
+	proxyDHCPBootfileUEFI  string
+	proxyDHCPBootfileARM64 string
 }
 
 var (
@@ -121,6 +128,31 @@ func init() {
 		"The kubeadm join string to use to auto-join to a K8s cluster (kubeadm join 192.168.1.10:6443 --token TOKEN --discovery-token-ca-cert-hash sha256:SHA_HASH",
 	)
 
+	flags.BoolVar(
+		&args.proxyDHCPEnabled,
+		"proxyDHCPEnabled",
+		false,
+		"Enable the proxyDHCP responder (PXEClient-only, assigns no leases; UDP/67 needs CAP_NET_BIND_SERVICE)",
+	)
+	flags.StringVar(
+		&args.proxyDHCPBootfileBIOS,
+		"proxyDHCPBootfileBIOS",
+		"undionly.kpxe",
+		"proxyDHCP pass-1 BIOS iPXE binary (staged in dataDir)",
+	)
+	flags.StringVar(
+		&args.proxyDHCPBootfileUEFI,
+		"proxyDHCPBootfileUEFI",
+		"ipxe.efi",
+		"proxyDHCP pass-1 UEFI iPXE binary (staged in dataDir)",
+	)
+	flags.StringVar(
+		&args.proxyDHCPBootfileARM64,
+		"proxyDHCPBootfileARM64",
+		"ipxe-arm64.efi",
+		"proxyDHCP pass-1 ARM64 iPXE binary (staged in dataDir)",
+	)
+
 	Cmd.AddCommand(newVersionCmd())
 
 	viper.BindPFlags(flags)
@@ -188,10 +220,14 @@ func run(cmd *cobra.Command, argv []string) error {
 	// Start the HTTP server (non-blocking; returns the running server).
 	httpServer := bootyHTTP.StartHTTP()
 
+	// Start the proxyDHCP responder when enabled. Best-effort: nil when not
+	// started, in which case the shutdown step is skipped below.
+	proxyDHCPServer := startProxyDHCP()
+
 	slog.Info("Booty started")
 
 	// Block until a signal arrives, then shut down in order:
-	// drain HTTP -> stop schedulers -> stop TFTP.
+	// stop proxyDHCP (if running) -> drain HTTP -> stop schedulers -> stop TFTP.
 	<-ctx.Done()
 	slog.Info("shutdown signal received")
 
@@ -204,25 +240,32 @@ func run(cmd *cobra.Command, argv []string) error {
 	default:
 	}
 
-	shutdown(slog.Default(), []shutdownStep{
-		{name: "http", stop: func() {
+	// Prepend the proxyDHCP step (when running) so the responder stops
+	// answering before the rest of the stack drains.
+	steps := []shutdownStep{}
+	if proxyDHCPServer != nil {
+		steps = append(steps, shutdownStep{name: "proxydhcp", stop: proxyDHCPServer.Shutdown})
+	}
+	steps = append(steps,
+		shutdownStep{name: "http", stop: func() {
 			if err := httpServer.Shutdown(shutdownCtx); err != nil {
 				slog.Error("HTTP shutdown failed", "err", err)
 			}
 		}},
-		{name: "flatcar-cron", stop: flatcarCron.Stop},
-		{name: "coreos-cron", stop: coreOSCron.Stop},
-		{name: "ostree-cron", stop: schedulerStop(ostreeCron)},
+		shutdownStep{name: "flatcar-cron", stop: flatcarCron.Stop},
+		shutdownStep{name: "coreos-cron", stop: coreOSCron.Stop},
+		shutdownStep{name: "ostree-cron", stop: schedulerStop(ostreeCron)},
 		// Bound the TFTP stop: in single-port mode pin/tftp's Shutdown() does
 		// not close the listening socket and the serve loop blocks on ReadFrom
 		// with no read deadline, so Shutdown() can hang until the next packet.
 		// Cap the wait so run() returns within a bounded window regardless.
-		{name: "tftp", stop: func() {
+		shutdownStep{name: "tftp", stop: func() {
 			if !stopWithTimeout(tftpServer.Shutdown, 5*time.Second) {
 				slog.Warn("TFTP shutdown timed out; exiting anyway", "timeout", 5*time.Second)
 			}
 		}},
-	})
+	)
+	shutdown(slog.Default(), steps)
 
 	slog.Info("Booty stopped")
 	return nil
@@ -235,4 +278,35 @@ func schedulerStop(s *gocron.Scheduler) func() {
 		return nil
 	}
 	return s.Stop
+}
+
+// startProxyDHCP starts the proxyDHCP responder when enabled. It is
+// best-effort: any misconfiguration or bind failure is logged and nil is
+// returned so booty keeps running (an opt-in subsystem must never crash a
+// working deployment). Returns the running server, or nil if not started.
+func startProxyDHCP() *proxydhcp.Server {
+	if !viper.GetBool(config.ProxyDHCPEnabled) {
+		return nil
+	}
+	ip := net.ParseIP(viper.GetString(config.ServerIP))
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+		slog.Error("proxyDHCP enabled but serverIP is not a usable LAN address; not starting",
+			"serverIP", viper.GetString(config.ServerIP))
+		return nil
+	}
+	srv, err := proxydhcp.NewServer(proxydhcp.Config{
+		ServerIP:      ip,
+		BootfileBIOS:  viper.GetString(config.ProxyDHCPBootfileBIOS),
+		BootfileUEFI:  viper.GetString(config.ProxyDHCPBootfileUEFI),
+		BootfileARM64: viper.GetString(config.ProxyDHCPBootfileARM64),
+	})
+	if err != nil {
+		slog.Error("proxyDHCP construct failed; not starting", "err", err)
+		return nil
+	}
+	if err := srv.Start(); err != nil {
+		slog.Error("proxyDHCP start failed; continuing without it", "err", err)
+		return nil
+	}
+	return srv
 }

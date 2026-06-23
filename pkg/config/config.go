@@ -18,27 +18,31 @@ import (
 )
 
 const (
-	CurrentFlatcarVersion = "currentFlatcarVersion"
-	RemoteFlatcarVersion  = "remoteFlatcarVersion"
-	FlatcarChannel        = "flatcarChannel"
-	CurrentCoreOSVersion  = "currentCoreOSVersion"
-	RemoteCoreOSVersion   = "remoteCoreOSVersion"
-	CoreOSChannel         = "coreOSChannel"
-	IgnitionFile          = "ignitionFile"
-	HardwareMap           = "hardwareMap"
-	CoreOSArchitecture    = "coreOSArchitecture"
-	FlatcarArchitecture   = "flatcarArchitecture"
-	Debug                 = "debug"
-	UpdateSchedule        = "updateSchedule"
-	HttpPort              = "httpPort"
-	DataDir               = "dataDir"
-	FlatcarURL            = "flatcarURL"
-	CoreOSURL             = "coreOSURL"
-	ServerIP              = "serverIP"
-	ServerHttpPort        = "serverHttpPort"
-	JoinString            = "joinString"
-	UpdatingFlatcar       = "updatingFlatcar"
-	UpdatingCoreOS        = "updatingCoreOS"
+	CurrentFlatcarVersion  = "currentFlatcarVersion"
+	RemoteFlatcarVersion   = "remoteFlatcarVersion"
+	FlatcarChannel         = "flatcarChannel"
+	CurrentCoreOSVersion   = "currentCoreOSVersion"
+	RemoteCoreOSVersion    = "remoteCoreOSVersion"
+	CoreOSChannel          = "coreOSChannel"
+	IgnitionFile           = "ignitionFile"
+	HardwareMap            = "hardwareMap"
+	CoreOSArchitecture     = "coreOSArchitecture"
+	FlatcarArchitecture    = "flatcarArchitecture"
+	Debug                  = "debug"
+	UpdateSchedule         = "updateSchedule"
+	HttpPort               = "httpPort"
+	DataDir                = "dataDir"
+	FlatcarURL             = "flatcarURL"
+	CoreOSURL              = "coreOSURL"
+	ServerIP               = "serverIP"
+	ServerHttpPort         = "serverHttpPort"
+	JoinString             = "joinString"
+	UpdatingFlatcar        = "updatingFlatcar"
+	UpdatingCoreOS         = "updatingCoreOS"
+	ProxyDHCPEnabled       = "proxyDHCPEnabled"
+	ProxyDHCPBootfileBIOS  = "proxyDHCPBootfileBIOS"
+	ProxyDHCPBootfileUEFI  = "proxyDHCPBootfileUEFI"
+	ProxyDHCPBootfileARM64 = "proxyDHCPBootfileARM64"
 )
 
 // httpClient is the package-level HTTP client used for DownloadFile.
@@ -51,6 +55,10 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(Debug, false)
 	viper.SetDefault(UpdatingFlatcar, false)
 	viper.SetDefault(UpdatingCoreOS, false)
+	viper.SetDefault(ProxyDHCPEnabled, false)
+	viper.SetDefault(ProxyDHCPBootfileBIOS, "undionly.kpxe")
+	viper.SetDefault(ProxyDHCPBootfileUEFI, "ipxe.efi")
+	viper.SetDefault(ProxyDHCPBootfileARM64, "ipxe-arm64.efi")
 	viper.SetDefault(FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
 	viper.SetDefault(CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
 	// https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64
