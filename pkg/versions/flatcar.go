@@ -70,7 +70,7 @@ func FlatcarVersionCheck() {
 		viper.Set(config.UpdatingFlatcar, true)
 		slog.Info("remote flatcar version differs from local", "remote", viper.GetString(config.RemoteFlatcarVersion), "local", viper.GetString(config.CurrentFlatcarVersion))
 
-		if err := DownloadFlatcarFile(ctx, "version.txt"); err != nil {
+		if err := DownloadFlatcarVersionFile(ctx); err != nil {
 			slog.Warn("error downloading flatcar file", "file", "version.txt", "err", err)
 		}
 		if err := DownloadFlatcarFile(ctx, "flatcar_production_pxe_image.cpio.gz"); err != nil {
@@ -118,10 +118,21 @@ func RemoteFlatcarURL() string {
 	return fmt.Sprintf(viper.GetString(config.FlatcarURL), viper.GetString(config.FlatcarChannel), viper.GetString(config.FlatcarArchitecture))
 }
 
+// DownloadFlatcarFile fetches a cache artifact (the PXE kernel/initramfs) into
+// the version-scoped cache dir. It is NOT used for version.txt — that is the
+// seeding marker and goes to the DataDir root via DownloadFlatcarVersionFile.
 func DownloadFlatcarFile(ctx context.Context, filename string) error {
 	dir := cacheDir("flatcar", "-", viper.GetString(config.FlatcarArchitecture), viper.GetString(config.RemoteFlatcarVersion))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	return config.DownloadFile(ctx, dir, fmt.Sprintf(RemoteFlatcarURL()+"/%s", filename))
+}
+
+// DownloadFlatcarVersionFile fetches version.txt into the DataDir root. It is
+// the version-seeding marker (read at cold start by config.LoadConfig and
+// FlatcarVersionCheck), parallel to CoreOS's channel JSON — NOT a cache
+// artifact, so it is not version-scoped and is overwritten in place.
+func DownloadFlatcarVersionFile(ctx context.Context) error {
+	return config.DownloadFile(ctx, viper.GetString(config.DataDir), RemoteFlatcarURL()+"/version.txt")
 }

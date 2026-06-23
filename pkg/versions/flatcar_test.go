@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -93,5 +94,79 @@ func TestFlatcarVersionCheck_RunsWhenOnlyCoreOSUpdating(t *testing.T) {
 
 	if got := hits.Load(); got == 0 {
 		t.Errorf("expected FlatcarVersionCheck to make HTTP calls when only CoreOS is updating, got 0 hits")
+	}
+}
+
+// TestFlatcarVersionCheck_VersionTxtToRootAndIdempotent is the regression guard
+// for the cold-start version-seeding flow. version.txt is the seeding MARKER
+// (read at cold start from DataDir root by config.LoadConfig and
+// FlatcarVersionCheck), parallel to CoreOS's channel JSON — it must land in the
+// DataDir root, NOT the version-scoped cache dir. The PXE artifacts are cache
+// artifacts and belong in the cache dir. A second cold-start check must then be
+// a no-op: the root marker seeds CurrentFlatcarVersion to the remote value, so
+// no PXE artifact is re-downloaded.
+func TestFlatcarVersionCheck_VersionTxtToRootAndIdempotent(t *testing.T) {
+	var mu sync.Mutex
+	hits := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits[filepath.Base(r.URL.Path)]++
+		mu.Unlock()
+		if filepath.Base(r.URL.Path) == "version.txt" {
+			_, _ = w.Write([]byte("FLATCAR_VERSION=4.5.6\n"))
+			return
+		}
+		_, _ = w.Write([]byte("artifact"))
+	}))
+	t.Cleanup(srv.Close)
+
+	artifactHits := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return hits["flatcar_production_pxe.vmlinuz"] + hits["flatcar_production_pxe_image.cpio.gz"]
+	}
+
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.FlatcarChannel, "stable")
+	viper.Set(config.FlatcarArchitecture, "amd64")
+	viper.Set(config.FlatcarURL, srv.URL+"/%s-%s")
+
+	FlatcarVersionCheck()
+
+	// version.txt is the seeding marker: it must be in DataDir ROOT, not the cache dir.
+	if _, err := os.Stat(filepath.Join(root, "version.txt")); err != nil {
+		t.Errorf("version.txt should be in DataDir root: %v", err)
+	}
+	// PXE artifacts must be in the version-scoped cache dir.
+	cacheVerDir := cacheDir("flatcar", "-", "amd64", "4.5.6")
+	if _, err := os.Stat(filepath.Join(cacheVerDir, "flatcar_production_pxe.vmlinuz")); err != nil {
+		t.Errorf("vmlinuz should be in cache dir: %v", err)
+	}
+	// version.txt must NOT be in the cache dir (it's a marker, not a cache artifact).
+	if _, err := os.Stat(filepath.Join(cacheVerDir, "version.txt")); err == nil {
+		t.Errorf("version.txt must not be written into the cache dir")
+	}
+
+	// Idempotency: simulate a cold restart (fresh process loses in-memory
+	// CurrentFlatcarVersion) while preserving the on-disk DataDir. The root
+	// marker must re-seed the version so the second check downloads no PXE
+	// artifacts.
+	firstArtifactHits := artifactHits()
+	if firstArtifactHits == 0 {
+		t.Fatalf("expected PXE artifacts to be downloaded on first run, got 0")
+	}
+
+	viper.Reset()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.FlatcarChannel, "stable")
+	viper.Set(config.FlatcarArchitecture, "amd64")
+	viper.Set(config.FlatcarURL, srv.URL+"/%s-%s")
+
+	FlatcarVersionCheck()
+
+	if got := artifactHits(); got != firstArtifactHits {
+		t.Errorf("cold restart re-downloaded PXE artifacts: artifact hits went %d -> %d (expected no change)", firstArtifactHits, got)
 	}
 }
