@@ -24,6 +24,7 @@ func StartHTTP() *http.Server {
 	// All URLs will be handled by this function
 	myHandler.HandleFunc("/", handleRequest)
 	myHandler.HandleFunc("/ignition.json", handleIgnitionRequest)
+	myHandler.HandleFunc("/machineconfig", handleMachineConfigRequest)
 	myHandler.HandleFunc("/version.txt", handleVersionRequest)
 	myHandler.HandleFunc("/version.json", handleVersionRequest)
 	myHandler.HandleFunc("/hosts", handleHostsRequest)
