@@ -111,5 +111,5 @@ func RemoteFlatcarURL() string {
 }
 
 func DownloadFlatcarFile(ctx context.Context, filename string) error {
-	return config.DownloadFile(ctx, fmt.Sprintf(RemoteFlatcarURL()+"/%s", filename))
+	return config.DownloadFile(ctx, viper.GetString(config.DataDir), fmt.Sprintf(RemoteFlatcarURL()+"/%s", filename))
 }

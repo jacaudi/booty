@@ -135,7 +135,7 @@ func RemoteCoreOSURL() string {
 }
 
 func DownloadCoreOSFile(ctx context.Context, filename string) error {
-	return config.DownloadFile(ctx, fmt.Sprintf(RemoteCoreOSURL()+"/%s", filename))
+	return config.DownloadFile(ctx, viper.GetString(config.DataDir), fmt.Sprintf(RemoteCoreOSURL()+"/%s", filename))
 }
 
 func RemoteCoreOSJSONURL() string {
@@ -143,5 +143,5 @@ func RemoteCoreOSJSONURL() string {
 }
 
 func DownloadCoreOSJSON(ctx context.Context) error {
-	return config.DownloadFile(ctx, RemoteCoreOSJSONURL())
+	return config.DownloadFile(ctx, viper.GetString(config.DataDir), RemoteCoreOSJSONURL())
 }

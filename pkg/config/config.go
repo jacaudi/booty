@@ -90,12 +90,12 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(HardwareMap, "hardware.json")
 }
 
-// DownloadFile streams the body at rawURL into <DataDir>/<filename>,
-// where filename is the trailing path segment of rawURL (query
-// strings stripped). The request honors ctx cancellation and the
-// package-level httpClient.Timeout (5 minutes); whichever fires
-// first wins.
-func DownloadFile(ctx context.Context, rawURL string) error {
+// DownloadFile streams the body at rawURL into <destDir>/<filename>, where
+// filename is the trailing path segment of rawURL (query strings stripped).
+// The request honors ctx cancellation and httpClient.Timeout (5 minutes);
+// whichever fires first wins. A >=400 status is rejected before any file is
+// created. Callers are responsible for ensuring destDir exists.
+func DownloadFile(ctx context.Context, destDir, rawURL string) error {
 	slog.Info("downloading", "url", rawURL)
 
 	u, err := url.Parse(rawURL)
@@ -122,7 +122,7 @@ func DownloadFile(ctx context.Context, rawURL string) error {
 	if base == "." || base == ".." || base == "/" {
 		return fmt.Errorf("config: url %q yields unsafe filename %q", rawURL, base)
 	}
-	filename := filepath.Join(viper.GetString(DataDir), base)
+	filename := filepath.Join(destDir, base)
 	slog.Info("creating file", "file", filename)
 
 	f, err := os.Create(filename)
