@@ -1,10 +1,12 @@
 ### Stage One
 FROM --platform=$BUILDPLATFORM golang:1.26.2-alpine AS build-golang
 
-# Cross-compilation targets. buildx populates TARGETOS/TARGETARCH per target
-# platform; the defaults keep them non-empty for a plain `docker build`.
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+# Cross-compilation targets. BuildKit/buildx auto-populates TARGETOS/TARGETARCH
+# per target platform. Do NOT default these: a default (e.g. amd64) overrides
+# buildx's per-platform value, compiling an amd64 binary into the arm64 image
+# (arm64 base + amd64 /booty => "exec format error" on arm64).
+ARG TARGETOS
+ARG TARGETARCH
 
 # Version stamping. Passed via --build-arg; default empty when omitted.
 ARG BOOTY_VERSION
