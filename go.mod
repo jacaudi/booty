@@ -13,7 +13,6 @@ require (
 	github.com/buger/jsonparser v1.1.1
 	github.com/coreos/butane v0.19.0
 	github.com/coreos/ignition/v2 v2.17.0
-	github.com/go-co-op/gocron v1.11.0
 	github.com/insomniacslk/dhcp v0.0.0-20260603135910-a415979eb11e
 	github.com/j-keck/arping v1.0.3
 	github.com/joho/godotenv v1.4.0
@@ -22,6 +21,7 @@ require (
 	github.com/spf13/viper v1.10.1
 	github.com/stretchr/testify v1.8.4
 	golang.org/x/mod v0.37.0
+	golang.org/x/sync v0.20.0
 	modernc.org/sqlite v1.53.0
 )
 
@@ -48,7 +48,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.14 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/spf13/afero v1.6.0 // indirect
 	github.com/spf13/cast v1.4.1 // indirect
@@ -58,7 +57,6 @@ require (
 	github.com/u-root/uio v0.0.0-20230220225925-ffce2a382923 // indirect
 	github.com/vincent-petithory/dataurl v1.0.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect

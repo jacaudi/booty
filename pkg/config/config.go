@@ -12,24 +12,18 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 const (
-	CurrentFlatcarVersion  = "currentFlatcarVersion"
-	RemoteFlatcarVersion   = "remoteFlatcarVersion"
 	FlatcarChannel         = "flatcarChannel"
-	CurrentCoreOSVersion   = "currentCoreOSVersion"
-	RemoteCoreOSVersion    = "remoteCoreOSVersion"
 	CoreOSChannel          = "coreOSChannel"
 	IgnitionFile           = "ignitionFile"
 	HardwareMap            = "hardwareMap"
 	CoreOSArchitecture     = "coreOSArchitecture"
 	FlatcarArchitecture    = "flatcarArchitecture"
 	Debug                  = "debug"
-	UpdateSchedule         = "updateSchedule"
 	HttpPort               = "httpPort"
 	DataDir                = "dataDir"
 	FlatcarURL             = "flatcarURL"
@@ -37,13 +31,10 @@ const (
 	ServerIP               = "serverIP"
 	ServerHttpPort         = "serverHttpPort"
 	JoinString             = "joinString"
-	UpdatingFlatcar        = "updatingFlatcar"
-	UpdatingCoreOS         = "updatingCoreOS"
 	ProxyDHCPEnabled       = "proxyDHCPEnabled"
 	ProxyDHCPBootfileBIOS  = "proxyDHCPBootfileBIOS"
 	ProxyDHCPBootfileUEFI  = "proxyDHCPBootfileUEFI"
 	ProxyDHCPBootfileARM64 = "proxyDHCPBootfileARM64"
-	UpdatingTalos          = "updatingTalos"
 	TalosArchitecture      = "talosArchitecture"
 	TalosSchematic         = "talosSchematic"
 	TalosRetainMinors      = "talosRetainMinors"
@@ -63,13 +54,10 @@ var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(Debug, false)
-	viper.SetDefault(UpdatingFlatcar, false)
-	viper.SetDefault(UpdatingCoreOS, false)
 	viper.SetDefault(ProxyDHCPEnabled, false)
 	viper.SetDefault(ProxyDHCPBootfileBIOS, "undionly.kpxe")
 	viper.SetDefault(ProxyDHCPBootfileUEFI, "ipxe.efi")
 	viper.SetDefault(ProxyDHCPBootfileARM64, "ipxe-arm64.efi")
-	viper.SetDefault(UpdatingTalos, false)
 	viper.SetDefault(TalosArchitecture, "amd64")
 	viper.SetDefault(TalosSchematic, "376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba")
 	viper.SetDefault(TalosRetainMinors, 3)
@@ -82,25 +70,6 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
 	// https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64
 	// https://stable.release.flatcar-linux.net/amd64-usr/current/version.txt
-
-	versionPath := fmt.Sprintf("%s/version.txt", viper.GetString(DataDir))
-	if file, err := os.Open(versionPath); err == nil {
-		defer file.Close()
-		data, parseErr := godotenv.Parse(file)
-		switch {
-		case parseErr != nil:
-			slog.Warn("error parsing version file", "path", versionPath, "err", parseErr)
-		default:
-			if v, ok := data["FLATCAR_VERSION"]; ok {
-				viper.Set(CurrentFlatcarVersion, v)
-				slog.Info("local version found", "version", v)
-			} else {
-				slog.Warn("version file present but FLATCAR_VERSION key missing", "path", versionPath)
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		slog.Warn("error opening version file", "path", versionPath, "err", err)
-	}
 
 	viper.BindEnv(IgnitionFile, "IGNITION_FILE")
 	viper.SetDefault(IgnitionFile, "config/ignition.yaml")
