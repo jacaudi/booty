@@ -1,6 +1,6 @@
 # Database & persisted records
 
-booty's current persistent "database" is a single JSON file plus a couple of version-metadata files,
+booty's persistent state is a SQLite database (`booty.db`) plus a couple of version-metadata files,
 all under `--dataDir`. This documents their shape.
 
 > **As of P1a:** control-plane and host state live in **SQLite**
