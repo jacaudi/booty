@@ -14,7 +14,10 @@ func TestHost_UpsertGetDelete(t *testing.T) {
 	}
 
 	in := Host{MAC: "aa:bb:cc:dd:ee:ff", Hostname: "node-01", IP: "10.0.0.5",
-		IgnitionFile: "config/custom.yaml", OS: "talos", DoInstall: true, Schematic: "abc"}
+		IgnitionFile: "config/custom.yaml", OS: "talos", DoInstall: true, Schematic: "abc",
+		// Schema defaults returned by GetHost after scanHost was widened (P1c).
+		BootMode: "menu", AssignedParams: "{}",
+	}
 	if err := s.UpsertHost(in); err != nil {
 		t.Fatalf("UpsertHost: %v", err)
 	}
@@ -89,5 +92,77 @@ func TestListHosts(t *testing.T) {
 	}
 	if len(all) != 2 {
 		t.Errorf("ListHosts returned %d, want 2", len(all))
+	}
+}
+
+func TestApproveAndAssign(t *testing.T) {
+	s := newTestStore(t) // existing helper in this package's tests
+	if err := s.UpsertHost(Host{MAC: "aa:bb:cc:dd:ee:ff", OS: "talos"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// Fresh host defaults: unapproved, menu.
+	h, err := s.GetHost("aa:bb:cc:dd:ee:ff")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if h.Approved || h.BootMode != "menu" {
+		t.Fatalf("fresh host = approved %v mode %q, want false/menu", h.Approved, h.BootMode)
+	}
+
+	if err := s.ApproveHost("aa:bb:cc:dd:ee:ff"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if err := s.SetAssignment("aa:bb:cc:dd:ee:ff", "talos", "amd64", `{"schematic":"x"}`); err != nil {
+		t.Fatalf("assign: %v", err)
+	}
+	h, _ = s.GetHost("aa:bb:cc:dd:ee:ff")
+	if !h.Approved || h.BootMode != "assigned" || h.AssignedOS != "talos" || h.AssignedParams != `{"schematic":"x"}` {
+		t.Fatalf("after approve+assign = %+v", *h)
+	}
+
+	// Re-registration via UpsertHost must NOT clobber approval/assignment.
+	if err := s.UpsertHost(Host{MAC: "aa:bb:cc:dd:ee:ff", OS: "talos", Hostname: "node1"}); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+	h, _ = s.GetHost("aa:bb:cc:dd:ee:ff")
+	if !h.Approved || h.BootMode != "assigned" || h.Hostname != "node1" {
+		t.Fatalf("re-registration clobbered state: %+v", *h)
+	}
+
+	if err := s.RevokeHost("aa:bb:cc:dd:ee:ff"); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	h, _ = s.GetHost("aa:bb:cc:dd:ee:ff")
+	if h.Approved {
+		t.Fatalf("revoke did not clear approved")
+	}
+}
+
+func TestPreserveExistingHostBoot(t *testing.T) {
+	s := newTestStore(t)
+	// Pre-existing registered host (has an OS) + a never-configured host.
+	_ = s.UpsertHost(Host{MAC: "11:11:11:11:11:11", OS: "flatcar"})
+	_ = s.UpsertHost(Host{MAC: "22:22:22:22:22:22"}) // os == ""
+
+	n, err := s.PreserveExistingHostBoot()
+	if err != nil {
+		t.Fatalf("preserve: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("preserved %d hosts, want 1", n)
+	}
+	h, _ := s.GetHost("11:11:11:11:11:11")
+	if !h.Approved || h.BootMode != "assigned" || h.AssignedOS != "flatcar" {
+		t.Fatalf("configured host not preserved: %+v", *h)
+	}
+	h2, _ := s.GetHost("22:22:22:22:22:22")
+	if h2.Approved {
+		t.Fatalf("never-configured host should stay unapproved")
+	}
+
+	// Idempotent: second run is gated by the meta flag and touches nothing.
+	n, err = s.PreserveExistingHostBoot()
+	if err != nil || n != 0 {
+		t.Fatalf("second preserve = (%d,%v), want (0,nil)", n, err)
 	}
 }
