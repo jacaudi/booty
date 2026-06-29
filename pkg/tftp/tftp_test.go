@@ -67,6 +67,20 @@ func TestApplyTokens(t *testing.T) {
 	}
 }
 
+func TestBootTokensHasNoMenuDefault(t *testing.T) {
+	viper.Reset()
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.FlatcarArchitecture, "amd64")
+
+	tokens := bootTokens("flatcar", "10.0.0.1", nil)
+	if _, ok := tokens["[[menu-default]]"]; ok {
+		t.Errorf("[[menu-default]] token should be gone, got: %v", tokens)
+	}
+	if tokens["[[server]]"] != "10.0.0.1" {
+		t.Errorf("[[server]] = %q, want 10.0.0.1", tokens["[[server]]"])
+	}
+}
+
 func TestBootTokensTalosUsesHostSchematic(t *testing.T) {
 	viper.Reset()
 	root := t.TempDir()
@@ -75,7 +89,7 @@ func TestBootTokensTalosUsesHostSchematic(t *testing.T) {
 	viper.Set(config.TalosArchitecture, "amd64")
 
 	host := &hardware.Host{OS: "talos", Schematic: "customschematic"}
-	tokens := bootTokens("talos", "10.0.0.1", "install", host)
+	tokens := bootTokens("talos", "10.0.0.1", host)
 
 	if tokens["[[talos-schematic]]"] != "customschematic" {
 		t.Errorf("schematic = %q, want customschematic", tokens["[[talos-schematic]]"])
@@ -99,7 +113,7 @@ func TestBootTokensTalosBaseURL(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	tokens := bootTokens("talos", "10.0.0.1", "install", nil)
+	tokens := bootTokens("talos", "10.0.0.1", nil)
 	want := "http://" + versions.CacheURLBase("10.0.0.1", "talos", "schem1", "amd64", "v1.10.5")
 	if tokens["[[talos-baseurl]]"] != want {
 		t.Errorf("[[talos-baseurl]] = %q, want %q", tokens["[[talos-baseurl]]"], want)
@@ -113,7 +127,7 @@ func TestBootTokensTalosFallsBackToDefaultSchematic(t *testing.T) {
 	viper.Set(config.TalosArchitecture, "amd64")
 
 	// nil host → default schematic; nothing cached → empty version token.
-	tokens := bootTokens("talos", "10.0.0.1", "install", nil)
+	tokens := bootTokens("talos", "10.0.0.1", nil)
 	if tokens["[[talos-schematic]]"] != "defaultschematic" {
 		t.Errorf("schematic = %q, want defaultschematic", tokens["[[talos-schematic]]"])
 	}
@@ -122,7 +136,7 @@ func TestBootTokensTalosFallsBackToDefaultSchematic(t *testing.T) {
 	}
 
 	// host present but no schematic set → still the default.
-	tokens = bootTokens("talos", "10.0.0.1", "install", &hardware.Host{OS: "talos"})
+	tokens = bootTokens("talos", "10.0.0.1", &hardware.Host{OS: "talos"})
 	if tokens["[[talos-schematic]]"] != "defaultschematic" {
 		t.Errorf("empty-schematic host: got %q, want defaultschematic", tokens["[[talos-schematic]]"])
 	}

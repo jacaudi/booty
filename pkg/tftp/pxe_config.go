@@ -30,14 +30,6 @@ func init() {
 	initrd ${BASEURL}/flatcar_production_pxe_image.cpio.gz
 	boot`
 
-	PXEConfig["flatcar_booty.ipxe"] = `#!ipxe
-	echo "Hello from Booty!"
-	set BASEURL http://[[server]]/data/
-	set CONFIGURL http://[[server]]/ignition.json
-	set menu-default [[menu-default]]
-	chain http://[[server]]/data/flatcar_booty.ipxe
-	boot`
-
 	PXEConfig["coreos.ipxe"] = `#!ipxe
 	echo Hello from Booty!
 	set BASEURL [[coreos-baseurl]]
