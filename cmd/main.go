@@ -258,7 +258,10 @@ func run(cmd *cobra.Command, argv []string) error {
 	tftpServer := tftp.StartTFTP()
 
 	// Start the HTTP server (non-blocking; returns the running server).
-	httpServer := bootyHTTP.StartHTTP()
+	httpServer := bootyHTTP.StartHTTP(bootyHTTP.APIDeps{
+		Store:   store,
+		Trigger: reconciler.Trigger,
+	})
 
 	// Start the proxyDHCP responder when enabled. Best-effort: nil when not
 	// started, in which case the shutdown step is skipped below.

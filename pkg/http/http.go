@@ -15,7 +15,7 @@ import (
 // StartHTTP starts the HTTP server in a background goroutine and returns it so
 // the caller can Shutdown() it during graceful shutdown. Signal handling and
 // the ordered shutdown live with the caller; this function only starts serving.
-func StartHTTP() *http.Server {
+func StartHTTP(deps APIDeps) *http.Server {
 	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
 	slog.Info("starting HTTP server", "addr", port)
 	// Create a mux for routing incoming requests
@@ -34,6 +34,9 @@ func StartHTTP() *http.Server {
 	myHandler.HandleFunc("/info", handleInfoRequest)
 	myHandler.Handle("/data/", http.StripPrefix("/data/", http.FileServer(http.Dir(viper.GetString(config.DataDir)))))
 	myHandler.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.Dir("./web/dist"))))
+
+	// Mount the typed /api/v1 surface on the same mux (additive).
+	RegisterAPI(myHandler, deps)
 
 	s := &http.Server{
 		Addr:           port,
