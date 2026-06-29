@@ -146,6 +146,12 @@ func compareDottedNumeric(a, b string) int {
 			return 1
 		}
 	}
+	if len(as) < len(bs) {
+		return -1
+	}
+	if len(as) > len(bs) {
+		return 1
+	}
 	return 0
 }
 

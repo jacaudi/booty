@@ -93,6 +93,16 @@ func TestFedoraCoreOS_CompareVersions(t *testing.T) {
 	}
 }
 
+func TestFedoraCoreOS_CompareVersions_LengthTiebreak(t *testing.T) {
+	o, _ := Lookup("fedora-coreos")
+	if o.CompareVersions("39.20231101.3", "39.20231101.3.0") >= 0 {
+		t.Error("shorter id should sort before longer when shared fields are equal")
+	}
+	if o.CompareVersions("39.20231101.3.0", "39.20231101.3") <= 0 {
+		t.Error("longer id should sort after shorter when shared fields are equal")
+	}
+}
+
 func TestFedoraCoreOS_Artifacts(t *testing.T) {
 	o, _ := Lookup("fedora-coreos")
 	got := o.Artifacts("39.20231101.3.0", "x86_64", nil)
