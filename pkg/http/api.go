@@ -37,8 +37,6 @@ func registerOperations(api huma.API, deps APIDeps) {
 	registerHosts(grp, deps)   // Task 7
 }
 
-// Temporary stubs — Tasks 6, 7 each replace their stub with the real registrar.
-// These are intentional transients: they exist only so the package compiles before
-// those tasks land. Signatures are fixed so each later task drops in cleanly.
-func registerTargets(api huma.API, deps APIDeps) {}
-func registerHosts(api huma.API, deps APIDeps)   {}
+// registerHosts stub — Task 7 replaces this with the real registrar.
+// The signature is fixed so Task 7 drops in without touching api.go.
+func registerHosts(api huma.API, deps APIDeps) {}
