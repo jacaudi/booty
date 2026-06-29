@@ -37,6 +37,3 @@ func registerOperations(api huma.API, deps APIDeps) {
 	registerHosts(grp, deps)   // Task 7
 }
 
-// registerHosts stub — Task 7 replaces this with the real registrar.
-// The signature is fixed so Task 7 drops in without touching api.go.
-func registerHosts(api huma.API, deps APIDeps) {}

@@ -74,10 +74,13 @@ var (
 
 // SetStore injects the shared database store. Call it once at startup before
 // Load. When set, Load uses this store rather than opening its own.
+// Passing nil resets the injection so a subsequent Load() opens its own store;
+// this is used by tests to restore package state after a test-injected store is
+// closed.
 func SetStore(s *db.Store) {
 	storeMu.Lock()
 	store = s
-	storeInjected = true
+	storeInjected = (s != nil)
 	storeMu.Unlock()
 }
 
