@@ -227,9 +227,15 @@ func TestLoad_ConcurrentWithDBOpsIsRaceClean(t *testing.T) {
 				case <-stop:
 					return
 				default:
-					_ = WriteMacAddress(mac, Host{MAC: mac, Hostname: "n"})
-					_, _ = GetMacAddress(mac)
-					_, _ = GetData()
+					if err := WriteMacAddress(mac, Host{MAC: mac, Hostname: "n"}); err != nil {
+						t.Errorf("WriteMacAddress concurrent with Load: %v", err)
+					}
+					if _, err := GetMacAddress(mac); err != nil && !errors.Is(err, ErrNotFound) {
+						t.Errorf("GetMacAddress unexpected error concurrent with Load: %v", err)
+					}
+					if _, err := GetData(); err != nil {
+						t.Errorf("GetData concurrent with Load: %v", err)
+					}
 				}
 			}
 		})
