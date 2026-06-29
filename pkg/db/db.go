@@ -45,6 +45,3 @@ func Open(path string) (*Store, error) {
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
 
-// migrate is a stub; Task 2 replaces this with the real schema runner in
-// migrate.go and removes this stub.
-func (s *Store) migrate() error { return nil }
