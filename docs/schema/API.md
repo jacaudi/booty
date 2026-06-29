@@ -51,8 +51,7 @@ host database. Most filenames are served as plain cached files; two are **magic*
 
 **Boot-token substitution** (replaced in the generated `booty.ipxe`):
 
-- Common: `[[server]]` (= `serverIP:serverHttpPort`), `[[menu-default]]` (`install` or
-  `run-from-disk`).
+- Common: `[[server]]` (= `serverIP:serverHttpPort`).
 - Flatcar: `[[flatcar-arch]]`, `[[flatcar-version]]`, `[[flatcar-baseurl]]`.
 - CoreOS: `[[coreos-arch]]`, `[[coreos-channel]]`, `[[coreos-version]]`, `[[coreos-baseurl]]`.
 - Talos: `[[talos-schematic]]`, `[[talos-arch]]`, `[[talos-version]]`, `[[talos-baseurl]]`

@@ -62,7 +62,6 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	slog.Debug("RRQ", "from", raddr.String(), "to", laddr.String())
 
 	osToLoad := "flatcar"
-	menuDefault := "run-from-disk"
 
 	var host *hardware.Host
 	if hwAddr, _, err := arping.Ping(raddr.IP); err != nil {
@@ -78,16 +77,13 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 			if host.OS != "" {
 				osToLoad = host.OS
 			}
-			if host.DoInstall {
-				menuDefault = "install"
-				if filename == "booty.ipxe" {
-					modified := *host
-					modified.DoInstall = false
-					if err := hardware.WriteMacAddress(macAddress, modified); err != nil {
-						slog.Warn("TFTP: error persisting DoInstall flip", "mac", macAddress, "err", err)
-						// Best-effort: continue serving the iPXE script even if
-						// the persist failed; the next boot will retry.
-					}
+			if host.DoInstall && filename == "booty.ipxe" {
+				modified := *host
+				modified.DoInstall = false
+				if err := hardware.WriteMacAddress(macAddress, modified); err != nil {
+					slog.Warn("TFTP: error persisting DoInstall flip", "mac", macAddress, "err", err)
+					// Best-effort: continue serving the iPXE script even if
+					// the persist failed; the next boot will retry.
 				}
 			}
 		}
@@ -100,7 +96,7 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	}
 
 	if filename == "booty.ipxe" {
-		toServe := applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, menuDefault, host))
+		toServe := applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
 		r := strings.NewReader(toServe)
 		n, err := rf.ReadFrom(r)
 		if err != nil {
@@ -153,10 +149,9 @@ func applyTokens(s string, tokens map[string]string) string {
 // bootTokens builds the per-request substitution map: shared tokens plus the
 // OS-specific tokens for osToLoad. Talos resolves its boot version from the
 // cache dir (newest retained), keyed by the host's schematic or the default.
-func bootTokens(osToLoad, urlHost, menuDefault string, host *hardware.Host) map[string]string {
+func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string {
 	tokens := map[string]string{
-		"[[server]]":       urlHost,
-		"[[menu-default]]": menuDefault,
+		"[[server]]": urlHost,
 	}
 	switch osToLoad {
 	case "coreos":
