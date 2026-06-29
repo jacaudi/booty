@@ -36,6 +36,10 @@ curl -X POST http://localhost:8080/register \
 MACs are canonicalized (lowercase, colon-delimited) on write and on lookup, so any common format is
 accepted.
 
+> **As of P1b:** `/version.txt`, `/version.json`, and `/info` report the **newest cached** Flatcar /
+> CoreOS version (derived from the `cache/` directory), not internal `Current*` state. The response
+> shapes are unchanged — this is a source change only.
+
 ---
 
 ## TFTP boot filenames

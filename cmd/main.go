@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	bootyHTTP "github.com/jeefy/booty/pkg/http"
 	"github.com/jeefy/booty/pkg/proxydhcp"
 	"github.com/jeefy/booty/pkg/tftp"
-	"github.com/jeefy/booty/pkg/versions"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -31,7 +31,8 @@ var args struct {
 	debug               bool
 	dataDir             string
 	maxCacheAge         int
-	cronSchedule        string
+	cacheInterval       time.Duration
+	cacheConcurrency    int
 	httpPort            int
 	flatcarArchitecture string
 	coreOSArchitecture  string
@@ -73,11 +74,17 @@ func init() {
 		false,
 		"Enable debug logging",
 	)
-	flags.StringVar(
-		&args.cronSchedule,
-		"updateSchedule",
-		"*/5 * * * *",
-		"Cron schedule to use for cleaning up cache files",
+	flags.DurationVar(
+		&args.cacheInterval,
+		"cacheInterval",
+		5*time.Minute,
+		"Interval between cache reconcile passes (discovery refresh)",
+	)
+	flags.IntVar(
+		&args.cacheConcurrency,
+		"cacheConcurrency",
+		4,
+		"Max concurrent artifact downloads during cache reconcile",
 	)
 
 	flags.StringVar(
@@ -237,13 +244,16 @@ func run(cmd *cobra.Command, argv []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	versions.FlatcarVersionCheck()
-	versions.CoreOSVersionCheck()
-	versions.TalosSync()
-
-	flatcarCron := versions.StartFlatcarCron()
-	coreOSCron := versions.StartCoreOSCron()
-	talosCron := versions.StartTalosCron()
+	// Single cache reconciler replaces the per-OS version-check crons. Start it
+	// after the host store is loaded; it owns all target/version DB writes and
+	// eager artifact caching. Serving (TFTP/HTTP below) may begin immediately —
+	// boots before the first reconcile 404 the same way they did pre-first-sync.
+	reconciler := cache.NewReconciler(
+		store,
+		viper.GetDuration(config.CacheInterval),
+		viper.GetInt(config.CacheConcurrency),
+	)
+	reconciler.Start(ctx)
 
 	tftpServer := tftp.StartTFTP()
 
@@ -276,9 +286,7 @@ func run(cmd *cobra.Command, argv []string) error {
 				slog.Error("HTTP shutdown failed", "err", err)
 			}
 		}},
-		shutdownStep{name: "flatcar-cron", stop: flatcarCron.Stop},
-		shutdownStep{name: "coreos-cron", stop: coreOSCron.Stop},
-		shutdownStep{name: "talos-cron", stop: talosCron.Stop},
+		shutdownStep{name: "reconciler", stop: reconciler.Stop},
 		// Bound the TFTP stop: in single-port mode pin/tftp's Shutdown() does
 		// not close the listening socket and the serve loop blocks on ReadFrom
 		// with no read deadline, so Shutdown() can hang until the next packet.

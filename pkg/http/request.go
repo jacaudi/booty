@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/spf13/viper"
@@ -56,16 +57,21 @@ func handleHostsRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleVersionRequest(w http.ResponseWriter, r *http.Request) {
+	flatcar := cache.NewestCached("flatcar", viper.GetString(config.FlatcarArchitecture), nil)
+	coreos := cache.NewestCached("coreos", viper.GetString(config.CoreOSArchitecture), nil)
 	if strings.Contains(r.RequestURI, "json") {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(fmt.Sprintf(`{"flatcar":"%s","coreos":"%s"}`, viper.GetString(config.CurrentFlatcarVersion), viper.GetString(config.CurrentCoreOSVersion))))
+		w.Write([]byte(fmt.Sprintf(`{"flatcar":"%s","coreos":"%s"}`, flatcar, coreos)))
 		return
 	}
-	w.Write([]byte(fmt.Sprintf("FLATCAR_VERSION=%s\n", viper.GetString(config.CurrentFlatcarVersion))))
-	w.Write([]byte(fmt.Sprintf("COREOS_VERSION=%s\n", viper.GetString(config.CurrentCoreOSVersion))))
+	w.Write([]byte(fmt.Sprintf("FLATCAR_VERSION=%s\n", flatcar)))
+	w.Write([]byte(fmt.Sprintf("COREOS_VERSION=%s\n", coreos)))
 }
 
 func handleInfoRequest(w http.ResponseWriter, r *http.Request) {
+	flatcar := cache.NewestCached("flatcar", viper.GetString(config.FlatcarArchitecture), nil)
+	coreos := cache.NewestCached("coreos", viper.GetString(config.CoreOSArchitecture), nil)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(fmt.Sprintf(`{"flatcar":{"version":"%s"},"coreos":{"version":"%s"},"booty":{"version":"%s","timestamp":"%s"}}`, viper.GetString(config.CurrentFlatcarVersion), viper.GetString(config.CurrentCoreOSVersion), viper.GetString("version"), viper.GetString("timestamp"))))
+	w.Write([]byte(fmt.Sprintf(`{"flatcar":{"version":"%s"},"coreos":{"version":"%s"},"booty":{"version":"%s","timestamp":"%s"}}`,
+		flatcar, coreos, viper.GetString("version"), viper.GetString("timestamp"))))
 }

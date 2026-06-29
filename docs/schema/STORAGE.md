@@ -20,6 +20,9 @@ keep cache and registration across restarts.
 └── cache/                        # downloaded boot artifacts (see below)
 ```
 
+> **As of P1b:** `version.txt` / `<channel>.json` are no longer read for version state — the newest
+> cached version is derived from the `cache/` directory for every OS (not just Talos).
+
 > **Host DB migration (P1a):** the host store moved from `hardware.json` into the
 > SQLite `hosts` table. On the first start after upgrade, an existing
 > `hardware.json` is imported and renamed `hardware.json.migrated` (kept as a
@@ -57,15 +60,13 @@ cache/talos/376567988ad3…b4ba/amd64/v1.10.1/
 
 ## How the cache is populated and pruned
 
-- A background scheduler (`--updateSchedule`, default every 5 minutes) checks each OS upstream and
-  downloads a new version's artifacts only when the cached version differs.
+- A single **cache reconciler** (`--cacheInterval`, default every 5 minutes; bounded by
+  `--cacheConcurrency`) caches each declared target's artifacts eagerly — on startup and on each
+  tick, never on boot. Predefined targets (Flatcar, Fedora CoreOS, Talos) are seeded automatically,
+  plus one Talos target per distinct registered-host schematic.
 - **Flatcar / CoreOS:** the previous version's directory is removed when a newer one is cached
   (single current version per channel).
 - **Talos:** the newest `--talosRetainMinors` minor lines are kept (default 3), per schematic and
-  arch; this is a floor, not an aggressive prune. The boot path resolves a host to the newest cached
-  version for its schematic at request time.
-
-> **Forward-looking:** the v1 management plane makes caching **target-driven** (operators declare
-> targets; a reconciler caches them eagerly — never on boot) and adds cache states, retention, and
-> signature verification. The `cache/<os>/<schematic-or-dash>/<arch>/<version>/` layout above is the
-> stable foundation those slices build on.
+  arch. As of P1b the reconciler now **prunes** discovered versions outside that set — a change from
+  the retired cron, which cached the same set but never pruned. Manual pins are never pruned. The
+  boot path is unaffected (it serves the newest cached version, which is always retained).

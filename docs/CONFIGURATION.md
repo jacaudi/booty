@@ -10,7 +10,8 @@ values used when neither a flag nor an env var is set.
 |------|---------|---------|
 | `--httpPort` | `8080` | Port the HTTP server listens on. |
 | `--debug` | `false` | Enable debug-level (verbose) logging. |
-| `--updateSchedule` | `*/5 * * * *` | Cron schedule for upstream version checks / cache refresh. |
+| `--cacheInterval` | `5m` | Interval between cache reconcile passes (discovery refresh). |
+| `--cacheConcurrency` | `4` | Max concurrent artifact downloads during a reconcile pass. |
 | `--dataDir` | `/data` | Directory for all stateful data (cache, templates, host DB). |
 | `--serverIP` | `127.0.0.1` | LAN-reachable IP that clients use to reach booty. **Set this.** |
 | `--serverHttpPort` | `80` | HTTP port advertised to clients (when it differs from `--httpPort`). |

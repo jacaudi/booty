@@ -28,6 +28,17 @@ func (s *Store) UpsertTargetVersion(tv TargetVersion) error {
 	return nil
 }
 
+// DeleteTargetVersion removes the (targetID, version) row. Idempotent: deleting
+// an absent row is a no-op returning nil. The caller is responsible for removing
+// the on-disk artifacts.
+func (s *Store) DeleteTargetVersion(targetID int64, version string) error {
+	if _, err := s.db.Exec(
+		`DELETE FROM target_versions WHERE target_id = ? AND version = ?`, targetID, version); err != nil {
+		return fmt.Errorf("db: delete version %d/%s: %w", targetID, version, err)
+	}
+	return nil
+}
+
 // ListTargetVersions returns the versions for targetID ordered by id.
 func (s *Store) ListTargetVersions(targetID int64) ([]TargetVersion, error) {
 	rows, err := s.db.Query(

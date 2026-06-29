@@ -47,11 +47,11 @@ booty records the currently-cached release of each channel so it can detect chan
 
 | File | OS | Format | Notes |
 |------|----|--------|-------|
-| `<dataDir>/version.txt` | Flatcar | `FLATCAR_VERSION=<v>` | Seed marker read at cold start. |
-| `<dataDir>/<channel>.json` | Fedora CoreOS | full streams JSON | e.g. `stable.json`; overwritten on each version check. |
+| `<dataDir>/version.txt` | Flatcar | `FLATCAR_VERSION=<v>` | Legacy — no longer read or written as of P1b; remains on disk from prior runs. |
+| `<dataDir>/<channel>.json` | Fedora CoreOS | full streams JSON | Legacy — e.g. `stable.json`; no longer read or written as of P1b; remains on disk from prior runs. |
 
-Talos keeps no separate metadata file — the newest cached version is derived directly from the cache
-directory (semver-sorted); see [STORAGE.md](STORAGE.md).
+As of P1b the newest cached version is derived from the `cache/` directory for every OS (including
+Talos); see [STORAGE.md](STORAGE.md).
 
 ---
 
@@ -70,8 +70,15 @@ Migrations are embedded (`pkg/db/migrations/`) and applied up-only under
 `source` (`discovered`|`manual`), `cached`, `created_at`;
 `UNIQUE(target_id, version)`.
 
+The **reconciler** (P1b) populates `targets` (predefined + host-derived) and `target_versions`
+(`discovered` rows from upstream discovery, retained per `retain_n`; `manual` rows are never
+pruned), and flips `cached` to 1 once a version's artifacts are on disk.
+
 ### `meta`
 `key` PRIMARY KEY, `value`.
+
+Keys: `hardware_import_done` (`"1"` once the one-time `hardware.json` import has completed or reached
+a no-file steady state — gates re-import so a stale file cannot resurrect a deleted host).
 
 ### `hosts`
 The host record (P1a populates the legacy columns; the rest are reserved for
