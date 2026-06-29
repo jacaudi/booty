@@ -151,6 +151,35 @@ func TestMachineConfig_UnidentifiedHostRendersDefault(t *testing.T) {
 	}
 }
 
+// TestMachineConfig_UnidentifiedHostUsesHostnameQuery proves the hostname query
+// param is the fallback identity source for the unregistered first boot.
+func TestMachineConfig_UnidentifiedHostUsesHostnameQuery(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := "machine:\n  hostname: {{ .Hostname }}\n"
+	if err := os.WriteFile(filepath.Join(dir, "machineconfig.yaml"), []byte(tmpl), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, dir)
+	viper.Set(config.TalosConfigFile, "machineconfig.yaml")
+	viper.Set(config.TalosSchematic, "default-schematic")
+
+	req := httptest.NewRequest(http.MethodGet, "/machineconfig?hostname=node-x", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	rec := httptest.NewRecorder()
+
+	handleMachineConfigRequest(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "node-x") {
+		t.Errorf("hostname query not rendered: %q", rec.Body.String())
+	}
+}
+
 // TestMachineConfig_ExecuteFailureIs500 covers the Execute branch of writeError:
 // a template that parses but references a field the data struct lacks fails at
 // Execute and must return 500.

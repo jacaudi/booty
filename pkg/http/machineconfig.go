@@ -56,6 +56,7 @@ func handleMachineConfigRequest(w http.ResponseWriter, r *http.Request) {
 		JoinString     string
 		Schematic      string
 	}{
+		Hostname:       r.URL.Query().Get("hostname"),
 		UUID:           r.URL.Query().Get("uuid"),
 		Serial:         r.URL.Query().Get("serial"),
 		ServerIP:       viper.GetString(config.ServerIP),
@@ -67,7 +68,9 @@ func handleMachineConfigRequest(w http.ResponseWriter, r *http.Request) {
 	// before it exists in the DB (identity comes from the query uuid/serial at
 	// first boot), so render a host-less config rather than forcing a reboot.
 	if host != nil {
-		templateData.Hostname = host.Hostname
+		if host.Hostname != "" {
+			templateData.Hostname = host.Hostname
+		}
 		templateData.MAC = host.MAC
 		templateData.IP = host.IP
 		if host.Schematic != "" {
