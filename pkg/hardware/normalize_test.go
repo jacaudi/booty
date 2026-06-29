@@ -101,7 +101,7 @@ func TestWriteMacAddress_RejectsInvalid(t *testing.T) {
 		t.Fatalf("Unmarshal GetData: %v", err)
 	}
 	if len(bd.Hosts) != 0 {
-		t.Errorf("invalid writes leaked into HostDB: %+v", bd.Hosts)
+		t.Errorf("invalid writes leaked into Hosts: %+v", bd.Hosts)
 	}
 }
 

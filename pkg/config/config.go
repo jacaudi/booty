@@ -49,6 +49,7 @@ const (
 	TalosRetainMinors      = "talosRetainMinors"
 	TalosConfigFile        = "talosConfigFile"
 	TalosFactoryURL        = "talosFactoryURL"
+	DatabasePath           = "databasePath"
 )
 
 // httpClient is the package-level HTTP client used for DownloadFile.
@@ -100,6 +101,8 @@ func LoadConfig(cmd *cobra.Command) {
 
 	viper.BindEnv(HardwareMap, "HARDWARE_MAP")
 	viper.SetDefault(HardwareMap, "hardware.json")
+
+	viper.BindEnv(DatabasePath, "DATABASE_PATH")
 }
 
 // DownloadFile streams the body at rawURL into <destDir>/<filename>, where
@@ -150,4 +153,16 @@ func DownloadFile(ctx context.Context, destDir, rawURL string) error {
 
 	slog.Info("download complete", "url", rawURL, "bytes", n)
 	return nil
+}
+
+// DatabasePathValue resolves the SQLite database path: the explicit
+// databasePath/DATABASE_PATH value if set, otherwise <DataDir>/booty.db. It is
+// the single source of truth for that default so cmd/main.go and pkg/hardware
+// agree without LoadConfig having to be called first (tests set DataDir
+// directly).
+func DatabasePathValue() string {
+	if p := viper.GetString(DatabasePath); p != "" {
+		return p
+	}
+	return filepath.Join(viper.GetString(DataDir), "booty.db")
 }

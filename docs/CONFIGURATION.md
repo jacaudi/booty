@@ -31,12 +31,13 @@ values used when neither a flag nor an env var is set.
 
 ## Environment variables
 
-In addition to the auto-bound flag env vars, two settings are read directly from the environment:
+In addition to the auto-bound flag env vars, a few settings are read directly from the environment:
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `IGNITION_FILE` | `config/ignition.yaml` | Butane/Ignition template path, relative to `--dataDir`. |
 | `HARDWARE_MAP` | `hardware.json` | Host-database filename, relative to `--dataDir`. |
+| `DATABASE_PATH` | `<dataDir>/booty.db` | SQLite database path (control-plane + host state). |
 
 ## Network ports
 

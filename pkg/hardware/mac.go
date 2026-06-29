@@ -1,16 +1,19 @@
 package hardware
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
 	"github.com/spf13/viper"
 )
 
@@ -32,13 +35,9 @@ type BootyData struct {
 	UnknownHosts map[string]*Host `json:"unknownHosts"`
 }
 
-// NormalizeMAC parses mac in any form net.ParseMAC accepts (colon-, hyphen-,
-// or Cisco dot-delimited) and returns the single canonical representation used
-// as the host-store key: lowercase, colon-delimited (net.HardwareAddr.String()).
-// It is the one source of truth for MAC canonicalization in booty: every DB
-// key boundary funnels through it so that, e.g., "AA-BB-CC-DD-EE-FF" and
-// "aa:bb:cc:dd:ee:ff" address the same record. An empty or invalid MAC returns
-// a wrapped error and is never stored.
+// NormalizeMAC parses mac in any form net.ParseMAC accepts and returns the
+// canonical lowercase colon-delimited key. It is the one source of truth for
+// MAC canonicalization in booty. An empty/invalid MAC returns a wrapped error.
 func NormalizeMAC(mac string) (string, error) {
 	hw, err := net.ParseMAC(mac)
 	if err != nil {
@@ -48,235 +47,221 @@ func NormalizeMAC(mac string) (string, error) {
 }
 
 // ErrNotFound is returned by GetMacAddress when the MAC isn't registered.
-// Callers should distinguish this from real I/O errors and treat it as a
-// "miss," not a failure.
 var ErrNotFound = errors.New("hardware: host not found")
 
-// Package-level state. fileMutex guards both maps and disk persistence.
-// Callers must not mutate any *Host returned by package functions; the
-// pointer aliases the live map entry.
+// store is the SQLite-backed host store. In production cmd/main.go injects a
+// shared *db.Store via SetStore; in tests Load lazily opens one (see Load).
 var (
-	fileMutex    sync.Mutex
-	HostDB       map[string]*Host
-	UnknownHosts map[string]*Host
+	storeMu       sync.Mutex
+	store         *db.Store
+	storeInjected bool
 )
 
-func init() {
-	HostDB = make(map[string]*Host)
-	UnknownHosts = make(map[string]*Host)
+// unknownHosts tracks MACs that contacted booty without a record — a runtime
+// only "pending" list for the UI, reset on each Load (never persisted).
+var (
+	unknownMu    sync.Mutex
+	unknownHosts = map[string]*Host{}
+)
+
+// SetStore injects the shared database store. Call it once at startup before
+// Load. When set, Load uses this store rather than opening its own.
+func SetStore(s *db.Store) {
+	storeMu.Lock()
+	store = s
+	storeInjected = true
+	storeMu.Unlock()
 }
 
-// Load reads <DataDir>/<HardwareMap> from disk into HostDB. Must be called
-// once at startup before any HTTP/TFTP server starts. UnknownHosts is also
-// reset (it's a runtime-only tracker for the UI's "pending" list). If the
-// file doesn't exist, Load treats the DB as empty (expected on first boot)
-// and returns nil. Any other read or parse error is returned to the caller.
+func currentStore() *db.Store {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	return store
+}
+
+// Load prepares the host store and performs the one-time hardware.json import.
+// If no store was injected (tests / standalone), it (re)opens a fresh store at
+// config.DatabasePathValue(), preserving the pre-SQLite reset-per-Load
+// semantics. The in-memory pending tracker is reset.
 func Load() error {
-	fileMutex.Lock()
-	defer fileMutex.Unlock()
+	storeMu.Lock()
+	if !storeInjected {
+		if store != nil {
+			_ = store.Close()
+		}
+		s, err := db.Open(config.DatabasePathValue())
+		if err != nil {
+			storeMu.Unlock()
+			return fmt.Errorf("hardware: open db: %w", err)
+		}
+		store = s
+	}
+	st := store
+	storeMu.Unlock()
 
-	HostDB = make(map[string]*Host)
-	UnknownHosts = make(map[string]*Host)
+	unknownMu.Lock()
+	unknownHosts = map[string]*Host{}
+	unknownMu.Unlock()
 
-	path := dbPath()
+	return importLegacyJSON(st)
+}
+
+// legacyJSONPath is the old on-disk host DB location (<DataDir>/<HardwareMap>).
+func legacyJSONPath() string {
+	return filepath.Join(viper.GetString(config.DataDir), viper.GetString(config.HardwareMap))
+}
+
+// importLegacyJSON imports a pre-SQLite hardware.json exactly once: each host is
+// canonicalized (invalid MACs logged and skipped, as before) and upserted, then
+// the file is renamed to <name>.migrated so a later startup skips it. A missing
+// file is the steady state (already migrated / fresh install) and is not an
+// error; a malformed file IS an error (matching the old Load contract).
+func importLegacyJSON(st *db.Store) error {
+	path := legacyJSONPath()
 	data, err := os.ReadFile(path)
 	switch {
-	case err == nil:
-		// fall through to unmarshal
 	case errors.Is(err, os.ErrNotExist):
 		return nil
-	default:
+	case err != nil:
 		return fmt.Errorf("hardware: read %s: %w", path, err)
 	}
 
-	// Unmarshal into a local map keyed by whatever is on disk, then rebuild
-	// HostDB with canonical keys. Existing files may hold non-canonical keys
-	// (e.g. "AA-BB-CC-DD-EE-FF") from before MAC normalization; canonicalizing
-	// on read keeps post-upgrade lookups (which arrive canonical) matching old
-	// records. This is best-effort: valid keys are migrated and their host.MAC
-	// is canonicalized to match; invalid keys are logged and skipped rather
-	// than failing the whole load. Migration is in-memory only — the canonical
-	// form is rewritten to disk on the next WriteMacAddress.
 	var onDisk map[string]*Host
 	if err := json.Unmarshal(data, &onDisk); err != nil {
 		return fmt.Errorf("hardware: parse %s: %w", path, err)
 	}
-
 	for rawKey, host := range onDisk {
 		key, err := NormalizeMAC(rawKey)
 		if err != nil {
-			slog.Warn("hardware: skipping host with invalid MAC key", "rawKey", rawKey, "path", path, "err", err)
+			slog.Warn("hardware: skipping host with invalid MAC key during migration", "rawKey", rawKey, "path", path, "err", err)
 			continue
 		}
 		if host == nil {
 			host = &Host{}
 		}
-		if _, dup := HostDB[key]; dup {
-			slog.Warn("hardware: duplicate MAC after normalization; keeping last", "mac", key, "path", path)
-		}
 		host.MAC = key
-		HostDB[key] = host
+		if err := st.UpsertHost(toDBHost(*host)); err != nil {
+			return fmt.Errorf("hardware: migrate host %s: %w", key, err)
+		}
+	}
+
+	migrated := path + ".migrated"
+	if err := os.Rename(path, migrated); err != nil {
+		slog.Warn("hardware: could not rename migrated hardware.json", "path", path, "err", err)
+	} else {
+		slog.Info("hardware: imported hardware.json into SQLite", "from", path, "to", migrated)
 	}
 	return nil
 }
 
+func toDBHost(h Host) db.Host {
+	return db.Host{
+		MAC: h.MAC, Hostname: h.Hostname, IP: h.IP, Booted: h.Booted,
+		IgnitionFile: h.IgnitionFile, OS: h.OS, DoInstall: h.DoInstall, Schematic: h.Schematic,
+	}
+}
+
+func fromDBHost(d db.Host) *Host {
+	return &Host{
+		MAC: d.MAC, Hostname: d.Hostname, IP: d.IP, Booted: d.Booted,
+		IgnitionFile: d.IgnitionFile, OS: d.OS, DoInstall: d.DoInstall, Schematic: d.Schematic,
+	}
+}
+
 // GetData returns the JSON-marshaled BootyData (registered + unknown hosts).
 func GetData() ([]byte, error) {
-	fileMutex.Lock()
-	defer fileMutex.Unlock()
-
-	bd := BootyData{
-		Hosts:        HostDB,
-		UnknownHosts: UnknownHosts,
+	hosts := map[string]*Host{}
+	if st := currentStore(); st != nil {
+		list, err := st.ListHosts()
+		if err != nil {
+			return nil, fmt.Errorf("hardware: list hosts: %w", err)
+		}
+		for _, d := range list {
+			hosts[d.MAC] = fromDBHost(d)
+		}
 	}
-	out, err := json.Marshal(bd)
+
+	unknownMu.Lock()
+	unknown := make(map[string]*Host, len(unknownHosts))
+	maps.Copy(unknown, unknownHosts)
+	unknownMu.Unlock()
+
+	out, err := json.Marshal(BootyData{Hosts: hosts, UnknownHosts: unknown})
 	if err != nil {
 		return nil, fmt.Errorf("hardware: marshal: %w", err)
 	}
 	return out, nil
 }
 
-// GetMacAddress returns the host registered for mac, or (nil, ErrNotFound)
-// if the MAC isn't registered. The MAC is canonicalized first, so a lookup in
-// any accepted form matches a record stored in any other form. On a miss, the
-// canonical MAC is added to UnknownHosts for the UI's pending list (existing
-// behavior). An invalid/empty MAC returns a wrapped validation error distinct
-// from ErrNotFound and does NOT pollute UnknownHosts.
-//
-// The returned *Host aliases the live map entry; callers must not mutate it.
+// GetMacAddress returns a fresh *Host for the canonicalized mac, or ErrNotFound.
+// On a miss the canonical MAC is tracked in the pending list. Unlike the old
+// map-backed store, the returned *Host does NOT alias shared state, so callers
+// may mutate the copy freely. An invalid/empty MAC returns a validation error
+// distinct from ErrNotFound and does not pollute the pending list.
 func GetMacAddress(mac string) (*Host, error) {
 	key, err := NormalizeMAC(mac)
 	if err != nil {
 		return nil, err
 	}
-
-	fileMutex.Lock()
-	defer fileMutex.Unlock()
-
-	if h, ok := HostDB[key]; ok {
-		delete(UnknownHosts, key)
-		return h, nil
+	st := currentStore()
+	if st == nil {
+		trackUnknown(key)
+		return nil, ErrNotFound
 	}
-	UnknownHosts[key] = &Host{}
-	return nil, ErrNotFound
+	d, err := st.GetHost(key)
+	if errors.Is(err, sql.ErrNoRows) {
+		trackUnknown(key)
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("hardware: get host %s: %w", key, err)
+	}
+	clearUnknown(key)
+	return fromDBHost(*d), nil
 }
 
-// WriteMacAddress upserts host for mac, persists atomically, and removes
-// the MAC from UnknownHosts on success. The MAC is canonicalized first and
-// used both as the store key and as host.MAC, so an invalid/empty MAC is
-// rejected with a wrapped error and never stored. On persist failure,
-// in-memory state is rolled back so HostDB and disk remain consistent.
+// WriteMacAddress upserts host for the canonicalized mac and clears it from the
+// pending list. An invalid/empty MAC is rejected and never stored. The write is
+// transactional in SQLite, so there is no in-memory state to roll back.
 func WriteMacAddress(mac string, host Host) error {
 	key, err := NormalizeMAC(mac)
 	if err != nil {
 		return err
 	}
 	host.MAC = key
-
-	fileMutex.Lock()
-	defer fileMutex.Unlock()
-
-	prev, existed := HostDB[key]
-	HostDB[key] = &host
-
-	payload, err := json.Marshal(HostDB)
-	if err != nil {
-		// Restore in-memory state.
-		if existed {
-			HostDB[key] = prev
-		} else {
-			delete(HostDB, key)
-		}
-		return fmt.Errorf("hardware: marshal: %w", err)
+	st := currentStore()
+	if st == nil {
+		return errors.New("hardware: store not initialized")
 	}
-
-	if err := persist(payload); err != nil {
-		if existed {
-			HostDB[key] = prev
-		} else {
-			delete(HostDB, key)
-		}
+	if err := st.UpsertHost(toDBHost(host)); err != nil {
 		return err
 	}
-
-	// Success path: only now do we remove the MAC from UnknownHosts.
-	delete(UnknownHosts, key)
+	clearUnknown(key)
 	return nil
 }
 
-// RemoveMacAddress removes the host record from HostDB and persists. The MAC
-// is canonicalized first, so a record stored under any accepted form is removed
-// regardless of the form supplied here; an invalid/empty MAC is rejected with a
-// wrapped error. On persist failure, in-memory state is restored. Idempotent: a
-// remove against a valid-but-absent MAC is a no-op and returns nil.
+// RemoveMacAddress deletes the host for the canonicalized mac. Idempotent: a
+// valid-but-absent MAC is a no-op returning nil. An invalid MAC is rejected.
 func RemoveMacAddress(mac string) error {
 	key, err := NormalizeMAC(mac)
 	if err != nil {
 		return err
 	}
-
-	fileMutex.Lock()
-	defer fileMutex.Unlock()
-
-	prev, existed := HostDB[key]
-	if !existed {
+	st := currentStore()
+	if st == nil {
 		return nil
 	}
-	delete(HostDB, key)
-
-	payload, err := json.Marshal(HostDB)
-	if err != nil {
-		HostDB[key] = prev
-		return fmt.Errorf("hardware: marshal: %w", err)
-	}
-
-	if err := persist(payload); err != nil {
-		HostDB[key] = prev
-		return err
-	}
-	return nil
+	return st.DeleteHost(key)
 }
 
-// dbPath returns the absolute path to the hardware database file.
-func dbPath() string {
-	return filepath.Join(viper.GetString(config.DataDir), viper.GetString(config.HardwareMap))
+func trackUnknown(key string) {
+	unknownMu.Lock()
+	unknownHosts[key] = &Host{}
+	unknownMu.Unlock()
 }
 
-// persist writes payload atomically to dbPath() via temp file + rename.
-// The temp file is created in the same directory so the rename is atomic
-// at the filesystem level on POSIX. Sync is called before close so a
-// crash between rename and the next write doesn't leave a renamed-but-
-// empty file. Caller must hold fileMutex.
-func persist(payload []byte) error {
-	target := dbPath()
-	dir := filepath.Dir(target)
-
-	tmp, err := os.CreateTemp(dir, "hardware-*.json")
-	if err != nil {
-		return fmt.Errorf("hardware: create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	success := false
-	defer func() {
-		if !success {
-			_ = os.Remove(tmpName)
-		}
-	}()
-
-	if _, err := tmp.Write(payload); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("hardware: write temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("hardware: sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("hardware: close temp: %w", err)
-	}
-	if err := os.Rename(tmpName, target); err != nil {
-		return fmt.Errorf("hardware: rename temp -> %s: %w", target, err)
-	}
-	success = true
-	return nil
+func clearUnknown(key string) {
+	unknownMu.Lock()
+	delete(unknownHosts, key)
+	unknownMu.Unlock()
 }

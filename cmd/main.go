@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	bootyHTTP "github.com/jeefy/booty/pkg/http"
 	"github.com/jeefy/booty/pkg/proxydhcp"
@@ -216,6 +217,16 @@ func run(cmd *cobra.Command, argv []string) error {
 	setupLogging(viper.GetBool(config.Debug))
 	slog.Info("Starting Booty!")
 	config.LoadConfig(cmd)
+
+	// Open the authoritative SQLite store (fail-fast: pragmas + migrations run
+	// here) and share it with the host store before Load runs its one-time
+	// hardware.json import.
+	store, err := db.Open(config.DatabasePathValue())
+	if err != nil {
+		return fmt.Errorf("db: %w", err)
+	}
+	defer store.Close()
+	hardware.SetStore(store)
 
 	if err := hardware.Load(); err != nil {
 		return fmt.Errorf("hardware: %w", err)
