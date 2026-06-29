@@ -3,4 +3,10 @@ data/
 .vscode/*
 *.DS_Store*
 .worktrees/
-docs/
+.archive/
+
+# docs/ is self-documenting and TRACKED, EXCEPT the local-only working areas:
+# implementation plans, design docs, generated reports, and prompt scratch.
+docs/plans/
+docs/reports/
+docs/prompts/
