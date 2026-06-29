@@ -61,6 +61,12 @@ func (r *Reconciler) fire() {
 	}
 }
 
+// Trigger requests an asynchronous reconcile from outside the package — the
+// API-mutation producer (P1c) calls this after a target/version change. It is a
+// thin exported wrapper over the internal coalescing fire(); a pending request
+// is enough, so bursts of mutations collapse to one reconcile.
+func (r *Reconciler) Trigger() { r.fire() }
+
 func (r *Reconciler) loop(ctx context.Context) {
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
