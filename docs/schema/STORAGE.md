@@ -5,7 +5,10 @@ keep cache and registration across restarts.
 
 ```
 <dataDir>/
-├── hardware.json                 # host database (see DATABASE.md)
+├── booty.db                      # SQLite state: hosts + targets (see DATABASE.md)
+├── booty.db-wal                  # SQLite write-ahead log (WAL mode)
+├── booty.db-shm                  # SQLite shared-memory index
+├── hardware.json.migrated        # legacy host DB, imported into booty.db at first start
 ├── version.txt                   # Flatcar: current cached version marker
 ├── <channel>.json                # CoreOS: streams metadata (e.g. stable.json)
 ├── config/
@@ -16,6 +19,12 @@ keep cache and registration across restarts.
 ├── ipxe-arm64.efi               # proxyDHCP pass-1 ARM64 iPXE binary
 └── cache/                        # downloaded boot artifacts (see below)
 ```
+
+> **Host DB migration (P1a):** the host store moved from `hardware.json` into the
+> SQLite `hosts` table. On the first start after upgrade, an existing
+> `hardware.json` is imported and renamed `hardware.json.migrated` (kept as a
+> recovery artifact); the import runs exactly once. The database path defaults to
+> `<dataDir>/booty.db` and is overridable with `DATABASE_PATH`.
 
 ## Artifact cache layout
 
