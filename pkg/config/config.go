@@ -43,7 +43,7 @@ const (
 	DatabasePath           = "databasePath"
 	CacheInterval          = "cacheInterval"
 	CacheConcurrency       = "cacheConcurrency"
-	CoreOSStreamsURL        = "coreOSStreamsURL"
+	CoreOSStreamsURL       = "coreOSStreamsURL"
 )
 
 // httpClient is the package-level HTTP client used for DownloadFile.

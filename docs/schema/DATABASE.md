@@ -47,15 +47,11 @@ booty records the currently-cached release of each channel so it can detect chan
 
 | File | OS | Format | Notes |
 |------|----|--------|-------|
-| `<dataDir>/version.txt` | Flatcar | `FLATCAR_VERSION=<v>` | Seed marker read at cold start. |
-| `<dataDir>/<channel>.json` | Fedora CoreOS | full streams JSON | e.g. `stable.json`; overwritten on each version check. |
+| `<dataDir>/version.txt` | Flatcar | `FLATCAR_VERSION=<v>` | Legacy — no longer read or written as of P1b; remains on disk from prior runs. |
+| `<dataDir>/<channel>.json` | Fedora CoreOS | full streams JSON | Legacy — e.g. `stable.json`; no longer read or written as of P1b; remains on disk from prior runs. |
 
-Talos keeps no separate metadata file — the newest cached version is derived directly from the cache
-directory (semver-sorted); see [STORAGE.md](STORAGE.md).
-
-> **As of P1b:** `version.txt` and `<channel>.json` are no longer read for version state. The
-> newest cached version is derived from the `cache/` directory for every OS. These files remain on
-> disk as artifacts of past runs but are not written or read by the reconciler.
+As of P1b the newest cached version is derived from the `cache/` directory for every OS (including
+Talos); see [STORAGE.md](STORAGE.md).
 
 ---
 

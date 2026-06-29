@@ -143,7 +143,10 @@ func importLegacyJSON(st *db.Store) error {
 	case errors.Is(err, os.ErrNotExist):
 		// Nothing to import, but record that we've reached steady state so a file
 		// that appears later (stale copy) is never imported.
-		return st.SetMeta("hardware_import_done", "1")
+		if err := st.SetMeta("hardware_import_done", "1"); err != nil {
+			return fmt.Errorf("hardware: set import flag: %w", err)
+		}
+		return nil
 	case err != nil:
 		return fmt.Errorf("hardware: read %s: %w", path, err)
 	}

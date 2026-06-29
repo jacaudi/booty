@@ -108,7 +108,7 @@ func TestBootTokensTalosBaseURL(t *testing.T) {
 	viper.Set(config.DataDir, root)
 	viper.Set(config.TalosSchematic, "schem1")
 	viper.Set(config.TalosArchitecture, "amd64")
-	// seed a cached version so NewestCachedTalos resolves it
+	// seed a cached version so cache.NewestCached resolves it
 	if err := os.MkdirAll(filepath.Join(root, "cache", "talos", "schem1", "amd64", "v1.10.5"), 0o755); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

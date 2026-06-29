@@ -107,6 +107,7 @@ func TestDownloadFile_SuccessRoundTrip(t *testing.T) {
 
 func TestLoadConfig_CacheDefaults(t *testing.T) {
 	viper.Reset()
+	t.Cleanup(viper.Reset)
 	viper.Set(DataDir, t.TempDir())
 
 	LoadConfig(&cobra.Command{})

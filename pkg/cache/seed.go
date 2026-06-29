@@ -2,6 +2,8 @@ package cache
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
@@ -31,7 +33,7 @@ func seedTargets(store *db.Store) error {
 
 	defParams, err := encodeParams(map[string]string{"schematic": defaultSchematic})
 	if err != nil {
-		return err
+		return fmt.Errorf("cache: encode params: %w", err)
 	}
 	predefined = append(predefined, db.Target{
 		OS: "talos", Arch: talosArch, Params: defParams, Mode: "discovery",
@@ -52,7 +54,7 @@ func seedTargets(store *db.Store) error {
 	for _, schematic := range schematics {
 		params, err := encodeParams(map[string]string{"schematic": schematic})
 		if err != nil {
-			return err
+			return fmt.Errorf("cache: encode params: %w", err)
 		}
 		if err := store.UpsertTarget(db.Target{
 			OS: "talos", Arch: talosArch, Params: params, Mode: "discovery",
@@ -79,9 +81,5 @@ func hostTalosSchematics(store *db.Store, defaultSchematic string) ([]string, er
 			set[h.Schematic] = struct{}{}
 		}
 	}
-	out := make([]string, 0, len(set))
-	for s := range set {
-		out = append(out, s)
-	}
-	return out, nil
+	return slices.Collect(maps.Keys(set)), nil
 }

@@ -99,7 +99,7 @@ func (fedoraCoreOS) CompareVersions(a, b string) int {
 }
 
 // DiscoverVersions fetches the channel streams JSON and returns its metal build
-// release (mirrors pkg/versions/coreos.go's LoadRemoteCoreOSVersion).
+// release for the configured CoreOS channel and architecture.
 func (fedoraCoreOS) DiscoverVersions(ctx context.Context) ([]string, error) {
 	body, err := fetchMetadata(ctx, coreosStreamsURL())
 	if err != nil {
