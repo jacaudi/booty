@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/j-keck/arping"
+	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/hardware"
-	"github.com/jeefy/booty/pkg/versions"
 	"github.com/pin/tftp"
 	"github.com/spf13/viper"
 )
@@ -156,17 +156,17 @@ func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string
 	switch osToLoad {
 	case "coreos":
 		arch := viper.GetString(config.CoreOSArchitecture)
-		version := viper.GetString(config.CurrentCoreOSVersion)
+		version := cache.NewestCached("coreos", arch, nil)
 		tokens["[[coreos-channel]]"] = viper.GetString(config.CoreOSChannel)
 		tokens["[[coreos-arch]]"] = arch
 		tokens["[[coreos-version]]"] = version
-		tokens["[[coreos-baseurl]]"] = "http://" + versions.CacheURLBase(urlHost, "coreos", "-", arch, version)
+		tokens["[[coreos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "coreos", "-", arch, version)
 	case "flatcar":
 		arch := viper.GetString(config.FlatcarArchitecture)
-		version := viper.GetString(config.CurrentFlatcarVersion)
+		version := cache.NewestCached("flatcar", arch, nil)
 		tokens["[[flatcar-arch]]"] = arch
 		tokens["[[flatcar-version]]"] = version
-		tokens["[[flatcar-baseurl]]"] = "http://" + versions.CacheURLBase(urlHost, "flatcar", "-", arch, version)
+		tokens["[[flatcar-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "flatcar", "-", arch, version)
 	case "talos":
 		schematic := viper.GetString(config.TalosSchematic)
 		if host != nil && host.Schematic != "" {
@@ -175,11 +175,11 @@ func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string
 		arch := viper.GetString(config.TalosArchitecture)
 		// Empty when nothing is cached yet (pre-first-sync) → BASEURL 404s, same
 		// failure mode as the other OSes before their first version check.
-		version := versions.NewestCachedTalos(schematic, arch)
+		version := cache.NewestCached("talos", arch, map[string]string{"schematic": schematic})
 		tokens["[[talos-schematic]]"] = schematic
 		tokens["[[talos-arch]]"] = arch
 		tokens["[[talos-version]]"] = version
-		tokens["[[talos-baseurl]]"] = "http://" + versions.CacheURLBase(urlHost, "talos", schematic, arch, version)
+		tokens["[[talos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "talos", schematic, arch, version)
 	}
 	return tokens
 }
