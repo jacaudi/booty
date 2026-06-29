@@ -52,7 +52,7 @@ var ErrNotFound = errors.New("hardware: host not found")
 // store is the SQLite-backed host store. In production cmd/main.go injects a
 // shared *db.Store via SetStore; in tests Load lazily opens one (see Load).
 var (
-	storeMu       sync.Mutex
+	storeMu       sync.RWMutex
 	store         *db.Store
 	storeInjected bool
 )
@@ -73,10 +73,17 @@ func SetStore(s *db.Store) {
 	storeMu.Unlock()
 }
 
-func currentStore() *db.Store {
-	storeMu.Lock()
-	defer storeMu.Unlock()
-	return store
+// withRLockedStore runs fn with the current store under a read lock, so Load
+// (which takes the write lock to close+reopen) cannot swap the handle out from
+// under an in-flight DB op. fn must not call Load. A nil store yields the
+// supplied zero behavior via the bool.
+func withRLockedStore(fn func(st *db.Store) error) (bool, error) {
+	storeMu.RLock()
+	defer storeMu.RUnlock()
+	if store == nil {
+		return false, nil
+	}
+	return true, fn(store)
 }
 
 // Load prepares the host store and performs the one-time hardware.json import.
@@ -171,14 +178,17 @@ func fromDBHost(d db.Host) *Host {
 // GetData returns the JSON-marshaled BootyData (registered + unknown hosts).
 func GetData() ([]byte, error) {
 	hosts := map[string]*Host{}
-	if st := currentStore(); st != nil {
+	if _, err := withRLockedStore(func(st *db.Store) error {
 		list, err := st.ListHosts()
 		if err != nil {
-			return nil, fmt.Errorf("hardware: list hosts: %w", err)
+			return fmt.Errorf("hardware: list hosts: %w", err)
 		}
 		for _, d := range list {
 			hosts[d.MAC] = fromDBHost(d)
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	unknownMu.Lock()
@@ -203,13 +213,19 @@ func GetMacAddress(mac string) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
-	st := currentStore()
-	if st == nil {
-		trackUnknown(key)
-		return nil, ErrNotFound
-	}
-	d, err := st.GetHost(key)
-	if errors.Is(err, sql.ErrNoRows) {
+	var out *Host
+	had, err := withRLockedStore(func(st *db.Store) error {
+		d, gerr := st.GetHost(key)
+		if errors.Is(gerr, sql.ErrNoRows) {
+			return sql.ErrNoRows
+		}
+		if gerr != nil {
+			return gerr
+		}
+		out = fromDBHost(*d)
+		return nil
+	})
+	if !had || errors.Is(err, sql.ErrNoRows) {
 		trackUnknown(key)
 		return nil, ErrNotFound
 	}
@@ -217,7 +233,7 @@ func GetMacAddress(mac string) (*Host, error) {
 		return nil, fmt.Errorf("hardware: get host %s: %w", key, err)
 	}
 	clearUnknown(key)
-	return fromDBHost(*d), nil
+	return out, nil
 }
 
 // WriteMacAddress upserts host for the canonicalized mac and clears it from the
@@ -229,11 +245,13 @@ func WriteMacAddress(mac string, host Host) error {
 		return err
 	}
 	host.MAC = key
-	st := currentStore()
-	if st == nil {
+	had, err := withRLockedStore(func(st *db.Store) error {
+		return st.UpsertHost(toDBHost(host))
+	})
+	if !had {
 		return errors.New("hardware: store not initialized")
 	}
-	if err := st.UpsertHost(toDBHost(host)); err != nil {
+	if err != nil {
 		return err
 	}
 	clearUnknown(key)
@@ -247,11 +265,10 @@ func RemoveMacAddress(mac string) error {
 	if err != nil {
 		return err
 	}
-	st := currentStore()
-	if st == nil {
-		return nil
-	}
-	return st.DeleteHost(key)
+	_, err = withRLockedStore(func(st *db.Store) error {
+		return st.DeleteHost(key)
+	})
+	return err
 }
 
 func trackUnknown(key string) {
