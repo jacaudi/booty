@@ -4,7 +4,6 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
-	"slices"
 )
 
 //go:embed migrations/*.sql
@@ -15,26 +14,24 @@ var migrationsFS embed.FS
 // runs in its own transaction and bumps user_version on commit; any error
 // aborts immediately (fail fast) with prior migrations already committed.
 func (s *Store) migrate() error {
+	// fs.ReadDir returns entries already sorted by filename, so their order is
+	// the migration order — no explicit sort needed.
 	entries, err := fs.ReadDir(migrationsFS, "migrations")
 	if err != nil {
 		return fmt.Errorf("read migrations dir: %w", err)
 	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	slices.Sort(names)
 
 	var current int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&current); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
 	}
 
-	for i, name := range names {
+	for i, e := range entries {
 		version := i + 1
 		if version <= current {
 			continue
 		}
+		name := e.Name()
 		stmt, err := migrationsFS.ReadFile("migrations/" + name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 )
 
 func init() { register(debian{}) }
@@ -34,9 +35,7 @@ var debianFixedReleases = []string{"12.5", "11.9"}
 // DiscoverVersions returns the fixed supported set (see debianFixedReleases).
 // ctx is accepted to satisfy the OS interface and for the future real impl.
 func (debian) DiscoverVersions(ctx context.Context) ([]string, error) {
-	out := make([]string, len(debianFixedReleases))
-	copy(out, debianFixedReleases)
-	return out, nil
+	return slices.Clone(debianFixedReleases), nil
 }
 
 // debianCodenames maps a channel to the netboot codename used in artifact URLs.
