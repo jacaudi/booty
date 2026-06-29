@@ -238,6 +238,11 @@ func run(cmd *cobra.Command, argv []string) error {
 	if err := hardware.Load(); err != nil {
 		return fmt.Errorf("hardware: %w", err)
 	}
+	if n, err := hardware.PreserveBoot(); err != nil {
+		slog.Warn("hardware: preserve existing host boot failed", "err", err)
+	} else if n > 0 {
+		slog.Info("hardware: preserved boot for pre-existing hosts", "count", n)
+	}
 
 	// Take ownership of the process lifecycle: a single signal context drives an
 	// ordered graceful shutdown of every subsystem started below.
