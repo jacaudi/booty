@@ -123,12 +123,27 @@ func legacyJSONPath() string {
 // the file is renamed to <name>.migrated so a later startup skips it. A missing
 // file is the steady state (already migrated / fresh install) and is not an
 // error; a malformed file IS an error (matching the old Load contract).
+//
+// Once an import (or a no-file steady-state) is recorded, the meta flag
+// "hardware_import_done"="1" gates all subsequent calls so a stale
+// hardware.json that reappears (e.g. due to a failed rename) is never
+// re-imported and cannot resurrect a host deleted from SQLite between restarts.
 func importLegacyJSON(st *db.Store) error {
+	// Skip entirely (don't even read the file) once a prior import completed, so
+	// a failed .migrated rename can't resurrect a host deleted between restarts.
+	if v, err := st.GetMeta("hardware_import_done"); err == nil && v == "1" {
+		return nil
+	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("hardware: read import flag: %w", err)
+	}
+
 	path := legacyJSONPath()
 	data, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return nil
+		// Nothing to import, but record that we've reached steady state so a file
+		// that appears later (stale copy) is never imported.
+		return st.SetMeta("hardware_import_done", "1")
 	case err != nil:
 		return fmt.Errorf("hardware: read %s: %w", path, err)
 	}
@@ -152,6 +167,15 @@ func importLegacyJSON(st *db.Store) error {
 		}
 	}
 
+	// Set the flag before the rename: if the rename fails the flag still
+	// prevents a resurrection on the next start. A crash between here and
+	// the rename leaves the flag set and the file present — the next start
+	// sees the flag and skips the file (correct). A crash mid-loop (before
+	// this point) leaves the flag unset so the next start re-imports
+	// idempotently via UpsertHost.
+	if err := st.SetMeta("hardware_import_done", "1"); err != nil {
+		return fmt.Errorf("hardware: set import flag: %w", err)
+	}
 	migrated := path + ".migrated"
 	if err := os.Rename(path, migrated); err != nil {
 		slog.Warn("hardware: could not rename migrated hardware.json", "path", path, "err", err)

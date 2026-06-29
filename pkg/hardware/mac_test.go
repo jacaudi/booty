@@ -249,6 +249,39 @@ func TestLoad_ConcurrentWithDBOpsIsRaceClean(t *testing.T) {
 	wg.Wait()
 }
 
+func TestImportLegacyJSON_SkippedAfterFlagSet(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	dir := t.TempDir()
+	viper.Set(config.DataDir, dir)
+	viper.Set(config.HardwareMap, "hardware.json")
+
+	// First start: import a host, flag set, file renamed.
+	writeFixture(t, dir, map[string]Host{
+		"aa:bb:cc:dd:ee:ff": {MAC: "aa:bb:cc:dd:ee:ff", Hostname: "node-01"},
+	})
+	if err := Load(); err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+	if err := RemoveMacAddress("aa:bb:cc:dd:ee:ff"); err != nil {
+		t.Fatalf("remove host: %v", err)
+	}
+
+	// Simulate a failed rename leaving hardware.json in place after a restart.
+	if err := os.WriteFile(filepath.Join(dir, "hardware.json"), []byte(`{"aa:bb:cc:dd:ee:ff":{"mac":"aa:bb:cc:dd:ee:ff","hostname":"node-01"}}`), 0o644); err != nil {
+		t.Fatalf("re-stage legacy file: %v", err)
+	}
+
+	// Second start: the meta flag is set, so the import is SKIPPED and the
+	// deleted host stays deleted.
+	if err := Load(); err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	if _, err := GetMacAddress("aa:bb:cc:dd:ee:ff"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleted host resurrected by stale hardware.json: err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestGetData_IncludesRegisteredAndUnknown(t *testing.T) {
 	setupTempDB(t)
 	if err := WriteMacAddress("aa:bb:cc:dd:ee:ff", Host{MAC: "aa:bb:cc:dd:ee:ff", Hostname: "node-01"}); err != nil {
