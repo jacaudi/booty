@@ -180,6 +180,50 @@ func TestMachineConfig_UnidentifiedHostUsesHostnameQuery(t *testing.T) {
 	}
 }
 
+// TestMachineConfig_RegisteredBlankHostnameUsesHostnameQuery pins the guard:
+// a registered host with an empty Hostname must not clobber the hostname query
+// param, so the unnamed-but-known host still gets its query-supplied identity.
+func TestMachineConfig_RegisteredBlankHostnameUsesHostnameQuery(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := "machine:\n  hostname: {{ .Hostname }}\n"
+	if err := os.WriteFile(filepath.Join(dir, "machineconfig.yaml"), []byte(tmpl), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, dir)
+	viper.Set(config.HardwareMap, "hardware.json")
+	viper.Set(config.TalosConfigFile, "machineconfig.yaml")
+	viper.Set(config.TalosSchematic, "default-schematic")
+
+	// Load() resets the package-level HostDB against this fresh tempdir so the
+	// seeded host is the only record; WriteMacAddress registers it with a blank
+	// Hostname so the DB record cannot supply one.
+	if err := hardware.Load(); err != nil {
+		t.Fatalf("hardware.Load: %v", err)
+	}
+	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:ff", hardware.Host{
+		Hostname: "",
+		IP:       "10.0.0.50",
+	}); err != nil {
+		t.Fatalf("seed host: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff&hostname=node-x", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	rec := httptest.NewRecorder()
+
+	handleMachineConfigRequest(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "node-x") {
+		t.Errorf("blank-hostname host clobbered the query fallback: %q", rec.Body.String())
+	}
+}
+
 // TestMachineConfig_ExecuteFailureIs500 covers the Execute branch of writeError:
 // a template that parses but references a field the data struct lacks fails at
 // Execute and must return 500.
