@@ -282,6 +282,27 @@ func TestImportLegacyJSON_SkippedAfterFlagSet(t *testing.T) {
 	}
 }
 
+func TestApproveRevokeRoundtrip(t *testing.T) {
+	setupTempDB(t) // opens a temp db.Store + Load
+	if err := WriteMacAddress("aa:bb:cc:dd:ee:01", Host{MAC: "aa:bb:cc:dd:ee:01", OS: "flatcar"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := Approve("aa:bb:cc:dd:ee:01"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	h, err := GetMacAddress("aa:bb:cc:dd:ee:01")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !h.Approved {
+		t.Fatalf("host not approved after Approve")
+	}
+	hosts, err := ListHosts()
+	if err != nil || len(hosts) != 1 {
+		t.Fatalf("ListHosts = (%d,%v), want (1,nil)", len(hosts), err)
+	}
+}
+
 func TestGetData_IncludesRegisteredAndUnknown(t *testing.T) {
 	setupTempDB(t)
 	if err := WriteMacAddress("aa:bb:cc:dd:ee:ff", Host{MAC: "aa:bb:cc:dd:ee:ff", Hostname: "node-01"}); err != nil {
