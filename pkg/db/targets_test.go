@@ -50,6 +50,26 @@ func TestCreateTarget_UniqueConflict(t *testing.T) {
 	}
 }
 
+func TestUpsertTarget_IdempotentOnConflict(t *testing.T) {
+	s := newTestStore(t)
+	base := Target{OS: "flatcar", Arch: "amd64", Params: "{}", Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true}
+	if err := s.UpsertTarget(base); err != nil {
+		t.Fatalf("first UpsertTarget: %v", err)
+	}
+	// Second upsert with same (os,arch,params) must NOT error and must update.
+	base.RetainN = 5
+	if err := s.UpsertTarget(base); err != nil {
+		t.Fatalf("second UpsertTarget: %v", err)
+	}
+	all, _ := s.ListTargets()
+	if len(all) != 1 {
+		t.Fatalf("ListTargets = %d, want 1 (upsert not insert)", len(all))
+	}
+	if all[0].RetainN != 5 {
+		t.Errorf("RetainN = %d after upsert, want 5", all[0].RetainN)
+	}
+}
+
 func TestListTargets(t *testing.T) {
 	s := newTestStore(t)
 	if _, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "manual", Enabled: true}); err != nil {

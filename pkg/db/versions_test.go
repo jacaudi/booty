@@ -29,6 +29,28 @@ func TestUpsertAndListTargetVersions(t *testing.T) {
 	}
 }
 
+func TestDeleteTargetVersion(t *testing.T) {
+	s := newTestStore(t)
+	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "discovery", Enabled: true})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.UpsertTargetVersion(TargetVersion{TargetID: tid, Version: "v1.10.5", Source: "discovered"}); err != nil {
+		t.Fatalf("seed version: %v", err)
+	}
+	if err := s.DeleteTargetVersion(tid, "v1.10.5"); err != nil {
+		t.Fatalf("DeleteTargetVersion: %v", err)
+	}
+	got, _ := s.ListTargetVersions(tid)
+	if len(got) != 0 {
+		t.Errorf("after delete: %d versions, want 0", len(got))
+	}
+	// Idempotent: deleting an absent (target,version) is a no-op.
+	if err := s.DeleteTargetVersion(tid, "v9.9.9"); err != nil {
+		t.Errorf("DeleteTargetVersion absent: err = %v, want nil", err)
+	}
+}
+
 func TestTargetVersions_CascadeOnTargetDelete(t *testing.T) {
 	s := newTestStore(t)
 	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "discovery", Enabled: true})

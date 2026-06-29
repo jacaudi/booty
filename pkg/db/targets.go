@@ -15,6 +15,28 @@ type Target struct {
 	Enabled    bool
 }
 
+// UpsertTarget inserts t, or updates mode/retain_n/predefined/enabled if
+// (os,arch,params) already exists. Used for idempotent predefined-target
+// seeding (re-run every tick). Params MUST be the canonical encoding so equal
+// param sets collide on the UNIQUE(os,arch,params) constraint.
+func (s *Store) UpsertTarget(t Target) error {
+	_, err := s.db.Exec(
+		`INSERT INTO targets (os, arch, params, mode, retain_n, predefined, enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(os, arch, params) DO UPDATE SET
+		   mode       = excluded.mode,
+		   retain_n   = excluded.retain_n,
+		   predefined = excluded.predefined,
+		   enabled    = excluded.enabled,
+		   updated_at = datetime('now')`,
+		t.OS, t.Arch, t.Params, t.Mode, t.RetainN, t.Predefined, t.Enabled,
+	)
+	if err != nil {
+		return fmt.Errorf("db: upsert target %s/%s: %w", t.OS, t.Arch, err)
+	}
+	return nil
+}
+
 // CreateTarget inserts t and returns its new id. A duplicate (os,arch,params)
 // violates the UNIQUE constraint and returns an error.
 func (s *Store) CreateTarget(t Target) (int64, error) {
