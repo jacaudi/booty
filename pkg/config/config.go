@@ -50,6 +50,9 @@ const (
 	TalosConfigFile        = "talosConfigFile"
 	TalosFactoryURL        = "talosFactoryURL"
 	DatabasePath           = "databasePath"
+	CacheInterval          = "cacheInterval"
+	CacheConcurrency       = "cacheConcurrency"
+	CoreOSStreamsURL        = "coreOSStreamsURL"
 )
 
 // httpClient is the package-level HTTP client used for DownloadFile.
@@ -72,6 +75,9 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(TalosRetainMinors, 3)
 	viper.SetDefault(TalosConfigFile, "config/machineconfig.yaml")
 	viper.SetDefault(TalosFactoryURL, "https://factory.talos.dev")
+	viper.SetDefault(CacheInterval, 5*time.Minute)
+	viper.SetDefault(CacheConcurrency, 4)
+	viper.SetDefault(CoreOSStreamsURL, "https://builds.coreos.fedoraproject.org/streams/%s.json")
 	viper.SetDefault(FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
 	viper.SetDefault(CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
 	// https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64

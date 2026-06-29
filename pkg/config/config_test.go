@@ -160,6 +160,23 @@ func TestDownloadFile_SuccessRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_CacheDefaults(t *testing.T) {
+	viper.Reset()
+	viper.Set(DataDir, t.TempDir())
+
+	LoadConfig(&cobra.Command{})
+
+	if got := viper.GetDuration(CacheInterval); got != 5*time.Minute {
+		t.Errorf("CacheInterval = %v, want 5m", got)
+	}
+	if got := viper.GetInt(CacheConcurrency); got != 4 {
+		t.Errorf("CacheConcurrency = %d, want 4", got)
+	}
+	if got := viper.GetString(CoreOSStreamsURL); got != "https://builds.coreos.fedoraproject.org/streams/%s.json" {
+		t.Errorf("CoreOSStreamsURL = %q, want the Fedora streams URL", got)
+	}
+}
+
 func TestDownloadFile_RejectsErrorStatus(t *testing.T) {
 	viper.Reset()
 	dir := t.TempDir()

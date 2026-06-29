@@ -103,6 +103,29 @@ func TestFedoraCoreOS_CompareVersions_LengthTiebreak(t *testing.T) {
 	}
 }
 
+func TestFedoraCoreOS_DiscoverHonorsStreamsURLOverride(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// streams JSON with one metal release for the configured arch.
+		_, _ = w.Write([]byte(`{"architectures":{"x86_64":{"artifacts":{"metal":{"release":"40.20240101.3.0"}}}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/streams/%s.json")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+
+	o, _ := Lookup("fedora-coreos")
+	got, err := o.DiscoverVersions(t.Context())
+	if err != nil {
+		t.Fatalf("DiscoverVersions: %v", err)
+	}
+	if len(got) != 1 || got[0] != "40.20240101.3.0" {
+		t.Errorf("DiscoverVersions = %v, want [40.20240101.3.0] from the override", got)
+	}
+}
+
 func TestFedoraCoreOS_Artifacts(t *testing.T) {
 	o, _ := Lookup("fedora-coreos")
 	got := o.Artifacts("39.20231101.3.0", "x86_64", nil)

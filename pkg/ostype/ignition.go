@@ -165,8 +165,7 @@ func flatcarBaseURL() string {
 func coreosArch() string { return viper.GetString(config.CoreOSArchitecture) }
 
 func coreosStreamsURL() string {
-	return fmt.Sprintf("https://builds.coreos.fedoraproject.org/streams/%s.json",
-		viper.GetString(config.CoreOSChannel))
+	return fmt.Sprintf(viper.GetString(config.CoreOSStreamsURL), viper.GetString(config.CoreOSChannel))
 }
 
 func coreosBuildBaseURL(version, arch string) string {
