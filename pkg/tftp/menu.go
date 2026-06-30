@@ -44,7 +44,7 @@ func menuItemText(e cache.CacheEntry) string {
 // bootTokensFor. It returns an error for any malformed/unknown/missing/invalid or
 // traversal selection so the caller serves the holding fallback instead —
 // arbitrary disk content is never served. The path is rebuilt from a fixed
-// 4-segment split (cache.CacheDirExists), so a segment cannot smuggle traversal.
+// 4-segment split (cache.ValidCachedSelection), so a segment cannot smuggle traversal.
 func renderMenuSelection(filename, urlHost string) (string, error) {
 	inner := strings.TrimSuffix(strings.TrimPrefix(filename, "menu/"), "/boot.ipxe")
 	parts := strings.Split(inner, "/")

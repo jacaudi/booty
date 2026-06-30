@@ -89,8 +89,8 @@ func ListCached() []CacheEntry {
 	return out
 }
 
-// CacheDirExists reports whether the version-scoped artifact directory exists.
-func CacheDirExists(cacheName, segment, arch, version string) bool {
+// cacheDirExists reports whether the version-scoped artifact directory exists.
+func cacheDirExists(cacheName, segment, arch, version string) bool {
 	info, err := os.Stat(cacheDir(cacheName, segment, arch, version))
 	return err == nil && info.IsDir()
 }
@@ -120,5 +120,5 @@ func ValidCachedSelection(cacheName, segment, arch, version string) bool {
 	if o.ValidateVersion(version) != nil {
 		return false
 	}
-	return CacheDirExists(cacheName, segment, arch, version)
+	return cacheDirExists(cacheName, segment, arch, version)
 }
