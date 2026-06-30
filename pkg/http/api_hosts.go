@@ -102,6 +102,33 @@ func registerHosts(api huma.API, _ APIDeps) {
 		return nil, nil
 	})
 
+	// POST /hosts/{mac}/menu — approve (if needed) + set boot_mode='menu'.
+	// MUST NOT route through hardware.SetAssignment (which sets boot_mode='assigned'
+	// and would clobber menu mode). OPEN in the trust window like approve/revoke.
+	huma.Register(api, huma.Operation{
+		OperationID: "menu-host", Method: http.MethodPost, Path: "/hosts/{mac}/menu",
+		Summary: "Put a host into interactive boot-menu mode", Tags: []string{"hosts"},
+	}, func(ctx context.Context, in *struct {
+		MAC string `path:"mac"`
+	}) (*struct{ Body *hardware.Host }, error) {
+		if _, err := hardware.GetMacAddress(in.MAC); errors.Is(err, hardware.ErrNotFound) {
+			return nil, huma.Error404NotFound("host not found")
+		} else if err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		}
+		if err := hardware.Approve(in.MAC); err != nil {
+			return nil, huma.Error500InternalServerError("approve", err)
+		}
+		if err := hardware.SetBootMode(in.MAC, "menu"); err != nil {
+			return nil, huma.Error500InternalServerError("set menu mode", err)
+		}
+		updated, err := hardware.GetMacAddress(in.MAC)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get updated host", err)
+		}
+		return &struct{ Body *hardware.Host }{Body: updated}, nil
+	})
+
 	// PUT/DELETE /hosts/{mac} — wired-but-403 until auth.
 	huma.Register(api, huma.Operation{
 		OperationID: "put-host", Method: http.MethodPut, Path: "/hosts/{mac}",

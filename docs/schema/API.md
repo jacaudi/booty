@@ -124,6 +124,7 @@ Cache targets represent an (OS, arch, params) tuple that the reconciler discover
 | `GET` | `/api/v1/hosts` | List known hosts. Optional `?approved=true\|false` filter. | `{"hosts":[…]}` |
 | `POST` | `/api/v1/hosts/{mac}/approve` | Approve a host. If the host has a non-empty `os` field, also sets `boot_mode='assigned'` and `assigned_os=os` (plus `schematic` param for Talos), making the host immediately boot-ready once its target's versions are cached. **OPEN.** | host JSON / `404` |
 | `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). **OPEN.** | `204` |
+| `POST` | `/api/v1/hosts/{mac}/menu` | Approve (if needed) and put the host into interactive boot-menu mode (`boot_mode='menu'`). Does **not** route through `SetAssignment`; `approved_os` is unchanged. **OPEN.** `404` if MAC is unknown. | host JSON / `404` |
 | `PUT` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
 | `DELETE` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
 
@@ -136,7 +137,7 @@ Cache targets represent an (OS, arch, params) tuple that the reconciler discover
 | Unknown MAC (no ARP match) or unregistered | Holding pattern — serves `holding.ipxe`, which re-chains to `booty.ipxe` and loops until the host is registered and approved. |
 | Registered but **not approved** | Holding pattern (same as above). |
 | Approved + `boot_mode='assigned'` | Boots the newest cached version of `assigned_os` (falls back to `host.os` if `assigned_os` is empty). |
-| Approved + `boot_mode='menu'` | Holding pattern — interactive boot menu is **deferred** (tracked in issue #44). |
+| Approved + `boot_mode='menu'` | Serves a dynamically generated interactive iPXE boot menu (over TFTP) listing every currently-cached `(os, version)` image. The node selects a version and boots it. The selection is ephemeral — nothing is written back. |
 
 > **As of P1c:** `/booty.json` (the UI payload) now **additively** carries host approval and
 > assignment state for each registered host: `approved` (bool), `bootMode` (string),
