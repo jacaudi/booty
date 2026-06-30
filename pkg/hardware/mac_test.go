@@ -282,6 +282,23 @@ func TestImportLegacyJSON_SkippedAfterFlagSet(t *testing.T) {
 	}
 }
 
+func TestSetBootModeWrapper(t *testing.T) {
+	setupTempDB(t)
+	if err := WriteMacAddress("aa:bb:cc:00:00:02", Host{MAC: "aa:bb:cc:00:00:02", OS: "talos"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := SetBootMode("aa:bb:cc:00:00:02", "menu"); err != nil {
+		t.Fatalf("SetBootMode: %v", err)
+	}
+	h, err := GetMacAddress("aa:bb:cc:00:00:02")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if h.BootMode != "menu" {
+		t.Fatalf("BootMode = %q, want menu", h.BootMode)
+	}
+}
+
 func TestApproveRevokeRoundtrip(t *testing.T) {
 	setupTempDB(t) // opens a temp db.Store + Load
 	if err := WriteMacAddress("aa:bb:cc:dd:ee:01", Host{MAC: "aa:bb:cc:dd:ee:01", OS: "flatcar"}); err != nil {
