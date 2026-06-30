@@ -77,12 +77,14 @@ pruned), and flips `cached` to 1 once a version's artifacts are on disk.
 ### `meta`
 `key` PRIMARY KEY, `value`.
 
-Keys: `hardware_import_done` (`"1"` once the one-time `hardware.json` import has completed or reached
-a no-file steady state — gates re-import so a stale file cannot resurrect a deleted host).
+| Key | Value | Set when |
+|-----|-------|---------|
+| `hardware_import_done` | `"1"` | The one-time `hardware.json` import has completed (or reached a no-file steady state). Gates re-import so a stale file cannot resurrect a deleted host. |
+| `host_boot_preserved` | `"1"` | The P1c upgrade backfill has run. Gating prevents the backfill from re-running on restart. See the upgrade-backfill note in the `hosts` section below. |
 
 ### `hosts`
-The host record (P1a populates the legacy columns; the rest are reserved for
-later slices and keep their defaults):
+The host record (P1a populates the legacy columns; the approval/assignment columns are activated in
+P1c; remaining columns keep their defaults):
 
 | Column | Type | Meaning |
 |--------|------|---------|
@@ -94,11 +96,26 @@ later slices and keep their defaults):
 | `os` | TEXT | `flatcar` \| `coreos` \| `talos`. |
 | `do_install` | INTEGER | One-shot install flag. |
 | `schematic` | TEXT | Talos per-host schematic ID. |
-| `approved` | INTEGER | Reserved (P1c/P2): host approval. |
-| `boot_mode` | TEXT | Reserved (P1c): `assigned`\|`menu`. |
-| `assigned_os`/`assigned_arch`/`assigned_params` | TEXT | Reserved (P1c): assignment. |
-| `uuid`/`serial` | TEXT | Reserved: hardware identity. |
-| `first_seen`/`last_seen` | TEXT | Reserved: timestamps. |
+| `approved` | INTEGER | **Active (P1c).** `1` = approved to boot; `0` = holding pattern. |
+| `boot_mode` | TEXT | **Active (P1c).** `assigned` = boot the assigned target; `menu` = deferred (holds until P10). |
+| `assigned_os`/`assigned_arch`/`assigned_params` | TEXT | **Active (P1c).** Target (OS, arch, params) the host boots when `boot_mode='assigned'`. |
+| `uuid`/`serial` | TEXT | Scanned on every host read; not yet populated by booty (hardware identity, reserved for a future slice). |
+| `first_seen`/`last_seen` | TEXT | Reserved: timestamps (not yet surfaced). |
+
+> **As of P1c:** `approved`, `boot_mode`, `assigned_os`, `assigned_arch`, and `assigned_params`
+> are the columns booty now actively reads and writes. Migration `0001` (P1a) created all of these;
+> P1c is the first slice to use them. `uuid` and `serial` are included in every host SELECT
+> (scanned into the `Host` struct) but are not yet populated by any code path.
+>
+> **Upgrade backfill — `meta.host_boot_preserved`:** on the first startup after upgrading to P1c,
+> booty runs a one-time backfill gated by the `meta` key `host_boot_preserved`. It marks every
+> already-registered host whose `os` column is non-empty as `approved=1`,
+> `boot_mode='assigned'`, `assigned_os=os` — so those hosts continue booting identically across
+> the upgrade (no outage for hosts that were actively booting a configured OS). Registered hosts
+> with an empty `os` column and all unknown hosts move to the holding pattern by design; they must
+> be approved via `POST /api/v1/hosts/{mac}/approve` before they will boot again. Once the
+> backfill runs, `host_boot_preserved` is set to `"1"` in the `meta` table and the backfill is
+> skipped on all subsequent restarts.
 
 Pragmas on every connection: `journal_mode=WAL`, `foreign_keys=ON`,
 `busy_timeout=5000`.
