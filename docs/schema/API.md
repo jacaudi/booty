@@ -83,7 +83,8 @@ The versioned operator API, mounted under `/api/v1` on the same `--httpPort`. It
 the boot contract above. All endpoints speak JSON.
 
 > **Trust window (design §2.10) — read this first.** Mutating `POST` and `PATCH` endpoints are
-> **OPEN** (no authentication required). `DELETE` endpoints return `403 Forbidden` — this is an
+> **OPEN** (no authentication required). Destructive endpoints (`DELETE`, and `PUT /api/v1/hosts/{mac}`)
+> return `403 Forbidden` — this is an
 > **API-shape device** that reserves destructive operations for the auth layer; it is **not** a
 > security control. The entire pre-auth window assumes a **trusted LAN**. Authentication lands in
 > P10 and will gate all mutating operations uniformly at that point.
