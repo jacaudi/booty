@@ -67,8 +67,9 @@ func registerHosts(api huma.API, _ APIDeps) {
 		if err := hardware.Approve(in.MAC); err != nil {
 			return nil, huma.Error500InternalServerError("approve", err)
 		}
-		// Assign to the host's self-reported OS so it boots that target
-		// (keeps boot_mode='menu' unreachable in P1c — menu deferred).
+		// Assign to the host's self-reported OS so it boots that target.
+		// approve deliberately sets boot_mode='assigned'; menu mode is set
+		// separately via POST /hosts/{mac}/menu.
 		if h.OS != "" {
 			params := map[string]string{}
 			if h.OS == "talos" && h.Schematic != "" {

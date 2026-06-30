@@ -9,6 +9,7 @@ import (
 
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/spf13/viper"
 )
 
@@ -79,6 +80,63 @@ func TestRenderMenuSelectionValid(t *testing.T) {
 	// rendered the talos template for the EXACT version (baseurl carries it)
 	if !strings.Contains(got, cache.CacheURLBase("10.0.0.1", "talos", "schemA", "amd64", "v1.10.5")) {
 		t.Errorf("selection did not render exact tuple:\n%s", got)
+	}
+}
+
+// TestMenuSelectionScript covers the approval-gate gate added to the
+// menu-selection TFTP branch (I1). Three behaviours must hold:
+//   - a non-menu-mode host gets the holding fallback regardless of tuple validity
+//   - a menu-mode host with a valid tuple gets the OS boot script
+//   - a menu-mode host with an invalid/uncached tuple still gets the holding fallback
+//
+// This restores symmetry with the booty.ipxe branch's bootDispatch gate.
+func TestMenuSelectionScript(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.ServerIP, "10.0.0.1")
+	if err := os.MkdirAll(filepath.Join(root, "cache", "talos", "schemA", "amd64", "v1.10.5"), 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	const (
+		server      = "10.0.0.1"
+		validFile   = "menu/talos/schemA/amd64/v1.10.5/boot.ipxe"
+		invalidFile = "menu/talos/schemA/amd64/v9.9.9/boot.ipxe" // not cached
+	)
+	holdingMarker := "tftp://" + server + "/booty.ipxe"
+	validMarker := cache.CacheURLBase(server, "talos", "schemA", "amd64", "v1.10.5")
+
+	menuHost := &hardware.Host{Approved: true, BootMode: "menu"}
+
+	cases := []struct {
+		name        string
+		host        *hardware.Host
+		filename    string
+		wantHolding bool
+	}{
+		{"nil host → holding", nil, validFile, true},
+		{"approved assigned host → holding (not menu mode)", &hardware.Host{Approved: true, BootMode: "assigned", OS: "talos"}, validFile, true},
+		{"menu host + valid tuple → OS boot script", menuHost, validFile, false},
+		{"menu host + invalid tuple → holding", menuHost, invalidFile, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := menuSelectionScript(tc.host, tc.filename, server)
+			if tc.wantHolding {
+				if !strings.Contains(got, holdingMarker) {
+					t.Errorf("expected holding script (re-chains %q), got:\n%s", holdingMarker, got)
+				}
+				if strings.Contains(got, validMarker) {
+					t.Errorf("holding response must not contain OS boot URL %q:\n%s", validMarker, got)
+				}
+			} else {
+				if !strings.Contains(got, validMarker) {
+					t.Errorf("expected OS boot script (contains %q), got:\n%s", validMarker, got)
+				}
+			}
+		})
 	}
 }
 

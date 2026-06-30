@@ -114,14 +114,7 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	}
 
 	if strings.HasPrefix(filename, "menu/") && strings.HasSuffix(filename, "/boot.ipxe") {
-		toServe, err := renderMenuSelection(filename, urlHost)
-		if err != nil {
-			slog.Warn("TFTP: menu selection rejected, serving holding", "file", filename, "err", err)
-			toServe = applyTokens(PXEConfig["holding.ipxe"], map[string]string{
-				"[[server]]":    urlHost,
-				"[[server-ip]]": viper.GetString(config.ServerIP),
-			})
-		}
+		toServe := menuSelectionScript(host, filename, urlHost)
 		r := strings.NewReader(toServe)
 		n, rerr := rf.ReadFrom(r)
 		if rerr != nil {

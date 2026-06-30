@@ -2,10 +2,14 @@ package tftp
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/jeefy/booty/pkg/cache"
+	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/spf13/viper"
 )
 
 // osTitle maps an on-disk cache name to a friendly menu label prefix.
@@ -61,6 +65,36 @@ func renderMenuSelection(filename, urlHost string) (string, error) {
 		return "", fmt.Errorf("tftp: menu selection: no template for %q", cacheName)
 	}
 	return applyTokens(tmpl, bootTokensFor(cacheName, segment, arch, version, urlHost)), nil
+}
+
+// menuSelectionScript returns the iPXE script to serve for a TFTP
+// "menu/<tuple>/boot.ipxe" request. It gates on host state via bootDispatch,
+// mirroring the gate that the booty.ipxe branch already applies — only a host
+// that bootDispatch classifies as "menu" (approved + boot_mode='menu') may boot
+// a selection. Any other host state (unapproved, holding, assigned) receives the
+// holding fallback regardless of tuple validity. This closes the approval-gate
+// asymmetry between the two TFTP branches.
+//
+// For menu-mode hosts, renderMenuSelection validates the tuple and renders the
+// OS template; on any validation error the holding fallback is still served
+// (behaviour unchanged from before this gate was added).
+func menuSelectionScript(host *hardware.Host, filename, urlHost string) string {
+	holding := applyTokens(PXEConfig["holding.ipxe"], map[string]string{
+		"[[server]]":    urlHost,
+		"[[server-ip]]": viper.GetString(config.ServerIP),
+	})
+	// Gate: restore symmetry with the booty.ipxe branch — only menu-mode hosts
+	// may boot a selection.
+	kind, _ := bootDispatch(host)
+	if kind != "menu" {
+		return holding
+	}
+	toServe, err := renderMenuSelection(filename, urlHost)
+	if err != nil {
+		slog.Warn("TFTP: menu selection rejected, serving holding", "file", filename, "err", err)
+		return holding
+	}
+	return toServe
 }
 
 // renderMenu builds the iPXE menu script for the cached entries. A leading
