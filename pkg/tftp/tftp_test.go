@@ -141,3 +141,62 @@ func TestBootTokensTalosFallsBackToDefaultSchematic(t *testing.T) {
 		t.Errorf("empty-schematic host: got %q, want defaultschematic", tokens["[[talos-schematic]]"])
 	}
 }
+
+// dispatchKind classifies what readHandler would serve for a given host, by
+// running the same selection logic. The production code factors this into a
+// helper bootDispatch(host) returning ("holding"|"assigned", osToLoad) so the
+// test asserts the state machine directly.
+func TestBootDispatchStateMachine(t *testing.T) {
+	cases := []struct {
+		name     string
+		host     *hardware.Host
+		wantKind string
+		wantOS   string
+	}{
+		{"no host -> holding", nil, "holding", ""},
+		{"unapproved -> holding", &hardware.Host{OS: "flatcar"}, "holding", ""},
+		{"approved assigned -> boots assigned_os", &hardware.Host{Approved: true, BootMode: "assigned", AssignedOS: "talos", OS: "talos"}, "assigned", "talos"},
+		{"approved assigned empty -> falls back to host.OS", &hardware.Host{Approved: true, BootMode: "assigned", AssignedOS: "", OS: "flatcar"}, "assigned", "flatcar"},
+		{"approved menu -> holding (deferred)", &hardware.Host{Approved: true, BootMode: "menu", OS: "flatcar"}, "holding", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kind, osToLoad := bootDispatch(tc.host)
+			if kind != tc.wantKind || osToLoad != tc.wantOS {
+				t.Fatalf("bootDispatch = (%q,%q), want (%q,%q)", kind, osToLoad, tc.wantKind, tc.wantOS)
+			}
+		})
+	}
+}
+
+// A migrated/assigned host must produce the SAME tokens the pre-P1c path did:
+// bootTokens keyed on the assigned OS == bootTokens keyed on host.OS.
+func TestAssignedTokensMatchLegacy(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.FlatcarArchitecture, "amd64")
+
+	host := &hardware.Host{Approved: true, BootMode: "assigned", AssignedOS: "flatcar", OS: "flatcar"}
+	_, osToLoad := bootDispatch(host)
+	got := bootTokens(osToLoad, "10.0.0.1", host)
+	legacy := bootTokens("flatcar", "10.0.0.1", host)
+	if got["[[flatcar-baseurl]]"] != legacy["[[flatcar-baseurl]]"] || got["[[flatcar-version]]"] != legacy["[[flatcar-version]]"] {
+		t.Fatalf("assigned tokens diverge from legacy: %v vs %v", got, legacy)
+	}
+}
+
+func TestHoldingTemplateExists(t *testing.T) {
+	tmpl, ok := PXEConfig["holding.ipxe"]
+	if !ok {
+		t.Fatalf("holding.ipxe template missing")
+	}
+	// The holding loop must re-chain over TFTP (booty.ipxe is TFTP-only; there
+	// is no HTTP /booty.ipxe route — the / catch-all 302s to /ui/).
+	if !strings.Contains(tmpl, "tftp://[[server-ip]]/booty.ipxe") {
+		t.Errorf("holding.ipxe must chain via tftp://[[server-ip]]/booty.ipxe, got:\n%s", tmpl)
+	}
+	if strings.Contains(tmpl, "http://[[server]]/booty.ipxe") {
+		t.Errorf("holding.ipxe must NOT chain via http://[[server]]/booty.ipxe (no HTTP route exists), got:\n%s", tmpl)
+	}
+}

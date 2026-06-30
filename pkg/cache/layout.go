@@ -129,3 +129,11 @@ func decodeParams(s string) (map[string]string, error) {
 	}
 	return m, nil
 }
+
+// EncodeParams is the canonical params encoder shared with the API layer so
+// targets created via /api/v1 collide on UNIQUE(os,arch,params) exactly as
+// reconciler-seeded ones do. See encodeParams.
+func EncodeParams(params map[string]string) (string, error) { return encodeParams(params) }
+
+// DecodeParams parses a canonical params string. See decodeParams.
+func DecodeParams(s string) (map[string]string, error) { return decodeParams(s) }

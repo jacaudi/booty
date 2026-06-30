@@ -41,4 +41,9 @@ func init() {
 	kernel ${BASEURL}/fedora-coreos-${VERSION}-live-kernel-${ARCH} enforcing=0 initrd=main coreos.live.rootfs_url=${BASEURL}/fedora-coreos-${VERSION}-live-rootfs.${ARCH}.img ignition.firstboot ignition.platform.id=metal ignition.firstboot=1 ignition.config.url=${CONFIGURL}
 	initrd --name main ${BASEURL}/fedora-coreos-${VERSION}-live-initramfs.${ARCH}.img
 	boot`
+
+	PXEConfig["holding.ipxe"] = `#!ipxe
+	echo Booty: this host is not yet approved. Waiting...
+	sleep 30
+	chain tftp://[[server-ip]]/booty.ipxe || shell`
 }

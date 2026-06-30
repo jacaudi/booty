@@ -54,14 +54,34 @@ func safeJoin(requested string) (string, error) {
 	return cleaned, nil
 }
 
+// bootDispatch is the pure host-state -> boot-decision function (design §2.5).
+// It returns the kind of boot to serve and, for "assigned", the OS to load.
+//   - no host / unapproved        -> "holding"
+//   - approved + assigned         -> "assigned", assigned OS (host.OS fallback)
+//   - approved + menu             -> "holding" (interactive menu deferred, see #44)
+//
+// ponytail: boot_mode=menu deliberately falls back to holding — the interactive
+// menu is unreachable in P1c (approve always assigns) and is tracked in #44.
+func bootDispatch(host *hardware.Host) (kind, osToLoad string) {
+	if host == nil || !host.Approved {
+		return "holding", ""
+	}
+	if host.BootMode == "assigned" {
+		osToLoad := host.AssignedOS
+		if osToLoad == "" {
+			osToLoad = host.OS
+		}
+		return "assigned", osToLoad
+	}
+	return "holding", ""
+}
+
 // readHandler is called when client starts file download from server
 func readHandler(filename string, rf io.ReaderFrom) error {
 	slog.Info("TFTP get", "file", filename)
 	raddr := rf.(tftp.OutgoingTransfer).RemoteAddr()
 	laddr := rf.(tftp.RequestPacketInfo).LocalIP()
 	slog.Debug("RRQ", "from", raddr.String(), "to", laddr.String())
-
-	osToLoad := "flatcar"
 
 	var host *hardware.Host
 	if hwAddr, _, err := arping.Ping(raddr.IP); err != nil {
@@ -74,9 +94,6 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 			slog.Warn("TFTP: error looking up host", "mac", macAddress, "err", lookupErr)
 		}
 		if host != nil {
-			if host.OS != "" {
-				osToLoad = host.OS
-			}
 			if host.DoInstall && filename == "booty.ipxe" {
 				modified := *host
 				modified.DoInstall = false
@@ -96,19 +113,33 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	}
 
 	if filename == "booty.ipxe" {
-		toServe := applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
+		kind, osToLoad := bootDispatch(host)
+		var toServe string
+		if kind == "assigned" {
+			toServe = applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
+		} else {
+			toServe = applyTokens(PXEConfig["holding.ipxe"], map[string]string{
+				"[[server]]":    urlHost,
+				"[[server-ip]]": viper.GetString(config.ServerIP),
+			})
+		}
 		r := strings.NewReader(toServe)
 		n, err := rf.ReadFrom(r)
 		if err != nil {
 			slog.Warn("error reading iPXE config", "err", err)
 			return err
 		}
-		slog.Info("bytes sent", "bytes", n, "file", filename)
+		slog.Info("bytes sent", "bytes", n, "file", filename, "kind", kind)
 		return nil
 	}
 
 	if filename == "pxelinux.cfg/default" {
-		r := strings.NewReader(applyTokens(PXEConfig[osToLoad], map[string]string{"[[server]]": urlHost}))
+		// pxelinux.cfg/default — legacy syslinux path; selection preserved verbatim.
+		pxeOS := "flatcar"
+		if host != nil && host.OS != "" {
+			pxeOS = host.OS
+		}
+		r := strings.NewReader(applyTokens(PXEConfig[pxeOS], map[string]string{"[[server]]": urlHost}))
 		n, err := rf.ReadFrom(r)
 		if err != nil {
 			slog.Warn("error reading PXE config", "err", err)

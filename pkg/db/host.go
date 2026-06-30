@@ -1,11 +1,14 @@
 package db
 
-import "fmt"
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+)
 
-// Host is the legacy-compatible projection of the hosts table — exactly the
-// columns pkg/hardware reads and writes today. The remaining hosts columns
-// (approved, boot_mode, assigned_*, uuid, serial, first_seen, last_seen) are
-// owned by later slices; P1a never writes them, so they keep their defaults.
+// Host is the projection of the hosts table that pkg/hardware and the P1c
+// target/boot-dispatch API read and write. Legacy columns are preserved exactly;
+// the approval/assignment columns are added here for P1c.
 type Host struct {
 	MAC          string
 	Hostname     string
@@ -15,13 +18,23 @@ type Host struct {
 	OS           string
 	DoInstall    bool
 	Schematic    string
+
+	Approved       bool
+	BootMode       string // 'assigned' | 'menu'
+	AssignedOS     string
+	AssignedArch   string
+	AssignedParams string
+	UUID           string
+	Serial         string
 }
 
-const hostCols = `mac, hostname, ip, booted, ignition_file, os, do_install, schematic`
+const hostCols = `mac, hostname, ip, booted, ignition_file, os, do_install, schematic, ` +
+	`approved, boot_mode, assigned_os, assigned_arch, assigned_params, uuid, serial`
 
 func scanHost(scan func(...any) error) (Host, error) {
 	var h Host
-	err := scan(&h.MAC, &h.Hostname, &h.IP, &h.Booted, &h.IgnitionFile, &h.OS, &h.DoInstall, &h.Schematic)
+	err := scan(&h.MAC, &h.Hostname, &h.IP, &h.Booted, &h.IgnitionFile, &h.OS, &h.DoInstall, &h.Schematic,
+		&h.Approved, &h.BootMode, &h.AssignedOS, &h.AssignedArch, &h.AssignedParams, &h.UUID, &h.Serial)
 	return h, err
 }
 
@@ -83,4 +96,58 @@ func (s *Store) ListHosts() ([]Host, error) {
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+// ApproveHost marks mac approved. Idempotent; absent mac is a no-op.
+func (s *Store) ApproveHost(mac string) error {
+	if _, err := s.db.Exec(`UPDATE hosts SET approved = 1, last_seen = datetime('now') WHERE mac = ?`, mac); err != nil {
+		return fmt.Errorf("db: approve host %s: %w", mac, err)
+	}
+	return nil
+}
+
+// RevokeHost clears the approved flag for mac. Idempotent.
+func (s *Store) RevokeHost(mac string) error {
+	if _, err := s.db.Exec(`UPDATE hosts SET approved = 0, last_seen = datetime('now') WHERE mac = ?`, mac); err != nil {
+		return fmt.Errorf("db: revoke host %s: %w", mac, err)
+	}
+	return nil
+}
+
+// SetAssignment sets boot_mode='assigned' and the assigned target for mac.
+// params MUST be the canonical encoding (cache.EncodeParams).
+func (s *Store) SetAssignment(mac, os, arch, params string) error {
+	if _, err := s.db.Exec(
+		`UPDATE hosts SET boot_mode = 'assigned', assigned_os = ?, assigned_arch = ?, assigned_params = ?,
+		   last_seen = datetime('now') WHERE mac = ?`,
+		os, arch, params, mac); err != nil {
+		return fmt.Errorf("db: assign host %s: %w", mac, err)
+	}
+	return nil
+}
+
+// PreserveExistingHostBoot is a one-time upgrade backfill: it marks every
+// already-registered host (os != '') approved + boot_mode='assigned' +
+// assigned_os=os, so hosts that booted under the pre-P1c (host.OS-driven) path
+// keep booting identically instead of dropping to the holding pattern. Gated by
+// the meta flag "host_boot_preserved" so it runs exactly once at the upgrade
+// boundary; hosts registered AFTER it stay unapproved (holding until approved).
+// Returns the number of rows updated. Idempotent across restarts.
+func (s *Store) PreserveExistingHostBoot() (int64, error) {
+	if v, err := s.GetMeta("host_boot_preserved"); err == nil && v == "1" {
+		return 0, nil
+	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("db: read preserve flag: %w", err)
+	}
+	res, err := s.db.Exec(
+		`UPDATE hosts SET approved = 1, boot_mode = 'assigned', assigned_os = os
+		   WHERE os != '' AND approved = 0`)
+	if err != nil {
+		return 0, fmt.Errorf("db: preserve host boot: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if err := s.SetMeta("host_boot_preserved", "1"); err != nil {
+		return n, fmt.Errorf("db: set preserve flag: %w", err)
+	}
+	return n, nil
 }

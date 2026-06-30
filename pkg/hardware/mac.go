@@ -27,6 +27,14 @@ type Host struct {
 	OS           string `json:"os,omitempty"`
 	DoInstall    bool   `json:"doInstall,omitempty"`
 	Schematic    string `json:"schematic,omitempty"`
+
+	Approved       bool   `json:"approved,omitzero"`
+	BootMode       string `json:"bootMode,omitzero"`
+	AssignedOS     string `json:"assignedOS,omitzero"`
+	AssignedArch   string `json:"assignedArch,omitzero"`
+	AssignedParams string `json:"assignedParams,omitzero"`
+	UUID           string `json:"uuid,omitzero"`
+	Serial         string `json:"serial,omitzero"`
 }
 
 // BootyData is the JSON shape returned by GetData and consumed by the UI.
@@ -66,10 +74,13 @@ var (
 
 // SetStore injects the shared database store. Call it once at startup before
 // Load. When set, Load uses this store rather than opening its own.
+// Passing nil resets the injection so a subsequent Load() opens its own store;
+// this is used by tests to restore package state after a test-injected store is
+// closed.
 func SetStore(s *db.Store) {
 	storeMu.Lock()
 	store = s
-	storeInjected = true
+	storeInjected = (s != nil)
 	storeMu.Unlock()
 }
 
@@ -192,6 +203,8 @@ func toDBHost(h Host) db.Host {
 	return db.Host{
 		MAC: h.MAC, Hostname: h.Hostname, IP: h.IP, Booted: h.Booted,
 		IgnitionFile: h.IgnitionFile, OS: h.OS, DoInstall: h.DoInstall, Schematic: h.Schematic,
+		Approved: h.Approved, BootMode: h.BootMode, AssignedOS: h.AssignedOS,
+		AssignedArch: h.AssignedArch, AssignedParams: h.AssignedParams, UUID: h.UUID, Serial: h.Serial,
 	}
 }
 
@@ -199,6 +212,8 @@ func fromDBHost(d db.Host) *Host {
 	return &Host{
 		MAC: d.MAC, Hostname: d.Hostname, IP: d.IP, Booted: d.Booted,
 		IgnitionFile: d.IgnitionFile, OS: d.OS, DoInstall: d.DoInstall, Schematic: d.Schematic,
+		Approved: d.Approved, BootMode: d.BootMode, AssignedOS: d.AssignedOS,
+		AssignedArch: d.AssignedArch, AssignedParams: d.AssignedParams, UUID: d.UUID, Serial: d.Serial,
 	}
 }
 
@@ -296,6 +311,73 @@ func RemoveMacAddress(mac string) error {
 		return st.DeleteHost(key)
 	})
 	return err
+}
+
+// Approve marks the canonicalized mac approved.
+func Approve(mac string) error { return mutateHost(mac, (*db.Store).ApproveHost) }
+
+// Revoke clears approval for the canonicalized mac.
+func Revoke(mac string) error { return mutateHost(mac, (*db.Store).RevokeHost) }
+
+func mutateHost(mac string, op func(*db.Store, string) error) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error { return op(st, key) })
+	if !had {
+		return errors.New("hardware: store not initialized")
+	}
+	return err
+}
+
+// SetAssignment sets the assigned target for the canonicalized mac. params must
+// be the canonical encoding (cache.EncodeParams).
+func SetAssignment(mac, os, arch, params string) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		return st.SetAssignment(key, os, arch, params)
+	})
+	if !had {
+		return errors.New("hardware: store not initialized")
+	}
+	return err
+}
+
+// ListHosts returns every registered host (fresh copies).
+func ListHosts() ([]*Host, error) {
+	var out []*Host
+	had, err := withRLockedStore(func(st *db.Store) error {
+		list, lerr := st.ListHosts()
+		if lerr != nil {
+			return lerr
+		}
+		for _, d := range list {
+			out = append(out, fromDBHost(d))
+		}
+		return nil
+	})
+	if !had {
+		return nil, errors.New("hardware: store not initialized")
+	}
+	return out, err
+}
+
+// PreserveBoot runs the one-time upgrade backfill (see db.PreserveExistingHostBoot).
+func PreserveBoot() (int64, error) {
+	var n int64
+	had, err := withRLockedStore(func(st *db.Store) error {
+		var perr error
+		n, perr = st.PreserveExistingHostBoot()
+		return perr
+	})
+	if !had {
+		return 0, errors.New("hardware: store not initialized")
+	}
+	return n, err
 }
 
 func trackUnknown(key string) {

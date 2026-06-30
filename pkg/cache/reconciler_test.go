@@ -72,3 +72,14 @@ func TestReconciler_StartRunsStartupReconcileThenStop(t *testing.T) {
 	}
 	r.Stop() // must return promptly and not panic / double-close
 }
+
+func TestTriggerCoalesces(t *testing.T) {
+	r := NewReconciler(nil, time.Hour, 1)
+	// Trigger before Start: fills the buffered channel without blocking, and a
+	// second call coalesces (no panic, no block).
+	r.Trigger()
+	r.Trigger()
+	if len(r.trigger) != 1 {
+		t.Fatalf("trigger depth = %d, want 1 (coalesced)", len(r.trigger))
+	}
+}

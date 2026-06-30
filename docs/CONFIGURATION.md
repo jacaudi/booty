@@ -61,6 +61,14 @@ logs the error and continues serving TFTP/HTTP.
 - All config templates and the host database live **under `--dataDir`**; see
   [schema/STORAGE.md](schema/STORAGE.md).
 
-> **Forward-looking:** the v1 management plane adds a versioned `/api/v1` surface and SQLite-backed
-> state. The flags above remain the bootstrap configuration; per-target and per-host settings move
-> into the API/DB as those slices land, and this reference is updated with them.
+> **As of P1c:** the `/api/v1` management plane is now active. The following HTTP paths are served
+> on the existing `--httpPort` alongside the boot-facing endpoints, with no new flags:
+>
+> | Path | Purpose |
+> |------|---------|
+> | `/api/v1` | Versioned management API (targets, catalog, hosts). |
+> | `/api/v1/docs` | Scalar interactive API documentation UI. |
+> | `/api/v1/openapi.json` | OpenAPI 3.1 spec (machine-readable). |
+>
+> Per-target and per-host settings are managed through the API and persisted in `booty.db`. See
+> [schema/API.md](schema/API.md) for the full endpoint reference.
