@@ -162,7 +162,7 @@ func TestBootDispatchStateMachine(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			kind, osToLoad := bootDispatch(tc.host)
-			if kind != tc.wantKind || (kind == "assigned" && osToLoad != tc.wantOS) {
+			if kind != tc.wantKind || osToLoad != tc.wantOS {
 				t.Fatalf("bootDispatch = (%q,%q), want (%q,%q)", kind, osToLoad, tc.wantKind, tc.wantOS)
 			}
 		})
@@ -187,7 +187,16 @@ func TestAssignedTokensMatchLegacy(t *testing.T) {
 }
 
 func TestHoldingTemplateExists(t *testing.T) {
-	if _, ok := PXEConfig["holding.ipxe"]; !ok {
+	tmpl, ok := PXEConfig["holding.ipxe"]
+	if !ok {
 		t.Fatalf("holding.ipxe template missing")
+	}
+	// The holding loop must re-chain over TFTP (booty.ipxe is TFTP-only; there
+	// is no HTTP /booty.ipxe route — the / catch-all 302s to /ui/).
+	if !strings.Contains(tmpl, "tftp://[[server-ip]]/booty.ipxe") {
+		t.Errorf("holding.ipxe must chain via tftp://[[server-ip]]/booty.ipxe, got:\n%s", tmpl)
+	}
+	if strings.Contains(tmpl, "http://[[server]]/booty.ipxe") {
+		t.Errorf("holding.ipxe must NOT chain via http://[[server]]/booty.ipxe (no HTTP route exists), got:\n%s", tmpl)
 	}
 }

@@ -67,11 +67,11 @@ func bootDispatch(host *hardware.Host) (kind, osToLoad string) {
 		return "holding", ""
 	}
 	if host.BootMode == "assigned" {
-		os := host.AssignedOS
-		if os == "" {
-			os = host.OS
+		osToLoad := host.AssignedOS
+		if osToLoad == "" {
+			osToLoad = host.OS
 		}
-		return "assigned", os
+		return "assigned", osToLoad
 	}
 	return "holding", ""
 }
@@ -118,7 +118,10 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 		if kind == "assigned" {
 			toServe = applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
 		} else {
-			toServe = applyTokens(PXEConfig["holding.ipxe"], map[string]string{"[[server]]": urlHost})
+			toServe = applyTokens(PXEConfig["holding.ipxe"], map[string]string{
+				"[[server]]":    urlHost,
+				"[[server-ip]]": viper.GetString(config.ServerIP),
+			})
 		}
 		r := strings.NewReader(toServe)
 		n, err := rf.ReadFrom(r)

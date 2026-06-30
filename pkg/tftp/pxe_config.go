@@ -45,5 +45,5 @@ func init() {
 	PXEConfig["holding.ipxe"] = `#!ipxe
 	echo Booty: this host is not yet approved. Waiting...
 	sleep 30
-	chain http://[[server]]/booty.ipxe || shell`
+	chain tftp://[[server-ip]]/booty.ipxe || shell`
 }
