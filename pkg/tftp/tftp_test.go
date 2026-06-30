@@ -2,6 +2,7 @@ package tftp
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,6 +184,64 @@ func TestAssignedTokensMatchLegacy(t *testing.T) {
 	legacy := bootTokens("flatcar", "10.0.0.1", host)
 	if got["[[flatcar-baseurl]]"] != legacy["[[flatcar-baseurl]]"] || got["[[flatcar-version]]"] != legacy["[[flatcar-version]]"] {
 		t.Fatalf("assigned tokens diverge from legacy: %v vs %v", got, legacy)
+	}
+}
+
+// TestBootTokensByteIdentical is a characterization guard: it pins the exact
+// output of bootTokens for all three OSes so the bootTokensFor extraction
+// (Task 2) cannot silently change the assigned-boot token map. It must pass
+// both before and after the refactor; a failure here means a want literal was
+// wrong (fix to match current behavior) or the refactor broke something.
+func TestBootTokensByteIdentical(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.FlatcarArchitecture, "amd64")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.TalosArchitecture, "amd64")
+	viper.Set(config.TalosSchematic, "schemX")
+
+	seed := func(cacheName, seg, arch, ver string) {
+		if err := os.MkdirAll(filepath.Join(root, "cache", cacheName, seg, arch, ver), 0o755); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	seed("flatcar", "-", "amd64", "3815.2.0")
+	seed("coreos", "-", "x86_64", "40.20240101.3.0")
+	seed("talos", "schemX", "amd64", "v1.10.5")
+
+	const server = "10.0.0.1"
+	cases := []struct {
+		os   string
+		want map[string]string
+	}{
+		{"flatcar", map[string]string{
+			"[[server]]":          server,
+			"[[flatcar-arch]]":    "amd64",
+			"[[flatcar-version]]": "3815.2.0",
+			"[[flatcar-baseurl]]": "http://" + cache.CacheURLBase(server, "flatcar", "-", "amd64", "3815.2.0"),
+		}},
+		{"coreos", map[string]string{
+			"[[server]]":         server,
+			"[[coreos-channel]]": "stable",
+			"[[coreos-arch]]":    "x86_64",
+			"[[coreos-version]]": "40.20240101.3.0",
+			"[[coreos-baseurl]]": "http://" + cache.CacheURLBase(server, "coreos", "-", "x86_64", "40.20240101.3.0"),
+		}},
+		{"talos", map[string]string{
+			"[[server]]":          server,
+			"[[talos-schematic]]": "schemX",
+			"[[talos-arch]]":      "amd64",
+			"[[talos-version]]":   "v1.10.5",
+			"[[talos-baseurl]]":   "http://" + cache.CacheURLBase(server, "talos", "schemX", "amd64", "v1.10.5"),
+		}},
+	}
+	for _, tc := range cases {
+		got := bootTokens(tc.os, server, nil)
+		if !maps.Equal(got, tc.want) {
+			t.Errorf("%s: bootTokens = %v, want %v", tc.os, got, tc.want)
+		}
 	}
 }
 

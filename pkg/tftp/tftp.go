@@ -177,27 +177,54 @@ func applyTokens(s string, tokens map[string]string) string {
 	return s
 }
 
-// bootTokens builds the per-request substitution map: shared tokens plus the
-// OS-specific tokens for osToLoad. Talos resolves its boot version from the
-// cache dir (newest retained), keyed by the host's schematic or the default.
-func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string {
+// bootTokensFor builds the [[token]] substitution map for one fully-specified
+// (osToLoad, schematic, arch, version) tuple. osToLoad is the ON-DISK os name
+// (flatcar|coreos|talos) — the same value bootTokens' switch keyed on and the
+// same value carried in the menu selection path's <cacheName> segment, so no
+// canonical-name translation is needed here. The menu selection-boot branch
+// calls this directly with the path-supplied tuple.
+//
+// NOTE: the coreos arm reads [[coreos-channel]] from viper, not from the tuple —
+// channel is a stream selector, not part of the (os,arch,version) identity, and
+// the explicit version already pins the BASEURL. This matches pre-extraction
+// behavior exactly.
+func bootTokensFor(osToLoad, schematic, arch, version, urlHost string) map[string]string {
 	tokens := map[string]string{
 		"[[server]]": urlHost,
 	}
 	switch osToLoad {
 	case "coreos":
-		arch := viper.GetString(config.CoreOSArchitecture)
-		version := cache.NewestCached("coreos", arch, nil)
 		tokens["[[coreos-channel]]"] = viper.GetString(config.CoreOSChannel)
 		tokens["[[coreos-arch]]"] = arch
 		tokens["[[coreos-version]]"] = version
 		tokens["[[coreos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "coreos", "-", arch, version)
 	case "flatcar":
-		arch := viper.GetString(config.FlatcarArchitecture)
-		version := cache.NewestCached("flatcar", arch, nil)
 		tokens["[[flatcar-arch]]"] = arch
 		tokens["[[flatcar-version]]"] = version
 		tokens["[[flatcar-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "flatcar", "-", arch, version)
+	case "talos":
+		tokens["[[talos-schematic]]"] = schematic
+		tokens["[[talos-arch]]"] = arch
+		tokens["[[talos-version]]"] = version
+		tokens["[[talos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "talos", schematic, arch, version)
+	}
+	return tokens
+}
+
+// bootTokens builds the per-request substitution map for the ASSIGNED/legacy boot
+// path: it resolves arch (viper), schematic (host override else viper), and
+// version (newest cached on disk) exactly as before, then delegates to
+// bootTokensFor. Output for assigned hosts is unchanged (TestBootTokensByteIdentical).
+func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string {
+	switch osToLoad {
+	case "coreos":
+		arch := viper.GetString(config.CoreOSArchitecture)
+		version := cache.NewestCached("coreos", arch, nil)
+		return bootTokensFor("coreos", "-", arch, version, urlHost)
+	case "flatcar":
+		arch := viper.GetString(config.FlatcarArchitecture)
+		version := cache.NewestCached("flatcar", arch, nil)
+		return bootTokensFor("flatcar", "-", arch, version, urlHost)
 	case "talos":
 		schematic := viper.GetString(config.TalosSchematic)
 		if host != nil && host.Schematic != "" {
@@ -207,12 +234,10 @@ func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string
 		// Empty when nothing is cached yet (pre-first-sync) → BASEURL 404s, same
 		// failure mode as the other OSes before their first version check.
 		version := cache.NewestCached("talos", arch, map[string]string{"schematic": schematic})
-		tokens["[[talos-schematic]]"] = schematic
-		tokens["[[talos-arch]]"] = arch
-		tokens["[[talos-version]]"] = version
-		tokens["[[talos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "talos", schematic, arch, version)
+		return bootTokensFor("talos", schematic, arch, version, urlHost)
 	}
-	return tokens
+	// unknown os: only the shared [[server]] token (identical to the old fall-through).
+	return bootTokensFor(osToLoad, "", "", "", urlHost)
 }
 
 // writeHandler is called when client starts file upload to server
