@@ -58,10 +58,8 @@ func safeJoin(requested string) (string, error) {
 // It returns the kind of boot to serve and, for "assigned", the OS to load.
 //   - no host / unapproved        -> "holding"
 //   - approved + assigned         -> "assigned", assigned OS (host.OS fallback)
-//   - approved + menu             -> "holding" (interactive menu deferred, see #44)
-//
-// ponytail: boot_mode=menu deliberately falls back to holding — the interactive
-// menu is unreachable in P1c (approve always assigns) and is tracked in #44.
+//   - approved + menu             -> "menu"
+//   - approved + unknown/empty    -> "holding"
 func bootDispatch(host *hardware.Host) (kind, osToLoad string) {
 	if host == nil || !host.Approved {
 		return "holding", ""
@@ -72,6 +70,9 @@ func bootDispatch(host *hardware.Host) (kind, osToLoad string) {
 			osToLoad = host.OS
 		}
 		return "assigned", osToLoad
+	}
+	if host.BootMode == "menu" {
+		return "menu", ""
 	}
 	return "holding", ""
 }
@@ -115,9 +116,12 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	if filename == "booty.ipxe" {
 		kind, osToLoad := bootDispatch(host)
 		var toServe string
-		if kind == "assigned" {
+		switch kind {
+		case "assigned":
 			toServe = applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
-		} else {
+		case "menu":
+			toServe = renderMenu(cache.ListCached(), viper.GetString(config.ServerIP))
+		default: // holding
 			toServe = applyTokens(PXEConfig["holding.ipxe"], map[string]string{
 				"[[server]]":    urlHost,
 				"[[server-ip]]": viper.GetString(config.ServerIP),

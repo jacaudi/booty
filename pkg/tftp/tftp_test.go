@@ -158,7 +158,7 @@ func TestBootDispatchStateMachine(t *testing.T) {
 		{"unapproved -> holding", &hardware.Host{OS: "flatcar"}, "holding", ""},
 		{"approved assigned -> boots assigned_os", &hardware.Host{Approved: true, BootMode: "assigned", AssignedOS: "talos", OS: "talos"}, "assigned", "talos"},
 		{"approved assigned empty -> falls back to host.OS", &hardware.Host{Approved: true, BootMode: "assigned", AssignedOS: "", OS: "flatcar"}, "assigned", "flatcar"},
-		{"approved menu -> holding (deferred)", &hardware.Host{Approved: true, BootMode: "menu", OS: "flatcar"}, "holding", ""},
+		{"approved menu -> menu", &hardware.Host{Approved: true, BootMode: "menu", OS: "flatcar"}, "menu", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
