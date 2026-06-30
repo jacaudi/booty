@@ -2,10 +2,14 @@
 package tftp
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/cache"
+	"github.com/jeefy/booty/pkg/config"
+	"github.com/spf13/viper"
 )
 
 func TestRenderMenuItemsAndRetry(t *testing.T) {
@@ -57,5 +61,45 @@ func TestRenderMenuEmptyCacheIsLoopOnly(t *testing.T) {
 	}
 	if strings.Count(got, "item ") != 1 {
 		t.Errorf("empty menu must have exactly one item (retry):\n%s", got)
+	}
+}
+
+func TestRenderMenuSelectionValid(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.CoreOSChannel, "stable")
+	if err := os.MkdirAll(filepath.Join(root, "cache", "talos", "schemA", "amd64", "v1.10.5"), 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	got, err := renderMenuSelection("menu/talos/schemA/amd64/v1.10.5/boot.ipxe", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("valid selection errored: %v", err)
+	}
+	// rendered the talos template for the EXACT version (baseurl carries it)
+	if !strings.Contains(got, cache.CacheURLBase("10.0.0.1", "talos", "schemA", "amd64", "v1.10.5")) {
+		t.Errorf("selection did not render exact tuple:\n%s", got)
+	}
+}
+
+func TestRenderMenuSelectionRejects(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	if err := os.MkdirAll(filepath.Join(root, "cache", "talos", "schemA", "amd64", "v1.10.5"), 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	bad := []string{
+		"menu/talos/schemA/amd64/boot.ipxe",               // 3 segments
+		"menu/talos/schemA/amd64/v1.10.5/extra/boot.ipxe", // 5 segments
+		"menu/bogusos/-/amd64/v1.0.0/boot.ipxe",           // unknown os
+		"menu/talos/schemA/amd64/v9.9.9/boot.ipxe",        // not cached
+		"menu/talos/schemA/amd64/not-a-version/boot.ipxe",  // invalid version
+		"menu/talos/../amd64/v1.10.5/boot.ipxe",            // traversal
+	}
+	for _, f := range bad {
+		if _, err := renderMenuSelection(f, "10.0.0.1"); err == nil {
+			t.Errorf("expected rejection for %q", f)
+		}
 	}
 }

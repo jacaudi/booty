@@ -113,6 +113,25 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 		urlHost = fmt.Sprintf("%s:%d", urlHost, hostPort)
 	}
 
+	if strings.HasPrefix(filename, "menu/") && strings.HasSuffix(filename, "/boot.ipxe") {
+		toServe, err := renderMenuSelection(filename, urlHost)
+		if err != nil {
+			slog.Warn("TFTP: menu selection rejected, serving holding", "file", filename, "err", err)
+			toServe = applyTokens(PXEConfig["holding.ipxe"], map[string]string{
+				"[[server]]":    urlHost,
+				"[[server-ip]]": viper.GetString(config.ServerIP),
+			})
+		}
+		r := strings.NewReader(toServe)
+		n, rerr := rf.ReadFrom(r)
+		if rerr != nil {
+			slog.Warn("TFTP: error sending menu selection response", "err", rerr)
+			return rerr
+		}
+		slog.Info("bytes sent", "bytes", n, "file", filename, "kind", "menu-selection")
+		return nil
+	}
+
 	if filename == "booty.ipxe" {
 		kind, osToLoad := bootDispatch(host)
 		var toServe string

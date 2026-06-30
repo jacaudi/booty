@@ -1,6 +1,8 @@
 package tftp
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/jeefy/booty/pkg/cache"
@@ -30,6 +32,35 @@ func menuItemText(e cache.CacheEntry) string {
 		label += " [" + seg + "]"
 	}
 	return label
+}
+
+// renderMenuSelection parses a synthetic menu-selection filename
+// "menu/<cacheName>/<segment>/<arch>/<version>/boot.ipxe", validates it against
+// the on-disk cache, and renders that OS's iPXE template for the EXACT tuple via
+// bootTokensFor. It returns an error for any malformed/unknown/missing/invalid or
+// traversal selection so the caller serves the holding fallback instead —
+// arbitrary disk content is never served. The path is rebuilt from a fixed
+// 4-segment split (cache.CacheDirExists), so a segment cannot smuggle traversal.
+func renderMenuSelection(filename, urlHost string) (string, error) {
+	inner := strings.TrimSuffix(strings.TrimPrefix(filename, "menu/"), "/boot.ipxe")
+	parts := strings.Split(inner, "/")
+	if len(parts) != 4 {
+		return "", fmt.Errorf("tftp: menu selection %q: want 4 segments, got %d", filename, len(parts))
+	}
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." {
+			return "", errPathEscapes
+		}
+	}
+	cacheName, segment, arch, version := parts[0], parts[1], parts[2], parts[3]
+	if !cache.ValidCachedSelection(cacheName, segment, arch, version) {
+		return "", os.ErrNotExist
+	}
+	tmpl, ok := PXEConfig[cacheName+".ipxe"]
+	if !ok {
+		return "", fmt.Errorf("tftp: menu selection: no template for %q", cacheName)
+	}
+	return applyTokens(tmpl, bootTokensFor(cacheName, segment, arch, version, urlHost)), nil
 }
 
 // renderMenu builds the iPXE menu script for the cached entries. A leading
