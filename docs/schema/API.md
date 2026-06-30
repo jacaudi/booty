@@ -123,7 +123,7 @@ Cache targets represent an (OS, arch, params) tuple that the reconciler discover
 |--------|------|---------|----------|
 | `GET` | `/api/v1/hosts` | List known hosts. Optional `?approved=true\|false` filter. | `{"hosts":[…]}` |
 | `POST` | `/api/v1/hosts/{mac}/approve` | Approve a host. If the host has a non-empty `os` field, also sets `boot_mode='assigned'` and `assigned_os=os` (plus `schematic` param for Talos), making the host immediately boot-ready once its target's versions are cached. **OPEN.** | host JSON / `404` |
-| `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). **OPEN.** | `200` |
+| `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). **OPEN.** | `204` |
 | `PUT` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
 | `DELETE` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
 

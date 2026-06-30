@@ -11,6 +11,12 @@ import (
 	"github.com/jeefy/booty/pkg/hardware"
 )
 
+type listHostsOutput struct {
+	Body struct {
+		Hosts []*hardware.Host `json:"hosts"`
+	}
+}
+
 func registerHosts(api huma.API, _ APIDeps) {
 	// GET /hosts (?approved=)
 	huma.Register(api, huma.Operation{
@@ -19,11 +25,7 @@ func registerHosts(api huma.API, _ APIDeps) {
 	}, func(ctx context.Context, in *struct {
 		// Approved is an optional bool filter ("true"/"false"); omit to list all.
 		Approved string `query:"approved"`
-	}) (*struct {
-		Body struct {
-			Hosts []*hardware.Host `json:"hosts"`
-		}
-	}, error) {
+	}) (*listHostsOutput, error) {
 		// Parse the optional approved filter (Huma v2 does not allow *bool for
 		// query params, so we accept a string and parse it here).
 		var approvedFilter *bool
@@ -38,11 +40,7 @@ func registerHosts(api huma.API, _ APIDeps) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("list hosts", err)
 		}
-		out := &struct {
-			Body struct {
-				Hosts []*hardware.Host `json:"hosts"`
-			}
-		}{}
+		out := &listHostsOutput{}
 		for _, h := range hosts {
 			if approvedFilter != nil && h.Approved != *approvedFilter {
 				continue
@@ -76,12 +74,18 @@ func registerHosts(api huma.API, _ APIDeps) {
 			if h.OS == "talos" && h.Schematic != "" {
 				params["schematic"] = h.Schematic
 			}
-			encoded, _ := cache.EncodeParams(params)
+			encoded, err := cache.EncodeParams(params)
+			if err != nil {
+				return nil, huma.Error500InternalServerError("encode params", err)
+			}
 			if err := hardware.SetAssignment(in.MAC, h.OS, "", encoded); err != nil {
 				return nil, huma.Error500InternalServerError("assign", err)
 			}
 		}
-		updated, _ := hardware.GetMacAddress(in.MAC)
+		updated, err := hardware.GetMacAddress(in.MAC)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get updated host", err)
+		}
 		return &struct{ Body *hardware.Host }{Body: updated}, nil
 	})
 

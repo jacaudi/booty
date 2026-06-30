@@ -41,8 +41,12 @@ func registerCatalog(api huma.API) {
 	}, func(ctx context.Context, _ *struct{}) (*osOutput, error) {
 		out := &osOutput{}
 		for _, o := range ostype.All() {
+			rp := o.RequiredParams()
+			if rp == nil {
+				rp = []string{}
+			}
 			out.Body.OS = append(out.Body.OS, OSDTO{
-				Name: o.Name(), Family: o.Family().Name, RequiredParams: o.RequiredParams(),
+				Name: o.Name(), Family: o.Family().Name, RequiredParams: rp,
 			})
 		}
 		return out, nil

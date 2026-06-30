@@ -25,6 +25,12 @@ type TargetDTO struct {
 	Enabled    bool              `json:"enabled"`
 }
 
+type listTargetsOutput struct {
+	Body struct {
+		Targets []TargetDTO `json:"targets"`
+	}
+}
+
 func toTargetDTO(t db.Target) TargetDTO {
 	params, _ := cache.DecodeParams(t.Params)
 	return TargetDTO{
@@ -37,24 +43,21 @@ func toTargetDTO(t db.Target) TargetDTO {
 // the /api/v1 group. POST and PATCH are open during the trust window (P10 adds
 // auth). DELETE endpoints are wired but return 403 until authentication lands.
 func registerTargets(api huma.API, deps APIDeps) {
+	trigger := deps.Trigger
+	if trigger == nil {
+		trigger = func() {}
+	}
+
 	// GET /targets
 	huma.Register(api, huma.Operation{
 		OperationID: "list-targets", Method: http.MethodGet, Path: "/targets",
 		Summary: "List cache targets", Tags: []string{"targets"},
-	}, func(ctx context.Context, _ *struct{}) (*struct {
-		Body struct {
-			Targets []TargetDTO `json:"targets"`
-		}
-	}, error) {
+	}, func(ctx context.Context, _ *struct{}) (*listTargetsOutput, error) {
 		list, err := deps.Store.ListTargets()
 		if err != nil {
 			return nil, huma.Error500InternalServerError("list targets", err)
 		}
-		out := &struct {
-			Body struct {
-				Targets []TargetDTO `json:"targets"`
-			}
-		}{}
+		out := &listTargetsOutput{}
 		for _, t := range list {
 			out.Body.Targets = append(out.Body.Targets, toTargetDTO(t))
 		}
@@ -112,9 +115,7 @@ func registerTargets(api huma.API, deps APIDeps) {
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("create target (duplicate?)", err)
 		}
-		if deps.Trigger != nil {
-			deps.Trigger()
-		}
+		trigger()
 		t, err := deps.Store.GetTarget(id)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("read back target", err)
@@ -153,9 +154,7 @@ func registerTargets(api huma.API, deps APIDeps) {
 		if err := deps.Store.UpsertTarget(*t); err != nil {
 			return nil, huma.Error500InternalServerError("update target", err)
 		}
-		if deps.Trigger != nil {
-			deps.Trigger()
-		}
+		trigger()
 		updated, err := deps.Store.GetTarget(in.ID)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("read back target", err)
@@ -201,9 +200,7 @@ func registerTargets(api huma.API, deps APIDeps) {
 		}); err != nil {
 			return nil, huma.Error500InternalServerError("pin version", err)
 		}
-		if deps.Trigger != nil {
-			deps.Trigger()
-		}
+		trigger()
 		return nil, nil
 	})
 

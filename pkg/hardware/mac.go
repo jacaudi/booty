@@ -23,10 +23,10 @@ type Host struct {
 	Hostname     string `json:"hostname"`
 	IP           string `json:"ip"`
 	Booted       string `json:"booted"`
-	IgnitionFile string `json:"ignitionFile,omitempty"` // UNCHANGED
-	OS           string `json:"os,omitempty"`           // UNCHANGED
-	DoInstall    bool   `json:"doInstall,omitempty"`    // UNCHANGED
-	Schematic    string `json:"schematic,omitempty"`    // UNCHANGED
+	IgnitionFile string `json:"ignitionFile,omitempty"`
+	OS           string `json:"os,omitempty"`
+	DoInstall    bool   `json:"doInstall,omitempty"`
+	Schematic    string `json:"schematic,omitempty"`
 
 	Approved       bool   `json:"approved,omitzero"`
 	BootMode       string `json:"bootMode,omitzero"`
