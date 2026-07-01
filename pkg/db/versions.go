@@ -39,6 +39,15 @@ func (s *Store) DeleteTargetVersion(targetID int64, version string) error {
 	return nil
 }
 
+// DeleteTargetVersionByID removes a target_versions row by its primary key.
+// The associated cache_entries row is cascade-deleted (ON DELETE CASCADE). Idempotent.
+func (s *Store) DeleteTargetVersionByID(id int64) error {
+	if _, err := s.db.Exec(`DELETE FROM target_versions WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("db: delete target_version id=%d: %w", id, err)
+	}
+	return nil
+}
+
 // TargetVersionID returns the row id for (targetID, version), or an error
 // wrapping sql.ErrNoRows if the row does not exist.
 func (s *Store) TargetVersionID(targetID int64, version string) (int64, error) {

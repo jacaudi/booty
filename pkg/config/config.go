@@ -43,6 +43,7 @@ const (
 	DatabasePath           = "databasePath"
 	CacheInterval          = "cacheInterval"
 	CacheConcurrency       = "cacheConcurrency"
+	CacheMaxBytes          = "cacheMaxBytes"
 	CoreOSStreamsURL       = "coreOSStreamsURL"
 )
 
@@ -65,6 +66,7 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(TalosFactoryURL, "https://factory.talos.dev")
 	viper.SetDefault(CacheInterval, 5*time.Minute)
 	viper.SetDefault(CacheConcurrency, 4)
+	viper.SetDefault(CacheMaxBytes, int64(0)) // 0 = unlimited (eviction opt-in)
 	viper.SetDefault(CoreOSStreamsURL, "https://builds.coreos.fedoraproject.org/streams/%s.json")
 	viper.SetDefault(FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
 	viper.SetDefault(CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
