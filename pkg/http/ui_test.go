@@ -59,3 +59,17 @@ func TestUIHandler_MissingAssetReturns404(t *testing.T) {
 		t.Fatalf("status = %d, want 404 (missing asset must not serve the SPA shell)", rec.Code)
 	}
 }
+
+func TestUIHandler_DirectoryPathFallsBackToIndex(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newTestUI().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui/assets", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (directory path must serve SPA shell, not a listing or redirect)", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "<!doctype html>") {
+		t.Fatalf("body = %q, want index.html for directory path", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "app.js") {
+		t.Fatalf("body must not contain directory listing content, got %q", rec.Body.String())
+	}
+}

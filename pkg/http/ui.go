@@ -23,7 +23,7 @@ func uiHandler(fsys fs.FS) http.Handler {
 			serveIndex(w, r, fsys)
 			return
 		}
-		if _, err := fs.Stat(fsys, reqPath); err == nil {
+		if info, err := fs.Stat(fsys, reqPath); err == nil && !info.IsDir() {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
