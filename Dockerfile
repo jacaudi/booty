@@ -1,4 +1,12 @@
-### Stage One
+### Stage One: build the web UI (feeds the Go embed below)
+FROM node:lts-alpine AS build-web
+WORKDIR /app
+COPY web/package*.json ./
+RUN npm install
+COPY web/ .
+RUN npm run build
+
+### Stage Two: build the Go binary (embeds the web assets)
 FROM --platform=$BUILDPLATFORM golang:1.26.2-alpine AS build-golang
 
 # Cross-compilation targets. BuildKit/buildx auto-populates TARGETOS/TARGETARCH
@@ -16,21 +24,16 @@ WORKDIR /app
 
 COPY . .
 
+# Bring the built UI in BEFORE `go build` so //go:embed all:dist embeds the real
+# assets, not just the committed .gitkeep. Omitting this yields a green build
+# that serves a 404 UI.
+COPY --from=build-web /app/dist ./web/dist
+
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -o bin/booty -ldflags "-X main.version=$BOOTY_VERSION -X main.timestamp=$BOOTY_TIMESTAMP" ./cmd
-
-
-### Stage Two
-FROM node:lts-alpine AS build-web
-WORKDIR /app
-COPY web/package*.json ./
-RUN npm install
-COPY web/ .
-RUN npm run build
 
 ### Final Stage
 FROM gcr.io/distroless/base-debian12
 
 COPY --from=build-golang /app/bin/booty /
-COPY --from=build-web /app/dist/ /web/dist/
 
 ENTRYPOINT [ "/booty" ]
