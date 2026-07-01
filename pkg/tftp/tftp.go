@@ -8,11 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/j-keck/arping"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/pin/tftp"
 	"github.com/spf13/viper"
@@ -25,6 +27,29 @@ var absDataDir string
 // errPathEscapes is returned by safeJoin when the requested path resolves
 // outside absDataDir (e.g. via "..", absolute paths, or sneaky combinations).
 var errPathEscapes = errors.New("tftp: path escapes dataDir")
+
+// storeMu guards the package-level store handle. Mirrors hardware.SetStore/
+// withRLockedStore discipline exactly: set once at startup from cmd/main.go,
+// read under RLock for each request. Never opens a second DB handle.
+var (
+	storeMu sync.RWMutex
+	tftpDB  *db.Store
+)
+
+// SetStore injects the shared DB store the menu path uses to partition cached
+// versions into in-window vs archived. Wired once at startup from cmd/main.go,
+// mirroring hardware.SetStore. Safe if nil (menu then treats all as in-window).
+func SetStore(s *db.Store) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	tftpDB = s
+}
+
+func currentStore() *db.Store {
+	storeMu.RLock()
+	defer storeMu.RUnlock()
+	return tftpDB
+}
 
 // safeJoin resolves requested against absDataDir and returns an absolute,
 // cleaned path under absDataDir, or errPathEscapes if the result would lie
@@ -132,7 +157,13 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 		case "assigned":
 			toServe = applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
 		case "menu":
-			toServe = renderMenu(cache.ListCached(), viper.GetString(config.ServerIP))
+			var inWindow, archEntries []cache.CacheEntry
+			if s := currentStore(); s != nil {
+				inWindow, archEntries = cache.PartitionCached(s)
+			} else {
+				inWindow = cache.ListCached() // no store: everything in-window (safe default)
+			}
+			toServe = renderMenu(inWindow, archEntries, viper.GetString(config.ServerIP))
 		default: // holding
 			toServe = applyTokens(PXEConfig["holding.ipxe"], map[string]string{
 				"[[server]]":    urlHost,

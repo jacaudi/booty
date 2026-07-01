@@ -97,26 +97,53 @@ func menuSelectionScript(host *hardware.Host, filename, urlHost string) string {
 	return toServe
 }
 
-// renderMenu builds the iPXE menu script for the cached entries. A leading
-// `item retry` is ALWAYS emitted so `choose --default retry` references a real
-// label and an empty cache still produces a valid (loop-only) menu. The item KEY
-// is the cache-relative path <cacheName>/<segment>/<arch>/<version>, which maps
-// directly to the selection-boot filename menu/<key>/boot.ipxe. ASCII only for
-// iPXE-build compatibility. serverIP is the bare server IP (for tftp:// chains).
-func renderMenu(entries []cache.CacheEntry, serverIP string) string {
+// renderMenu builds the iPXE menu script for the partitioned cache entries.
+// inWindow entries appear in the main menu; archived entries (in_window=0) are
+// grouped under a nested "Archived OSes" sub-menu reachable from the main block.
+// A leading `item retry` is ALWAYS emitted so `choose --default retry` has a
+// real target and an empty cache still produces a valid (loop-only) menu.
+// The item KEY is the cache-relative path <cacheName>/<segment>/<arch>/<version>,
+// which maps directly to the selection-boot path menu/<key>/boot.ipxe.
+// ASCII only for iPXE-build compatibility. serverIP is the bare server IP.
+// The invariant is the guarded iseq/goto dispatch shape: nav sentinels use
+// goto-label, boot tuples fall through to the chain command.
+func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
 	var b strings.Builder
 	b.WriteString("#!ipxe\n")
+	b.WriteString(":top\n")
 	b.WriteString("menu Booty - select an image to boot\n")
 	b.WriteString("item retry Wait / retry\n")
-	for _, e := range entries {
+	for _, e := range inWindow {
 		key := e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version
 		b.WriteString("item " + key + " " + menuItemText(e) + "\n")
 	}
+	if len(archived) > 0 {
+		b.WriteString("item archived Archived OSes...\n")
+	}
 	b.WriteString("choose --timeout 300000 --default retry sel || goto retry\n")
-	// A "retry" selection isn't a valid 4-segment tuple, so chaining it hits the
-	// selection branch's holding fallback (which itself re-chains booty.ipxe) —
-	// no special-casing needed, one fewer iPXE command on the unverified surface.
+	// Nav sentinels goto a label; everything else is a 4-segment boot tuple.
+	if len(archived) > 0 {
+		b.WriteString("iseq ${sel} archived && goto archived || goto boot\n")
+	} else {
+		b.WriteString("goto boot\n")
+	}
+	b.WriteString(":boot\n")
 	b.WriteString("chain tftp://" + serverIP + "/menu/${sel}/boot.ipxe || goto retry\n")
+
+	if len(archived) > 0 {
+		b.WriteString(":archived\n")
+		b.WriteString("menu Booty - Archived OSes\n")
+		b.WriteString("item back Back\n")
+		for _, e := range archived {
+			key := e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version
+			b.WriteString("item " + key + " " + menuItemText(e) + "\n")
+		}
+		b.WriteString("choose --timeout 300000 --default back asel || goto top\n")
+		b.WriteString("iseq ${asel} back && goto top || goto bootarchived\n")
+		b.WriteString(":bootarchived\n")
+		b.WriteString("chain tftp://" + serverIP + "/menu/${asel}/boot.ipxe || goto top\n")
+	}
+
 	b.WriteString(":retry\n")
 	b.WriteString("chain tftp://" + serverIP + "/booty.ipxe || shell\n")
 	return b.String()

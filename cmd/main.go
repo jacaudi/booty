@@ -241,6 +241,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	}
 	defer store.Close()
 	hardware.SetStore(store)
+	tftp.SetStore(store)
 
 	if err := hardware.Load(); err != nil {
 		return fmt.Errorf("hardware: %w", err)
