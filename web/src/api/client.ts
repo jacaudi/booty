@@ -2,7 +2,7 @@ import type { Host } from './types'
 
 const BASE = '/api/v1'
 
-async function request<T>(path: string, init?: RequestInit): Promise<T | undefined> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T | undefined> {
   const res = await fetch(`${BASE}${path}`, init)
   if (!res.ok) {
     throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${res.status}`)
