@@ -25,6 +25,7 @@ The v1 roadmap's **P3** bundled three things: a `cache_entries` inventory table 
 - Change retention from **hard-delete-beyond-`retain_n`** to **mark-archived**; reclaim disk with **size-based eviction** of oldest archived-unpinned versions over a byte budget; **pins** and in-window versions are never evicted.
 - `/api/v1/cache`: list (filtered), pin/unpin, scan, and a wired-but-403 delete.
 - An antd **Cache view**, slotted into the P2 nav registry as one entry.
+- Make the **interactive boot menu DB-aware** and group archived versions into a nested **"Archived OSes"** sub-menu (§4.4) — a deliberate, netboot-lab-validated boot/menu-path change.
 
 **Non-goals**
 - **→ P3b:** all signature verification (SHA256 for FCOS, GPG for Flatcar), sidecar fetching, the atomic `temp→verify→rename` download flow, the `re-verify` endpoint, the Cache-view "verified" column, and strict-mode boot fallback. `cache_entries` ships with **`verified`/`verify_err` columns present but always NULL** in P3a.
@@ -74,7 +75,14 @@ Three changes, all on the single coordinator goroutine (preserving the existing 
 
 **Assigned boot is unaffected** (verified): `NewestCached` selects the max version by `CompareVersions`, and an archived version is by definition strictly older than the retained (`in_window`) set, so newest-wins never picks an archived version. Manual (`source='manual'`) versions are always in the desired set → `in_window=1`, never archived.
 
-**Interactive-menu boot changes, by design.** The menu is built from `cache.ListCached()` (`pkg/cache/list.go:30` → `pkg/tftp/tftp.go`), which walks **all** valid version dirs on disk regardless of DB state. Under archive-not-delete, archived versions stay on disk, so **they now appear as selectable menu entries** — and since they still resolve on disk, they boot. **This is the rollback mechanism**: menu-mode is exactly how an operator boots a node back to an archived version. It is accepted and documented behavior, *not* a regression. Consequence: the menu grows as versions archive; with `cacheMaxBytes=0` (eviction off) it grows unbounded. Operators who rely on the menu should set `cacheMaxBytes` (and/or pin the versions they care about) to bound it. P3a deliberately does **not** make the disk-only menu source DB-aware — that touches the just-stabilized boot/menu path (#44) and is out of scope; a future `in_window`/`pinned` menu filter is a possible later refinement.
+**Interactive-menu boot changes, by design — with archived versions grouped into a nested sub-menu.** The menu is built from `cache.ListCached()` (`pkg/cache/list.go:30` → `pkg/tftp/menu.go` `renderMenu`), which walks **all** valid version dirs on disk. Under archive-not-delete, archived versions stay on disk, so they remain **bootable via menu mode — this is the rollback mechanism** (menu-boot a node back to an archived version). Rather than mix them into the main list, P3a makes the menu **DB-aware** and groups them:
+
+- **The menu partitions cached versions by `cache_entries.in_window`.** A disk-present version whose `cache_entries` row has `in_window=0` → the **Archived** group; everything else (in_window=1, or no row yet — graceful default) → the **main** group. Disk stays the source of "what is bootable"; the DB adds the "archived" label.
+- **Main menu:** the in-window versions, then a single **`Archived OSes ▸`** item (rendered **only when at least one archived version exists**), then the existing `retry`/hold item. Selecting `Archived OSes ▸` chains to a second iPXE menu.
+- **Archived sub-menu:** the archived versions (same slash-label → `${sel}` → `.../boot.ipxe` selection mechanism as #44, so an archived pick boots that exact version), plus a **`‹ Back`** item that returns to the main menu.
+- **Implementation:** extend `renderMenu` (`pkg/tftp/menu.go`) to emit the two groups. Prefer a single served script with two `menu`/`choose` blocks and `goto` between them (`Archived OSes ▸` → `goto archived`, `‹ Back` → `goto top`) so there is **no new TFTP endpoint** and no extra round-trip; the exact iPXE is pinned in the plan and **validated live in the netboot lab** (as #44 was). The assigned-boot path and the #44 selection/retry mechanics are untouched.
+
+**Scope note:** this is a deliberate boot/menu-path change (originally scoped out of P3a). It raises P3a's risk surface and **requires a live netboot-lab smoke test** — booting an in-window *and* an archived version through the sub-menu, plus the `‹ Back` and empty-archived (no `Archived OSes` item) cases. Growth of the archived group is still bounded by `cacheMaxBytes`/pins.
 
 ## 5. Config
 
@@ -111,7 +119,9 @@ Reuses the P2 No-Wall seam: one new view file + one `navEntries` entry → nav b
 
 ## 8. Testing
 
-- **Go (TDD):** `cache_entries` store methods (upsert/list-joined/pin/in-window/sum/oldest-archived); the reconciler archive-vs-delete transition (a rotated-out version becomes `in_window=0`, stays on disk); the eviction pass (oldest-archived-unpinned first; pins + in-window protected; budget honored; `0`=no-op); `scan` (size recompute, row repair, orphan reporting); `api_cache` handlers including the 403 delete and filter parsing.
+- **Go (TDD):** `cache_entries` store methods (upsert/list-joined/pin/in-window/sum/oldest-archived); the reconciler archive-vs-delete transition (a rotated-out version becomes `in_window=0`, stays on disk); the eviction pass (oldest-archived-unpinned first; pins + in-window protected; budget honored; `0`=no-op; no-progress guard); `scan` (size recompute, row repair, orphan reporting, `in_window` left untouched); `api_cache` handlers including the 403 delete and filter parsing.
+- **Menu rendering (`pkg/tftp/menu.go`, unit):** `renderMenu` partitions in-window vs archived; the `Archived OSes ▸` item appears only when archived versions exist and is absent otherwise; the archived sub-menu lists archived versions with a `‹ Back` item; the #44 selection/retry mechanics are unchanged for both groups.
+- **Live netboot-lab smoke test** (the un-unit-testable iPXE semantics, as #44 required): boot an **in-window** version from the main menu and an **archived** version through the sub-menu; exercise `‹ Back`; confirm the empty-archived case hides the `Archived OSes` item.
 - **React (Vitest+RTL):** the Cache view renders rows/state tags from mocked data; pin/unpin invoke the right client fn + re-fetch; scan shows the summary; delete is disabled.
 
 ## 9. Principles
@@ -143,8 +153,9 @@ Reuses the P2 No-Wall seam: one new view file + one `navEntries` entry → nav b
 4. Eviction (when `cacheMaxBytes>0` and over budget) removes oldest archived-unpinned first; **never** touches in-window or pinned; `0` = no-op.
 5. `/api/v1/cache` list (filtered) / pin / unpin / scan work; `DELETE` returns 403.
 6. The Cache view shows inventory + derived state with working pin/unpin/scan and a disabled delete; nav is Home · Hosts · Cache · About.
-7. `verified`/`verify_err` remain NULL throughout P3a.
-8. Docs updated per §10; Go `-race` + frontend suites green.
+7. The interactive boot menu groups archived versions under a nested **`Archived OSes ▸`** sub-menu (shown only when archived versions exist), with `‹ Back`; the netboot-lab smoke test boots an in-window and an archived version and passes.
+8. `verified`/`verify_err` remain NULL throughout P3a.
+9. Docs updated per §10; Go `-race` + frontend suites green.
 
 ---
 
