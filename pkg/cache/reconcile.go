@@ -128,7 +128,8 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 	// P3a: rotated-out DISCOVERED versions are ARCHIVED (in_window=0), not deleted
 	// — disk is kept so they stay menu-bootable (rollback); size-based eviction
 	// (evict.go) reclaims oldest archived-unpinned over cacheMaxBytes. Manual rows
-	// are never touched. Only mark rows that are actually cached (have a dir).
+	// are never touched. Mark rotated-out discovered rows archived;
+	// SetCacheInWindow is a no-op when no cache_entries row exists yet.
 	if pruneDiscovered {
 		for _, v := range existing {
 			if v.Source != "discovered" || slices.Contains(retained, v.Version) {

@@ -37,19 +37,31 @@ func newEvictFixture(t *testing.T) *db.Store {
 }
 
 // seedCached creates a target_versions row, the on-disk directory with a
-// kernel-amd64 file of the given size, a cache_entries row (UpsertCacheEntry),
-// and optionally archives it (SetCacheInWindow false). This helper is reused by
-// Task 4's scan test in the same package — keep the interface general.
+// kernel-<arch> file of the given size, a cache_entries row (UpsertCacheEntry),
+// and optionally archives it (SetCacheInWindow false). The on-disk path is
+// derived from the target's own OS/Arch/Params so the disk layout always matches
+// what ListCached() discovers — no hardcoded segment. This helper is reused by
+// the scan and partition tests in the same package — keep the interface general.
 func seedCached(t *testing.T, store *db.Store, tid int64, version string, size int64, inWindow bool) {
 	t.Helper()
+	tgt, err := store.GetTarget(tid)
+	if err != nil {
+		t.Fatalf("seedCached GetTarget(%d): %v", tid, err)
+	}
+	params, err := decodeParams(tgt.Params)
+	if err != nil {
+		t.Fatalf("seedCached decodeParams: %v", err)
+	}
+	cacheName := canonicalToCacheName(tgt.OS)
+	segment := paramSegment(params)
 	if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: version, Source: "discovered", Cached: true}); err != nil {
 		t.Fatal(err)
 	}
-	dir := cacheDir("talos", "schem1", "amd64", version)
+	dir := cacheDir(cacheName, segment, tgt.Arch, version)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "kernel-amd64"), make([]byte, size), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "kernel-"+tgt.Arch), make([]byte, size), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	tvID, err := store.TargetVersionID(tid, version)
@@ -80,6 +92,9 @@ func TestEvictRemovesOldestArchivedUnpinnedOverBudget(t *testing.T) {
 	}
 	if got["v1.10.0"] {
 		t.Fatal("v1.10.0 (oldest archived) must be evicted first")
+	}
+	if got["v1.11.0"] {
+		t.Fatal("v1.11.0 must also be evicted to reach budget")
 	}
 	if !got["v1.13.5"] {
 		t.Fatal("v1.13.5 (in-window) must never be evicted")
@@ -112,7 +127,9 @@ func TestEvictNeverTouchesPinned(t *testing.T) {
 			_ = store.SetCachePinned(r.ID, true) // pin the oldest archived
 		}
 	}
-	_ = evictOverBudget(store, 50) // heavy pressure, but pinned + in-window are protected
+	if err := evictOverBudget(store, 50); err != nil { // heavy pressure, but pinned + in-window are protected
+		t.Fatal(err)
+	}
 	rows, _ = store.ListCacheEntries(db.CacheFilter{})
 	found := false
 	for _, r := range rows {

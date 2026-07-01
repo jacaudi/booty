@@ -33,6 +33,9 @@ describe('CacheView', () => {
     await waitFor(() => screen.getByText('v1'))
     await userEvent.click(screen.getByRole('button', { name: 'Pin' }))
     expect(api.pinCache).toHaveBeenCalledWith(5)
+    // After pin succeeds, the component must reload the list (load() is called
+    // on mount and again after the action completes).
+    await waitFor(() => expect(api.listCache).toHaveBeenCalledTimes(2))
   })
 
   it('scan calls scanCache', async () => {
