@@ -35,4 +35,18 @@ func TestCacheAPIListPinAndDelete403(t *testing.T) {
 	if r := api.Delete(fmt.Sprintf("/api/v1/cache/%d", id)); r.Code != 403 {
 		t.Fatalf("DELETE = %d, want 403", r.Code)
 	}
+
+	// unpin: should return 200 and clear pinned flag
+	if r := api.Post(fmt.Sprintf("/api/v1/cache/%d/unpin", id)); r.Code != 200 {
+		t.Fatalf("unpin = %d: %s", r.Code, r.Body.String())
+	}
+	rows, _ = deps.Store.ListCacheEntries(db.CacheFilter{})
+	if rows[0].Pinned {
+		t.Fatal("unpin endpoint should clear pinned")
+	}
+
+	// scan: should return 200 with a summary body that includes the "scanned" field
+	if r := api.Post("/api/v1/cache/scan"); r.Code != 200 || !strings.Contains(r.Body.String(), `"scanned"`) {
+		t.Fatalf("scan = %d: %s", r.Code, r.Body.String())
+	}
 }

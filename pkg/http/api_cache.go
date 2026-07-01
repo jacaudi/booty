@@ -91,8 +91,11 @@ func registerCache(api huma.API, deps APIDeps) {
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("id must be an integer")
 		}
-		if _, err := deps.Store.GetCacheEntry(n); errors.Is(err, db.ErrNotFound) {
-			return nil, huma.Error404NotFound("cache entry not found")
+		if _, err := deps.Store.GetCacheEntry(n); err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				return nil, huma.Error404NotFound("cache entry not found")
+			}
+			return nil, huma.Error500InternalServerError("get entry", err)
 		}
 		if err := deps.Store.SetCachePinned(n, pinned); err != nil {
 			return nil, huma.Error500InternalServerError("set pinned", err)
