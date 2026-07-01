@@ -123,7 +123,8 @@ than the current `-`).
 
 ## 5. Seeding & the flag-as-default contract — `pkg/cache/seed.go`, `pkg/db`
 
-**[provisional — user AFK, recommended option taken] Flag = first-boot default.**
+**[user-approved 2026-07-01] Flag = first-boot default** — "the JSON was designed
+to be a preseed upon boot and then have the API manage the rest."
 Predefined targets are seeded **create-if-absent**: a new store method
 `EnsureTarget(t)` (`INSERT … ON CONFLICT(os,arch,params) DO NOTHING`) replaces
 `UpsertTarget` in `seedTargets`. Flags populate a predefined row only when it does
@@ -326,7 +327,7 @@ per OS; disk↔DB↔URL derive from `cacheSegments`/`paramSegment` only.
 
 | # | Decision | Recommended-and-taken | Alternative on file |
 |---|----------|----------------------|---------------------|
-| D1 | Seed authority | Flag = first-boot default (create-if-absent; API owns thereafter) | Flag stays authoritative each tick (contradicts issue) |
+| D1 | Seed authority | **USER-APPROVED**: Flag = first-boot default (create-if-absent; API owns thereafter — "preseed upon boot, API manages the rest") | Flag stays authoritative each tick (contradicts issue) |
 | D2 | Migration | In-place params rewrite + disk dir rename | No migration; document one-time re-download (leaves broken `{}` rows) |
 | D3 | Assigned-path channel | `AssignedParams["channel"]` override, else flag (mirrors talos schematic) | Flag only; AssignedParams stays dead for flatcar/fcos |
 | D4 | Retention | Window over discovered ∪ in-window (union) | Document-only (retainN>1 stays useless for flatcar/fcos) |

@@ -56,8 +56,8 @@ booting machines:
 
 ## 3. The verification seam — `pkg/ostype`
 
-**[provisional] Decision: widen `Artifacts` (networked, fallible) and the `Artifact`
-struct, rather than adding a parallel `Verifier` interface.**
+**[user-approved 2026-07-01] Decision: widen `Artifacts` (networked, fallible) and
+the `Artifact` struct, rather than adding a parallel `Verifier` interface.**
 
 ```go
 // Artifact is one downloadable boot file, its upstream URL, and optional
@@ -333,7 +333,7 @@ failure-path upsert, nothing else); layout helpers not forked.
 
 | # | Decision | Recommended-and-taken | Alternative on file |
 |---|----------|----------------------|---------------------|
-| D7 | Verify seam | Widen `Artifacts(ctx,…) ([]Artifact, error)` + Artifact fields (single source of artifact truth) | Parallel optional `Verifier` interface (two filename-agreeing code paths — drift risk) |
+| D7 | Verify seam | **USER-APPROVED**: Widen `Artifacts(ctx,…) ([]Artifact, error)` + Artifact fields (single source of artifact truth) | Parallel optional `Verifier` interface (two filename-agreeing code paths — drift risk) |
 | D8 | Download shape | `config.DownloadStaged` returns `(partialPath, sha256Hex, err)`; `pkg/cache`'s single `landArtifact` helper owns verdict + land/reject + recording (pinned per SGE #4 — a verify-callback `error` return can't express warn's "land but record failure") | Verify callback inside `DownloadFile` (entangles verdict with disposition) |
 | D9 | Strict scope | Admission-only; documented no-retroactive-unserving | DB-aware boot-path filtering (new failure modes in the availability-critical path) |
 | D10 | FCOS old versions | Pattern fallback, NULL verified | Per-build `meta.json` fetch (more upstream surface for a pin-an-old-build edge) |
