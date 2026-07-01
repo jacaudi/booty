@@ -58,17 +58,27 @@ New `pkg/db` store methods (sibling of `pkg/db/versions.go`): `UpsertCacheEntry`
 
 Three changes, all on the single coordinator goroutine (preserving the existing single-writer invariant):
 
-1. **Write `cache_entries` at the `cached` seam.** At `reconcile.go:99` — the `if vg.Wait() == nil` block that already upserts `cached=true` — additionally stat the version's artifact files (`o.Artifacts(...)` → `filepath.Join(dir, a.Filename)`), sum their bytes, and `UpsertCacheEntry{target_version_id, size, fetched_at=now, in_window=1}` (preserving an existing `pinned`; leaving `verified`/`verify_err` NULL). The `cached` boolean write itself is unchanged — this **extends**, it does not reshape.
+1. **Write `cache_entries` at the `cached` seam.** At `reconcile.go:99` — the `if vg.Wait() == nil` block that already upserts `cached=true` — additionally stat the version's artifact files and sum their bytes, then `UpsertCacheEntry{target_version_id, size, fetched_at=now, in_window=1}`. The `cached` boolean write itself is unchanged — this **extends**, it does not reshape.
+   - **File naming:** sum sizes using the **same URL-base derivation `ensureArtifact` uses** (`path.Base(a.URL)` — the file on disk is named from the URL, not from `a.Filename`; `layout.go:53` deliberately single-sources this). Factor a shared `artifactPath(dir, url)` helper so the size-sum and `ensureArtifact` can't drift for a future OS.
+   - **`fetched_at` semantics:** the seam upserts on every tick a version is present, so `fetched_at` means "last confirmed present" (which gives archived rows a sane oldest-first eviction order — they freeze at their last in-window tick).
+   - **`ON CONFLICT(target_version_id) DO UPDATE` set is exactly `size, fetched_at, in_window`** — it must **not** clobber `pinned` (a re-cache preserves an operator pin) nor `verified`/`verify_err` (P3b owns those). Spell these columns out in the plan.
 
 2. **Retention = archive, not delete.** The current out-of-window prune (`reconcile.go:108-120`, `DeleteTargetVersion` + `removeVersionDir`) stops hard-deleting. A cached version that is no longer in the `retain_n` desired set gets `SetCacheInWindow(false)` (archived); its disk artifacts stay. `retain_n` still defines the in-window set.
 
-3. **Eviction pass (new), at the end of each reconcile.** If `cacheMaxBytes > 0` and `SumCacheBytes() > cacheMaxBytes`, delete **oldest archived-unpinned** versions (`ListArchivedUnpinnedByAge`, oldest `fetched_at` first) via the existing `DeleteTargetVersion` (cascades the `cache_entries` row) + `removeVersionDir`, until under budget or none remain. **Never** evict `in_window` or `pinned` rows; if only those remain over budget, **log a WARN and stop** (booty never deletes an in-window or pinned version). Eviction reuses the existing disk-removal helpers.
+3. **Eviction pass (new), at the end of each reconcile** (in `reconcileAll`, on the coordinator). If `cacheMaxBytes > 0` and `SumCacheBytes() > cacheMaxBytes`, delete **oldest archived-unpinned** versions (`ListArchivedUnpinnedByAge`, oldest `fetched_at` first) via the existing `DeleteTargetVersion` (cascades the `cache_entries` row) + `removeVersionDir`, until under budget or none remain. **Never** evict `in_window` or `pinned` rows; if only those remain over budget, **log a WARN and stop** (booty never deletes an in-window or pinned version). Eviction reuses the existing disk-removal helpers.
+   - **No-progress guard:** eviction measures freed bytes from the DB `size` column, so a `size=0` row (e.g. a scan-repaired or pre-size row) would free nothing yet keep the loop deleting. The seam (§4.1) must always write a real summed `size`; additionally, eviction **stops when a deletion frees no measurable bytes** (re-`SumCacheBytes` shows no progress) so it can't over-evict archived rows on bad accounting.
 
 *Known limitation (→ P3b):* `ensureArtifact` still streams directly (no `temp→rename`), so a crash mid-download can leave a truncated file that reads as "present"; P3a's `size` reflects whatever bytes are on disk. Truncation detection needs a checksum and is P3b's concern; `scan` (§6) recomputes sizes but cannot detect truncation in P3a.
 
+### 4.4 Boot-path interaction (assigned vs menu)
+
+**Assigned boot is unaffected** (verified): `NewestCached` selects the max version by `CompareVersions`, and an archived version is by definition strictly older than the retained (`in_window`) set, so newest-wins never picks an archived version. Manual (`source='manual'`) versions are always in the desired set → `in_window=1`, never archived.
+
+**Interactive-menu boot changes, by design.** The menu is built from `cache.ListCached()` (`pkg/cache/list.go:30` → `pkg/tftp/tftp.go`), which walks **all** valid version dirs on disk regardless of DB state. Under archive-not-delete, archived versions stay on disk, so **they now appear as selectable menu entries** — and since they still resolve on disk, they boot. **This is the rollback mechanism**: menu-mode is exactly how an operator boots a node back to an archived version. It is accepted and documented behavior, *not* a regression. Consequence: the menu grows as versions archive; with `cacheMaxBytes=0` (eviction off) it grows unbounded. Operators who rely on the menu should set `cacheMaxBytes` (and/or pin the versions they care about) to bound it. P3a deliberately does **not** make the disk-only menu source DB-aware — that touches the just-stabilized boot/menu path (#44) and is out of scope; a future `in_window`/`pinned` menu filter is a possible later refinement.
+
 ## 5. Config
 
-New key `cacheMaxBytes` (default **`0` = unlimited** — eviction is opt-in; when `0` the eviction pass is a no-op and archived versions accumulate). Follows the existing `Cache*` naming (`cacheInterval`, `cacheConcurrency`) with `viper.SetDefault`.
+New key `cacheMaxBytes` — an **`int64`** (read via `viper.GetInt64`), in **bytes**, default **`0` = unlimited** (eviction is opt-in; when `0` the eviction pass is a no-op and archived versions accumulate). Add the `CacheMaxBytes = "cacheMaxBytes"` const alongside `CacheInterval`/`CacheConcurrency` with `viper.SetDefault`, following the existing `Cache*` naming.
 
 ## 6. API — `pkg/http/api_cache.go` (+ one `registerCache(grp, deps)` line)
 
@@ -87,7 +97,7 @@ CacheEntryDTO { id, os, arch, params, version, size, state, pinned, in_window, f
 `{id}` is the `cache_entries.id`. Non-destructive mutations don't call `deps.Trigger()` (pin/unpin/scan don't fetch); unpin does **not** trigger immediate eviction — the next reconcile pass reclaims (keeps eviction on the coordinator, single-writer).
 
 ### 6.1 `POST /cache/scan` — disk ↔ DB reconciliation
-Runs on the coordinator. For each `target_version` with `cached=1`: stat its version dir, **recompute `size`**, and **repair** a missing `cache_entries` row (upsert with `in_window` reflecting current `retain_n` membership). Version dirs on disk with **no** matching `target_version` are **reported as orphans, not auto-adopted** (adopting would require inventing a target). Returns `{scanned, updated, orphans}`. This is the operator's "resync the inventory to disk truth" button.
+Executes **synchronously via `deps.Store`** from the handler (like the existing targets/hosts mutations — write serialization is `SetMaxOpenConns(1)`, §11, not the coordinator goroutine). For each `target_version` with `cached=1`: stat its version dir and **recompute `size`**; **repair** a missing `cache_entries` row (upsert `size` + `fetched_at`, defaulting `in_window=1`). **Scan does not compute `in_window`** — window membership derives from live discovery (`retentionFor`), which is the reconciler's job, not something scan can know from disk+DB. So scan leaves an existing row's `in_window` untouched and defaults a repaired row to `1`; the next reconcile self-heals it (the prune loop sets rotated-out→archived, the seam sets desired→in-window). Version dirs on disk with **no** matching `target_version` are **reported as orphans, not auto-adopted** (adopting would require inventing a target). Returns `{scanned, updated, orphans}`. This is the operator's "resync the inventory to disk truth" button.
 
 ## 7. Cache view — `web/src/views/CacheView.tsx` (+ `nav.tsx` entry)
 
@@ -115,7 +125,7 @@ Reuses the P2 No-Wall seam: one new view file + one `navEntries` entry → nav b
 
 - `docs/schema/DATABASE.md` — the `cache_entries` table + state model.
 - `docs/schema/API.md` — the `/api/v1/cache` endpoints + trust-window note.
-- `docs/schema/STORAGE.md` — archive-vs-delete retention, size-based eviction, `cacheMaxBytes`.
+- `docs/schema/STORAGE.md` — archive-vs-delete retention, size-based eviction, `cacheMaxBytes`, and the **menu-shows-archived rollback behavior** (§4.4) with the recommendation to set `cacheMaxBytes` when relying on the interactive menu.
 - README/`docs/` — a Cache-view note.
 
 ## 11. Constraints
@@ -123,7 +133,7 @@ Reuses the P2 No-Wall seam: one new view file + one `navEntries` entry → nav b
 - Module path `github.com/jeefy/booty` (unchanged). **PR to `jacaudi/booty`.**
 - Go 1.26, CGO-free (`modernc.org/sqlite`); `log/slog`; Huma v2 for `/api/v1`.
 - Mutating API stays **open** in the trust window; `DELETE /cache/{id}` is **403 until P10**.
-- The reconciler's single-writer (coordinator goroutine) invariant is preserved — all `cache_entries` writes and eviction happen there.
+- **Write serialization is `SetMaxOpenConns(1)`** (`db.go`), not the coordinator goroutine — the coordinator exists to avoid a viper race, and the existing targets/hosts API already writes via `deps.Store` directly from the HTTP goroutine. So: the **reconcile-time writes** (the `cache_entries` seam and the eviction pass) run on the coordinator because they live in `reconcileAll`; the **API mutations** (pin/unpin/scan) write via `deps.Store` from the handler, exactly like `api_targets.go`. Both are safe under the single open connection.
 
 ## 12. Acceptance criteria
 
