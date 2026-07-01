@@ -41,18 +41,28 @@ func CacheURLBase(server, osName, schematic, arch, version string) string {
 	return server + "/data/cache/" + path.Join(cacheSegments(osName, schematic, arch, version)...)
 }
 
+// artifactPath returns the on-disk path an artifact URL resolves to inside dir,
+// using the SAME trailing-path-segment derivation ensureArtifact/DownloadFile
+// use. It is the single source for "where did this URL's bytes land".
+func artifactPath(dir, srcURL string) (string, error) {
+	u, err := url.Parse(srcURL)
+	if err != nil {
+		return "", fmt.Errorf("cache: parse url %q: %w", srcURL, err)
+	}
+	return filepath.Join(dir, path.Base(u.Path)), nil
+}
+
 // ensureArtifact downloads srcURL into dir if not already present (idempotent).
 // The on-disk filename is the URL's trailing path segment (query stripped) —
 // the SAME derivation config.DownloadFile uses — so the existence check and the
 // written file always agree.
 func ensureArtifact(ctx context.Context, dir, srcURL string) error {
-	u, err := url.Parse(srcURL)
+	dst, err := artifactPath(dir, srcURL)
 	if err != nil {
-		return fmt.Errorf("cache: parse url %q: %w", srcURL, err)
+		return err
 	}
-	filename := path.Base(u.Path)
-	if _, err := os.Stat(filepath.Join(dir, filename)); err == nil {
-		slog.Debug("artifact already cached", "file", filepath.Join(dir, filename))
+	if _, err := os.Stat(dst); err == nil {
+		slog.Debug("artifact already cached", "file", dst)
 		return nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {

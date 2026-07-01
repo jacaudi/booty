@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"slices"
 
 	"github.com/jeefy/booty/pkg/db"
@@ -100,21 +101,41 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 			if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: t.ID, Version: version, Source: source, Cached: true}); err != nil {
 				return fmt.Errorf("cache: mark cached %d/%s: %w", t.ID, version, err)
 			}
+			// P3a: write the authoritative cache_entries detail (size, in_window=1)
+			// adjacent to the coarse `cached` boolean, on this same coordinator
+			// goroutine. Sum artifact bytes via the same on-disk derivation
+			// ensureArtifact uses (artifactPath), so disk and DB agree.
+			var size int64
+			for _, a := range o.Artifacts(version, t.Arch, params) {
+				p, perr := artifactPath(dir, a.URL)
+				if perr != nil {
+					continue
+				}
+				if fi, serr := os.Stat(p); serr == nil {
+					size += fi.Size()
+				}
+			}
+			tvID, verr := store.TargetVersionID(t.ID, version)
+			if verr != nil {
+				return fmt.Errorf("cache: resolve tv id %d/%s: %w", t.ID, version, verr)
+			}
+			if err := store.UpsertCacheEntry(tvID, size); err != nil {
+				return fmt.Errorf("cache: upsert cache_entry %d/%s: %w", t.ID, version, err)
+			}
 		}
 	}
 
-	// Prune discovered rows outside the retained set (never manual). Skipped when
-	// discovery failed, so a transient upstream outage does not evict the cache.
+	// P3a: rotated-out DISCOVERED versions are ARCHIVED (in_window=0), not deleted
+	// — disk is kept so they stay menu-bootable (rollback); size-based eviction
+	// (evict.go) reclaims oldest archived-unpinned over cacheMaxBytes. Manual rows
+	// are never touched. Only mark rows that are actually cached (have a dir).
 	if pruneDiscovered {
 		for _, v := range existing {
 			if v.Source != "discovered" || slices.Contains(retained, v.Version) {
 				continue
 			}
-			if err := store.DeleteTargetVersion(t.ID, v.Version); err != nil {
-				return fmt.Errorf("cache: prune row %d/%s: %w", t.ID, v.Version, err)
-			}
-			if err := removeVersionDir(cacheName, segment, t.Arch, v.Version); err != nil {
-				slog.Warn("cache: prune dir failed", "os", t.OS, "version", v.Version, "err", err)
+			if err := store.SetCacheInWindow(v.ID, false); err != nil {
+				return fmt.Errorf("cache: archive %d/%s: %w", t.ID, v.Version, err)
 			}
 		}
 	}

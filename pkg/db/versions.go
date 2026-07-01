@@ -39,6 +39,18 @@ func (s *Store) DeleteTargetVersion(targetID int64, version string) error {
 	return nil
 }
 
+// TargetVersionID returns the row id for (targetID, version), or an error
+// wrapping sql.ErrNoRows if the row does not exist.
+func (s *Store) TargetVersionID(targetID int64, version string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(
+		`SELECT id FROM target_versions WHERE target_id = ? AND version = ?`, targetID, version).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("db: target_version id %d/%s: %w", targetID, version, err)
+	}
+	return id, nil
+}
+
 // ListTargetVersions returns the versions for targetID ordered by id.
 func (s *Store) ListTargetVersions(targetID int64) ([]TargetVersion, error) {
 	rows, err := s.db.Query(
