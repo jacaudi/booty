@@ -138,6 +138,23 @@ func TestApproveAndAssign(t *testing.T) {
 	}
 }
 
+func TestSetBootMode(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.UpsertHost(Host{MAC: "aa:bb:cc:00:00:01", OS: "talos"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.SetBootMode("aa:bb:cc:00:00:01", "menu"); err != nil {
+		t.Fatalf("SetBootMode: %v", err)
+	}
+	h, err := s.GetHost("aa:bb:cc:00:00:01")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if h.BootMode != "menu" {
+		t.Fatalf("BootMode = %q, want menu", h.BootMode)
+	}
+}
+
 func TestPreserveExistingHostBoot(t *testing.T) {
 	s := newTestStore(t)
 	// Pre-existing registered host (has an OS) + a never-configured host.

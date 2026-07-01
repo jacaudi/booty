@@ -347,6 +347,23 @@ func SetAssignment(mac, os, arch, params string) error {
 	return err
 }
 
+// SetBootMode sets boot_mode for the canonicalized mac (e.g. "menu"). Follows
+// SetAssignment's wrapper shape (its own withRLockedStore call) because it takes
+// a second argument, unlike the single-arg Approve/Revoke mutateHost helper.
+func SetBootMode(mac, mode string) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		return st.SetBootMode(key, mode)
+	})
+	if !had {
+		return errors.New("hardware: store not initialized")
+	}
+	return err
+}
+
 // ListHosts returns every registered host (fresh copies).
 func ListHosts() ([]*Host, error) {
 	var out []*Host

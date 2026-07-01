@@ -2,6 +2,7 @@ package http
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/db"
@@ -49,5 +50,35 @@ func TestDeleteHostIs403(t *testing.T) {
 	resp := api.Delete("/api/v1/hosts/aa:bb:cc:00:00:09")
 	if resp.Code != 403 {
 		t.Fatalf("DELETE host = %d, want 403", resp.Code)
+	}
+}
+
+func TestMenuHostSetsMenuMode(t *testing.T) {
+	deps := hostsTestSetup(t)
+	api := newTestAPI(t, deps)
+	if err := hardware.WriteMacAddress("aa:bb:cc:00:00:03", hardware.Host{MAC: "aa:bb:cc:00:00:03", OS: "talos"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:00:00:03/menu", map[string]any{})
+	if resp.Code != 200 {
+		t.Fatalf("menu = %d: %s", resp.Code, resp.Body.String())
+	}
+	h, _ := hardware.GetMacAddress("aa:bb:cc:00:00:03")
+	if !h.Approved || h.BootMode != "menu" {
+		t.Fatalf("after menu: approved=%v bootMode=%q, want approved + menu", h.Approved, h.BootMode)
+	}
+}
+
+func TestMenuHostUnknownMAC404(t *testing.T) {
+	deps := hostsTestSetup(t)
+	api := newTestAPI(t, deps)
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:00:00:ff/menu", map[string]any{})
+	if resp.Code != 404 {
+		t.Fatalf("unknown MAC menu = %d, want 404", resp.Code)
+	}
+	// Verify this is the handler's 404 (huma problem+json with our message), not
+	// a mux catch-all 404 — the latter would not contain "host not found".
+	if !strings.Contains(resp.Body.String(), "host not found") {
+		t.Fatalf("want 'host not found' in 404 body, got: %s", resp.Body.String())
 	}
 }

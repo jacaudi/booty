@@ -126,6 +126,17 @@ func (s *Store) SetAssignment(mac, os, arch, params string) error {
 	return nil
 }
 
+// SetBootMode sets boot_mode for mac (e.g. 'menu'). It touches ONLY boot_mode —
+// not approval or the assigned_* columns. Idempotent; an absent mac is a no-op.
+func (s *Store) SetBootMode(mac, mode string) error {
+	if _, err := s.db.Exec(
+		`UPDATE hosts SET boot_mode = ?, last_seen = datetime('now') WHERE mac = ?`,
+		mode, mac); err != nil {
+		return fmt.Errorf("db: set boot mode %s=%s: %w", mac, mode, err)
+	}
+	return nil
+}
+
 // PreserveExistingHostBoot is a one-time upgrade backfill: it marks every
 // already-registered host (os != '') approved + boot_mode='assigned' +
 // assigned_os=os, so hosts that booted under the pre-P1c (host.OS-driven) path
