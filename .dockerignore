@@ -7,3 +7,5 @@ old/*
 .github/*
 Makefile
 README.md
+web/dist
+web/node_modules

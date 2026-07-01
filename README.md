@@ -118,6 +118,23 @@ version state.
 
 ---
 
+## Management UI
+
+Booty serves a web management UI, embedded in the binary (no separate assets to
+deploy). With Booty running, browse to the server root — `/` redirects to `/ui/`.
+
+The UI is a React + Ant Design single-page app (`web/`). It talks to the
+`/api/v1` surface. Current views:
+
+- **Hosts** — approve or revoke discovered machines, or switch a host to
+  interactive boot-menu mode.
+- **Home / About** — status and build information.
+
+Building the UI is part of the container build; see
+[docs/development.md](docs/development.md) for local development.
+
+---
+
 ## Inspecting state
 
 A few read-only endpoints let you see what booty is doing:

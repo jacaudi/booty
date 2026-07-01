@@ -9,7 +9,11 @@ lerna-debug.log*
 
 node_modules
 .DS_Store
-dist
+dist/*
+!dist/.gitkeep
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
 dist-ssr
 coverage
 *.local

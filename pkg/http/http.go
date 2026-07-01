@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/web"
 	"github.com/spf13/viper"
 )
 
@@ -33,7 +34,12 @@ func StartHTTP(deps APIDeps) *http.Server {
 	myHandler.HandleFunc("/booty.json", handleDataRequest)
 	myHandler.HandleFunc("/info", handleInfoRequest)
 	myHandler.Handle("/data/", http.StripPrefix("/data/", http.FileServer(http.Dir(viper.GetString(config.DataDir)))))
-	myHandler.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.Dir("./web/dist"))))
+	uiFS, err := web.DistFS()
+	if err != nil {
+		slog.Error("ui embed", "err", err)
+		os.Exit(1)
+	}
+	myHandler.Handle("/ui/", http.StripPrefix("/ui/", uiHandler(uiFS)))
 
 	// Mount the typed /api/v1 surface on the same mux (additive).
 	RegisterAPI(myHandler, deps)

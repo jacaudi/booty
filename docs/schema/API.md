@@ -128,6 +128,12 @@ Cache targets represent an (OS, arch, params) tuple that the reconciler discover
 | `PUT` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
 | `DELETE` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
 
+> The management UI (`web/`, served at `/ui/`) consumes these hosts endpoints:
+> `GET /api/v1/hosts`, `POST /api/v1/hosts/{mac}/approve`,
+> `POST /api/v1/hosts/{mac}/revoke`, `POST /api/v1/hosts/{mac}/menu`.
+> `PUT`/`DELETE /api/v1/hosts/{mac}` are wired but return 403 until auth (P10),
+> so the UI exposes no edit/delete actions.
+
 ### Boot dispatch (P1c)
 
 `booty.ipxe` (the TFTP magic file) now dispatches per host state rather than solely by `host.OS`:
