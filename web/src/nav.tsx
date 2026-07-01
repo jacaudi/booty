@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import HomeView from './views/HomeView'
 import HostsView from './views/HostsView'
+import CacheView from './views/CacheView'
 import AboutView from './views/AboutView'
 
 export interface NavEntry {
@@ -14,5 +15,6 @@ export interface NavEntry {
 export const navEntries: NavEntry[] = [
   { path: '/', label: 'Home', element: <HomeView /> },
   { path: '/hosts', label: 'Hosts', element: <HostsView /> },
+  { path: '/cache', label: 'Cache', element: <CacheView /> },
   { path: '/about', label: 'About', element: <AboutView /> },
 ]

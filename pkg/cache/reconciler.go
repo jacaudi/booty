@@ -6,7 +6,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
+	"github.com/spf13/viper"
 )
 
 // Reconciler eagerly caches each target's artifacts. A single coordinator
@@ -105,5 +107,8 @@ func (r *Reconciler) reconcileAll(ctx context.Context) {
 		if err := reconcileTarget(ctx, r.store, r.concurrency, t); err != nil {
 			slog.Warn("cache: reconcile target failed", "os", t.OS, "arch", t.Arch, "target", t.ID, "err", err)
 		}
+	}
+	if err := evictOverBudget(r.store, viper.GetInt64(config.CacheMaxBytes)); err != nil {
+		slog.Error("cache: eviction pass failed", "err", err)
 	}
 }

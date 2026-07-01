@@ -128,6 +128,8 @@ The UI is a React + Ant Design single-page app (`web/`). It talks to the
 
 - **Hosts** — approve or revoke discovered machines, or switch a host to
   interactive boot-menu mode.
+- **Cache** — browse the cache inventory, pin or unpin versions to protect them
+  from eviction, and trigger a manual disk scan.
 - **Home / About** — status and build information.
 
 Building the UI is part of the container build; see

@@ -18,7 +18,7 @@ func TestRenderMenuItemsAndRetry(t *testing.T) {
 		{CacheName: "flatcar", Segment: "-", Arch: "amd64", Version: "3815.2.0"},
 		{CacheName: "talos", Segment: "schemAAAAAAAA", Arch: "amd64", Version: "v1.10.5"},
 	}
-	got := renderMenu(entries, "10.0.0.1")
+	got := renderMenu(entries, nil, "10.0.0.1")
 
 	if !strings.HasPrefix(got, "#!ipxe\n") {
 		t.Errorf("missing shebang: %q", got)
@@ -56,7 +56,7 @@ func TestRenderMenuItemsAndRetry(t *testing.T) {
 }
 
 func TestRenderMenuEmptyCacheIsLoopOnly(t *testing.T) {
-	got := renderMenu(nil, "10.0.0.1")
+	got := renderMenu(nil, nil, "10.0.0.1")
 	if !strings.Contains(got, "item retry ") {
 		t.Errorf("empty menu must still have retry item:\n%s", got)
 	}
@@ -137,6 +137,34 @@ func TestMenuSelectionScript(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRenderMenuNoArchived(t *testing.T) {
+	in := []cache.CacheEntry{{CacheName: "talos", Segment: "-", Arch: "amd64", Version: "v1.13.5"}}
+	s := renderMenu(in, nil, "10.0.0.1")
+	if strings.Contains(s, "Archived OSes") || strings.Contains(s, ":archived") {
+		t.Fatalf("no archived entries must not render the archived group:\n%s", s)
+	}
+	if !strings.Contains(s, "item talos/-/amd64/v1.13.5 ") {
+		t.Fatalf("in-window item line missing:\n%s", s)
+	}
+}
+
+func TestRenderMenuWithArchivedNestsAndBacks(t *testing.T) {
+	in := []cache.CacheEntry{{CacheName: "talos", Segment: "-", Arch: "amd64", Version: "v1.13.5"}}
+	arch := []cache.CacheEntry{{CacheName: "talos", Segment: "-", Arch: "amd64", Version: "v1.12.9"}}
+	s := renderMenu(in, arch, "10.0.0.1")
+	for _, want := range []string{
+		"item archived Archived OSes", // main-menu entry to the sub-menu
+		":archived",                   // sub-menu label
+		"item talos/-/amd64/v1.12.9 ", // archived version item
+		"item back ",                  // back item in the sub-menu
+		"iseq ${sel} archived",        // guarded dispatch to the sub-menu
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("archived render missing %q:\n%s", want, s)
+		}
 	}
 }
 

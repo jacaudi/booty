@@ -1,0 +1,37 @@
+package cache
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/jeefy/booty/pkg/db"
+)
+
+func TestScanRepairsAndReportsOrphans(t *testing.T) {
+	store := newEvictFixture(t) // 3 cached versions with rows + dirs
+	tgts, _ := store.ListTargets()
+	tid := tgts[0].ID
+
+	// 4th cached version: target_version + dir, but NO cache_entries row (missing detail).
+	_ = store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "v1.9.0", Source: "discovered", Cached: true})
+	dir := cacheDir("talos", "schem1", "amd64", "v1.9.0")
+	_ = os.MkdirAll(dir, 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "kernel-amd64"), make([]byte, 42), 0o644)
+
+	// Orphan dir on disk with no target_version.
+	_ = os.MkdirAll(cacheDir("talos", "schem1", "amd64", "v9.9.9"), 0o755)
+
+	before, _ := store.ListCacheEntries(db.CacheFilter{})
+	res, err := Scan(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := store.ListCacheEntries(db.CacheFilter{})
+	if len(after) != len(before)+1 { // repaired the missing v1.9.0 row
+		t.Fatalf("scan should repair the missing row: before %d, after %d", len(before), len(after))
+	}
+	if res.Orphans < 1 {
+		t.Fatalf("scan should report the orphan dir, got %d", res.Orphans)
+	}
+}

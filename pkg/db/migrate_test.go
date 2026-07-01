@@ -13,7 +13,7 @@ func TestMigrate_CreatesTablesAndSetsUserVersion(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	for _, table := range []string{"targets", "target_versions", "meta", "hosts"} {
+	for _, table := range []string{"targets", "target_versions", "meta", "hosts", "cache_entries"} {
 		var name string
 		err := s.db.QueryRow(
 			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table,
@@ -27,8 +27,8 @@ func TestMigrate_CreatesTablesAndSetsUserVersion(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 1 {
-		t.Errorf("user_version = %d, want 1 after one migration", uv)
+	if uv != 2 {
+		t.Errorf("user_version = %d, want 2 after all migrations", uv)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestMigrate_IsIdempotentAcrossReopen(t *testing.T) {
 	if err := s2.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 1 {
-		t.Errorf("user_version = %d after reopen, want 1", uv)
+	if uv != 2 {
+		t.Errorf("user_version = %d after reopen, want 2", uv)
 	}
 }

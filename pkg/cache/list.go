@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/ostype"
 )
 
@@ -121,4 +122,32 @@ func ValidCachedSelection(cacheName, segment, arch, version string) bool {
 		return false
 	}
 	return cacheDirExists(cacheName, segment, arch, version)
+}
+
+// PartitionCached splits the on-disk cache into in-window and archived groups
+// using cache_entries.in_window from the store. A disk entry with no matching
+// row (or in_window=1) is treated as in-window (safe default — never hides a
+// bootable, never mis-archives an in-window). Archived requires an explicit
+// in_window=0 row. Order within each group matches ListCached().
+func PartitionCached(store *db.Store) (inWindow, archived []CacheEntry) {
+	all := ListCached()
+	// Build an archived-tuple set from cache_entries where in_window=0.
+	no := false
+	rows, err := store.ListCacheEntries(db.CacheFilter{InWindow: &no})
+	archivedSet := map[string]bool{}
+	if err == nil {
+		for _, r := range rows {
+			params, _ := decodeParams(r.Params)
+			archivedSet[canonicalToCacheName(r.OS)+"\x00"+paramSegment(params)+"\x00"+r.Arch+"\x00"+r.Version] = true
+		}
+	}
+	for _, e := range all {
+		k := e.CacheName + "\x00" + e.Segment + "\x00" + e.Arch + "\x00" + e.Version
+		if archivedSet[k] {
+			archived = append(archived, e)
+		} else {
+			inWindow = append(inWindow, e)
+		}
+	}
+	return inWindow, archived
 }

@@ -58,7 +58,7 @@ Talos); see [STORAGE.md](STORAGE.md).
 ## SQLite schema (`booty.db`)
 
 Migrations are embedded (`pkg/db/migrations/`) and applied up-only under
-`PRAGMA user_version`. P1a introduces four tables.
+`PRAGMA user_version`. P1a introduces four tables; P3a adds a fifth (`cache_entries`).
 
 ### `targets`
 `id`, `os`, `arch`, `params` (JSON TEXT), `mode` (`discovery`|`manual`),
@@ -73,6 +73,32 @@ Migrations are embedded (`pkg/db/migrations/`) and applied up-only under
 The **reconciler** (P1b) populates `targets` (predefined + host-derived) and `target_versions`
 (`discovered` rows from upstream discovery, retained per `retain_n`; `manual` rows are never
 pruned), and flips `cached` to 1 once a version's artifacts are on disk.
+
+### `cache_entries`
+
+Detailed cache inventory, one row per `target_version`. Added in P3a.
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `id` | INTEGER PK AUTOINCREMENT | Stable row ID used by the API (`/cache/{id}`). |
+| `target_version_id` | INTEGER NOT NULL → `target_versions(id)` **ON DELETE CASCADE** | The version this row describes. `UNIQUE` — one cache row per version. Deleted automatically when its `target_version` is removed. |
+| `size` | INTEGER NOT NULL DEFAULT 0 | Total bytes of all cached artifacts for this version (summed from disk at upsert time). |
+| `fetched_at` | TEXT NOT NULL DEFAULT `datetime('now')` | ISO-8601 timestamp of the last successful cache or size update. Used as the eviction ordering key (oldest first). |
+| `in_window` | INTEGER NOT NULL DEFAULT 1 | `1` = currently in the retention window (in-cycle); `0` = rotated out (archived). Flipped by the reconciler; never by the API. |
+| `pinned` | INTEGER NOT NULL DEFAULT 0 | `1` = operator-pinned; exempt from eviction. Set/cleared via `POST /cache/{id}/pin` and `/unpin`. A pin survives re-caching (upsert never clobbers `pinned`). |
+| `verified` | INTEGER | **NULL in P3a — reserved for P3b** artifact-integrity verification. |
+| `verify_err` | TEXT | **NULL in P3a — reserved for P3b** verification error detail. |
+
+**Derived state model.** The wire API derives a human-readable `state` string from `(in_window, pinned)`:
+
+| `in_window` | `pinned` | `state` string |
+|-------------|----------|----------------|
+| 1 | 0 | `in-cycle` |
+| 1 | 1 | `in-cycle-pinned` |
+| 0 | 0 | `archived` |
+| 0 | 1 | `archived-pinned` |
+
+The `state` string is computed on read; it is not stored. Eviction (`--cacheMaxBytes`) only considers `archived` (unpinned) rows — `in-cycle` and `archived-pinned` rows are never evicted. See [STORAGE.md](STORAGE.md) for eviction semantics.
 
 ### `meta`
 `key` PRIMARY KEY, `value`.

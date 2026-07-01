@@ -33,6 +33,7 @@ var args struct {
 	maxCacheAge         int
 	cacheInterval       time.Duration
 	cacheConcurrency    int
+	cacheMaxBytes       int64
 	httpPort            int
 	flatcarArchitecture string
 	coreOSArchitecture  string
@@ -85,6 +86,12 @@ func init() {
 		"cacheConcurrency",
 		4,
 		"Max concurrent artifact downloads during cache reconcile",
+	)
+	flags.Int64Var(
+		&args.cacheMaxBytes,
+		"cacheMaxBytes",
+		0,
+		"Max cache size in bytes before evicting oldest archived-unpinned versions (0 = unlimited)",
 	)
 
 	flags.StringVar(
@@ -234,6 +241,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	}
 	defer store.Close()
 	hardware.SetStore(store)
+	tftp.SetStore(store)
 
 	if err := hardware.Load(); err != nil {
 		return fmt.Errorf("hardware: %w", err)
