@@ -85,8 +85,11 @@ artifact URLs from the streams JSON `location` fields, killing the drift class.
   pre-migration row can't build a `%!s(MISSING)` URL.
 
 **Channel value validation:** a channel becomes a path segment on disk and in URLs.
-Where targets enter the system (API create in `pkg/http` and `seedTargets`), the
-channel must match `^[a-z0-9][a-z0-9.-]*$` (rejects `..`, `/`, empty). This is the
+Where targets enter the system (API create in `pkg/http`, `seedTargets`, and the §6
+migration's flag value), the channel must match `^[a-z0-9][a-z0-9.-]*$`. Safety
+comes from **single-segment anchoring** — the charset admits no `/` and no leading
+dot, so the value cannot traverse regardless of interior dots (`a..b` is an odd but
+harmless single segment; a literal `..` or empty string is rejected). This is the
 same class of guard the menu path's `containsTraversal` already applies. Talos
 schematics get the same check for free if validation lives beside `RequiredParams`
 presence-checking (single knowledge site: params that become path segments must be
@@ -148,17 +151,29 @@ fail every tick post-#48 (no channel → defensive fallback hides it, but the ro
 duplicates the new one), and existing artifacts under `<os>/-/…` would be orphaned
 and re-downloaded (gigabytes).
 
-**[provisional] One-time Go-side migration**, run at startup before the first
-reconcile (idempotent, keyed on the old shape existing):
+**[provisional] One-time Go-side migration**, run at startup **before the
+reconciler loop starts** (explicitly: before `reconcileAll`, since `seedTargets`
+runs inside it and the in-place rewrite must precede the create-if-absent seed to
+preserve `target_versions`/`cache_entries`). Crash-consistency (SGE #3): the two
+steps are **independently idempotent** — neither keys on the other having run,
+so a crash between them retries the remainder on next startup:
 
-1. For each target `os IN (flatcar, fedora-coreos) AND params='{}'`: rewrite
-   `params` to `{"channel": <current flag value>}` **in place** (`UPDATE targets SET
+1. **DB step** (keyed on the old shape existing): for each target
+   `os IN (flatcar, fedora-coreos) AND params='{}'`: rewrite `params` to
+   `{"channel": <current flag value>}` **in place** (`UPDATE targets SET
    params=?`), preserving the row's `target_versions` and `cache_entries`. If the
    destination params row already exists (operator pre-created one), the old row is
    disabled instead (`enabled=false`) and logged — never silently merged.
-2. Disk: `os.Rename(<cacheRoot>/<os>/-, <cacheRoot>/<os>/<flag-channel>)` per OS
-   root when the source exists and the destination does not; otherwise WARN and
-   leave it (scan reports orphans; reconcile re-downloads — self-healing).
+2. **Disk step** (keyed only on the directories, NOT on the DB shape): on every
+   startup, per OS root: if `<cacheRoot>/<os>/-` exists and
+   `<cacheRoot>/<os>/<flag-channel>` does not, `os.Rename` it; if both exist, WARN
+   and leave `-` (scan reports orphans; reconcile re-downloads — self-healing).
+   Because the disk step never consults `params`, a crash after step 1 cannot
+   strand the `-` dir as a permanent, eviction-invisible disk leak.
+
+The flag value used by both steps passes the same path-safety validation as §3
+(a malformed `--flatcarChannel` fails startup rather than minting an unsafe
+segment).
 
 Rationale for rename-over-redownload: pre-#48, *all* flatcar/fcos caching was the
 flag channel by construction, so the rename is semantically exact when the flag is
@@ -192,6 +207,11 @@ case "flatcar":
 - `hostParams` decodes `host.AssignedParams` (the P1c field, canonical JSON — parsed
   with `cache.DecodeParams`). **This is not new capability:** the field exists and is
   API-populated; #48 stops the flatcar/fcos arms ignoring it. [provisional]
+  *Noted asymmetry (SGE #5):* talos resolves its variant from the typed
+  `host.Schematic` column, while flatcar/fcos read `AssignedParams` JSON — the
+  per-host variant has two representations depending on OS. They are **not** kept
+  in sync; unifying them is a separate consistency task, deliberately out of #48's
+  scope.
 - `bootTokensFor`'s second parameter is the generic *segment* (it already was for the
   menu path); its name/doc updates from `schematic` to `segment`.
 - **`[[coreos-channel]]` is dead**: `coreos.ipxe` sets `${STREAM}` but never uses it.
@@ -215,20 +235,35 @@ known := discovered ∪ {v.Version : v is currently in-window}   // conceptually
 retained = retentionFor(t.OS, known, t.RetainN)
 ```
 
-**"In-window" is load-bearing:** the union draws from versions whose `cache_entries`
-row has `in_window=1` — *not* from all existing `target_versions` rows with
-`Source="discovered"`. Archived rows keep their `target_versions` row (P3a), so a
-source-based union would resurrect archived versions into the window every tick.
-The reconciler therefore needs window state alongside the version list (a joined
-read — e.g. extend `ListTargetVersions` or a sibling accessor; exact query shape is
-a plan decision). A version mid-download when upstream moves on simply drops out
-(it never completed; no resurrection).
+**"In-window AND cached" is load-bearing** (tightened per SGE review): the union
+draws from versions whose `cache_entries` row has `in_window=1` **and** whose
+`target_versions.cached=1` — *not* from all existing `target_versions` rows with
+`Source="discovered"`. Two reasons:
+
+- Archived rows keep their `target_versions` row (P3a), so a source-based union
+  would resurrect archived versions into the window every tick.
+- P3b introduces failure-visibility `cache_entries` rows for versions with **no
+  bytes on disk** (strict-rejected). A bytes-less version must not count as
+  "known" — otherwise, with `retainN=1`, a perpetually-failing new version would
+  displace the last good version into archived state, where **eviction could
+  delete the only servable bytes** (SGE finding #2). The `cached=1` condition is a
+  no-op at #48 time (every in-window entry is cached by construction) and the
+  guard P3b relies on.
+
+The reconciler therefore needs window+cached state alongside the version list (a
+joined read — e.g. extend `ListTargetVersions` or a sibling accessor; exact query
+shape is a plan decision). A version mid-download when upstream moves on simply
+drops out (it never completed; no resurrection).
 
 - **Flatcar/FCOS:** after an upstream release, `retainN=2` keeps the previous
   version in-window (still served as "newest cached" fallback, not just
   menu-bootable archive). History accumulates release by release.
-- **Talos:** no-op — factory `/versions` already returns the full tag history, so
-  the union adds nothing.
+- **Talos:** effectively a no-op — factory `/versions` already returns the full tag
+  history, so the union normally adds nothing. One deliberate edge (SGE #8): if
+  upstream *yanks* a tag that is currently in-window, the union keeps it retained
+  where pre-#48 it would silently drop out. Accepted as intentional resilience —
+  consistent with the existing "discovery failure keeps the existing cached set"
+  posture; the version ages out when newer releases push it past `retainN`.
 - **Debian:** no-op (fixed 2-version discovery set).
 - Evicted versions cannot resurrect: eviction deletes the `target_versions` row, so
   they are no longer "known".

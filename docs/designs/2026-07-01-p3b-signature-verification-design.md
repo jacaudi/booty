@@ -100,6 +100,12 @@ Per-OS behavior:
   Otherwise (manually pinned older version): **pattern fallback** (dot-form
   filenames, no SHA256 → verified NULL for that version) — recorded as a documented
   limitation rather than chasing per-build `meta.json` in v1.
+  *Fetch dedupe (SGE #6):* the streams document is channel-scoped and identical for
+  every version of a target, so it is fetched **at most once per channel per
+  reconcile pass**, not once per version — a short-TTL memoization inside the FCOS
+  driver (mutex-guarded: reverify calls arrive on the API goroutine, not only the
+  coordinator). Mechanism detail is a plan decision; the at-most-once requirement
+  is design.
 - **flatcar.Artifacts** stays offline: same two artifact URLs, plus
   `SigURL: url + ".sig"`, `GPGKey: flatcarKeyring` — an `//go:embed`ed armored
   public key (`pkg/ostype/keys/flatcar.asc`), provenance-commented with the key
@@ -108,21 +114,28 @@ Per-OS behavior:
 
 ## 4. Download pipeline — `pkg/config`, `pkg/cache`
 
-`config.DownloadFile` gains staged semantics (its only caller is
-`cache.ensureArtifact`):
+`config.DownloadFile` is reworked into staged semantics — `config.DownloadStaged`
+(its only caller is `cache.ensureArtifact`; whether the old name remains as a thin
+wrapper or disappears is a plan-time subtraction decision):
 
 1. Stream to `<dst>.partial` in the destination directory (same filesystem →
    `os.Rename` is atomic), computing SHA-256 **while streaming** (`io.TeeReader`
    into the hasher — no second disk read).
 2. On transport error / non-2xx / short write: delete `.partial`, return error
    (behavior today, minus the poisoned final file).
-3. Hand `(partialPath, gotSHA256)` back to the caller for the verification step;
-   rename to the final name only after the caller's verdict. Concretely
-   [shape finalized at plan time]: `DownloadFile(ctx, destDir, rawURL string,
-   verify func(path string, sha256Hex string) error) error` — `verify == nil` means
-   rename immediately (talos/debian and `--signaturePolicy off`).
+3. Hand `(partialPath, gotSHA256)` back to the caller; the caller owns verdict,
+   land/reject and recording. **Shape pinned per SGE #4** (a single `error`-return
+   verify callback entangles verdict with disposition: `warn` must land the bytes
+   *and* record the failure, which an `error` return cannot express without a side
+   channel): `config.DownloadStaged(ctx, destDir, rawURL string) (partialPath,
+   sha256Hex string, err error)`. `pkg/config` owns staging + transport + hashing
+   mechanics only; `pkg/cache` owns everything after — one `landArtifact` helper
+   verifies per policy, then `os.Rename`s or deletes the partial and records the
+   verdict. The "caller could forget rename" risk (old D8 concern) is contained:
+   `ensureArtifact` is the single caller and the rename lives inside the one
+   helper.
 
-`cache.ensureArtifact` builds the verifier closure from the `Artifact` + policy:
+`cache.ensureArtifact`/`landArtifact` evaluate the `Artifact` + policy:
 
 - `SHA256` set → compare against the streamed hash (constant-time not required;
   equality on hex strings).
@@ -130,8 +143,9 @@ Per-OS behavior:
   detached signature over the `.partial` file with
   `openpgp.CheckDetachedSignature` (ProtonMail/go-crypto, CGO-free) against
   `GPGKey`.
-- Verdict handling is **policy-scoped** (see §5) — the closure returns
-  "hard fail" only when the policy says the bytes must not land.
+- Verdict and disposition are computed separately: verify yields pass/fail/not-verifiable;
+  the policy (§5) decides land vs reject; the recording (§5 aggregation) always
+  happens. No entanglement.
 
 Housekeeping:
 
@@ -158,7 +172,7 @@ Per (verifiable) artifact:
 |--------|-------------|------|------|
 | `off`  | no          | rename; `verified` untouched (NULL) | — |
 | `warn` | yes         | rename | **rename anyway**; WARN log; `verified=0`, `verify_err` |
-| `strict` | yes       | rename | **delete `.partial`, artifact never lands**; ERROR log; `verified=0`, `verify_err` |
+| `strict` | yes       | rename | **delete `.partial`, artifact never lands** — and the whole version dir is removed (§6, version atomicity); ERROR log; `verified=0`, `verify_err` |
 
 Non-verifiable artifacts (talos, debian, FCOS pattern-fallback versions): always
 rename (atomicity still applies); `verified` stays NULL = "no verdict". NULL is
@@ -178,17 +192,33 @@ preserved).
 
 **Failure visibility in strict mode:** when artifacts are rejected the version never
 becomes `cached=1`, but the operator must see *why* FCOS "won't cache". The reconcile
-failure path upserts the `cache_entries` row anyway (size = bytes actually on disk,
-likely 0) and sets `verified=0`/`verify_err`. The Cache view then shows an in-window,
-uncached, failed row instead of silence.
+failure path writes a `cache_entries` row with **`in_window=0`** (size 0 after the
+§6 dir removal) and sets `verified=0`/`verify_err`. `in_window=0` is deliberate
+(SGE #2): a bytes-less rejected version is not a servable window member, must not
+join #48's retention union (which counts only in-window **cached** versions —
+belt-and-braces on both sides), and must not shelter behind window-protection while
+eviction pressure deletes real archived bytes. Note `UpsertCacheEntry` hardcodes
+`in_window=1`, so the failure path needs its own write (e.g.
+`UpsertCacheEntryArchived` or upsert + `SetCacheInWindow(false)` — plan decides).
+The Cache view shows an archived, failed row with the error tooltip instead of
+silence.
 
 ## 6. Serving semantics — the only boot-adjacent piece
 
-**[provisional] Strict gates admission, not serving.** In `strict`, a failed version's
-artifacts never land on disk, so `NewestCached` (disk-scan) naturally selects the
-prior cached version — §2.9's "fallback to prior cached version, or refuse if none"
-falls out with **zero boot-path changes** (an incomplete/absent dir already
+**[provisional] Strict gates admission, not serving.** In `strict`, a rejected
+version's artifacts never land on disk, so `NewestCached` (disk-scan) naturally
+selects the prior cached version — §2.9's "fallback to prior cached version, or
+refuse if none" falls out with **zero boot-path changes** (an absent dir already
 reproduces the pre-first-sync 404 for "refuse if none").
+
+**Version-level atomicity in strict (SGE #1):** per-file staging alone is not
+enough — FCOS has three artifacts; if the rootfs fails after kernel+initramfs
+already renamed into place, the version *directory* exists and `NewestCached`
+(which keys on dir presence, not completeness) would select the broken newer
+version and 404 the boot. Therefore in `strict`, when **any** artifact of a
+version is rejected, the reconciler removes the whole version directory
+(`removeVersionDir` — already exists) after the errgroup settles. The dir is
+absent → fallback is clean. `warn`/`off` are unaffected (everything lands).
 
 Documented limitation: bytes cached under `warn`/`off` that *later* fail (operator
 flips to `strict`, or a reverify fails) remain servable — booty does not
@@ -270,6 +300,10 @@ talhelper 84MB cautionary tale on file for P6).
 - `docs/schema/STORAGE.md`: `.partial` staging, atomicity, sweep.
 - `docs/CONFIGURATION.md`: `--signaturePolicy` (values, default `warn`, strict
   semantics + admission-only limitation, Talos/Debian NULL, FCOS provenance note).
+  **Prominent expectation-setting (SGE #7):** `strict` means "verifiable artifacts
+  that fail verification do not land" — it does **not** refuse OSes or versions
+  that have no verification mechanism (Talos, Debian, FCOS pattern-fallback pins);
+  those land with `verified=NULL` under every policy.
 - `README.md`: one line in the feature list (verification exists, default warn).
 
 ## 12. Constraints (unchanged project invariants)
@@ -300,7 +334,7 @@ failure-path upsert, nothing else); layout helpers not forked.
 | # | Decision | Recommended-and-taken | Alternative on file |
 |---|----------|----------------------|---------------------|
 | D7 | Verify seam | Widen `Artifacts(ctx,…) ([]Artifact, error)` + Artifact fields (single source of artifact truth) | Parallel optional `Verifier` interface (two filename-agreeing code paths — drift risk) |
-| D8 | Download shape | Staged `.partial` + verify callback in `DownloadFile` (single caller) | Two-step `DownloadStaged`/rename API (caller could forget rename) |
+| D8 | Download shape | `config.DownloadStaged` returns `(partialPath, sha256Hex, err)`; `pkg/cache`'s single `landArtifact` helper owns verdict + land/reject + recording (pinned per SGE #4 — a verify-callback `error` return can't express warn's "land but record failure") | Verify callback inside `DownloadFile` (entangles verdict with disposition) |
 | D9 | Strict scope | Admission-only; documented no-retroactive-unserving | DB-aware boot-path filtering (new failure modes in the availability-critical path) |
 | D10 | FCOS old versions | Pattern fallback, NULL verified | Per-build `meta.json` fetch (more upstream surface for a pin-an-old-build edge) |
 | D11 | Reverify vs `off` | Explicit ask always verifies | Honor `off` (makes the button a no-op) |
