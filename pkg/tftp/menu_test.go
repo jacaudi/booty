@@ -35,7 +35,7 @@ func TestRenderMenuItemsAndRetry(t *testing.T) {
 		t.Errorf("missing talos item key:\n%s", got)
 	}
 	// choose line governs default + timeout (spec-required)
-	if !strings.Contains(got, "choose --timeout 60000 --default retry sel || goto retry") {
+	if !strings.Contains(got, "choose --timeout 300000 --default retry sel || goto retry") {
 		t.Errorf("missing or wrong choose line:\n%s", got)
 	}
 	// selection chains to the synthetic menu path

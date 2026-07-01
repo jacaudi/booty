@@ -144,7 +144,7 @@ item retry                            Wait / retry
 item flatcar/-/amd64/3815.2.0         Flatcar 3815.2.0 (amd64)
 item talos/<schematic>/amd64/1.7.0    Talos 1.7.0 (amd64) [<schematic-prefix>]
 ...
-choose --timeout 60000 --default retry sel || goto retry
+choose --timeout 300000 --default retry sel || goto retry
 chain tftp://[[server-ip]]/menu/${sel}/boot.ipxe || goto retry
 :retry
 chain tftp://[[server-ip]]/booty.ipxe || shell

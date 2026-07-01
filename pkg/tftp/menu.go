@@ -112,7 +112,7 @@ func renderMenu(entries []cache.CacheEntry, serverIP string) string {
 		key := e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version
 		b.WriteString("item " + key + " " + menuItemText(e) + "\n")
 	}
-	b.WriteString("choose --timeout 60000 --default retry sel || goto retry\n")
+	b.WriteString("choose --timeout 300000 --default retry sel || goto retry\n")
 	// A "retry" selection isn't a valid 4-segment tuple, so chaining it hits the
 	// selection branch's holding fallback (which itself re-chains booty.ipxe) —
 	// no special-casing needed, one fewer iPXE command on the unverified surface.
