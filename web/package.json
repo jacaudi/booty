@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "postbuild": "touch dist/.gitkeep",
     "preview": "vite preview",
     "test": "vitest run"
   },

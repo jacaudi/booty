@@ -14,6 +14,7 @@ describe('App shell', () => {
     // the nav-link assertions to the antd Menu (role="menu") to stay unambiguous.
     expect(screen.getAllByText('Booty').length).toBeGreaterThan(0)
     const menu = screen.getByRole('menu')
+    expect(within(menu).getByRole('link', { name: 'Home' })).toBeInTheDocument()
     expect(within(menu).getByRole('link', { name: 'Hosts' })).toBeInTheDocument()
     expect(within(menu).getByRole('link', { name: 'About' })).toBeInTheDocument()
   })
