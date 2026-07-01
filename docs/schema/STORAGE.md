@@ -70,3 +70,46 @@ cache/talos/376567988ad3…b4ba/amd64/v1.10.1/
   arch. As of P1b the reconciler now **prunes** discovered versions outside that set — a change from
   the retired cron, which cached the same set but never pruned. Manual pins are never pruned. The
   boot path is unaffected (it serves the newest cached version, which is always retained).
+
+## Cache retention, archiving, and eviction (P3a)
+
+### Archive-not-delete
+
+As of P3a, discovered versions that rotate out of the retention window are **archived** rather than
+deleted. Their on-disk artifacts are kept and their `cache_entries` row is marked `in_window=0`
+(state: `archived`). Archived versions remain fully bootable — the interactive boot menu surfaces
+them under a nested **Archived OSes** sub-menu (see below) so operators can roll back to a prior
+release without re-downloading anything. Manual-pinned rows are never touched by the archiver.
+
+### Size-based eviction (`--cacheMaxBytes`)
+
+When `--cacheMaxBytes` is set to a positive value (bytes), the reconciler enforces a disk-usage
+ceiling after each pass. Eviction works oldest-first:
+
+1. Sum total `cache_entries.size` across all rows.
+2. If over budget, evict the oldest **archived, unpinned** row (`fetched_at ASC`): delete its
+   `target_version` row (which cascades to `cache_entries`) and remove its on-disk directory.
+3. Repeat until under budget or no evictable candidates remain.
+
+**In-cycle and pinned versions are never evicted.** If the total exceeds `--cacheMaxBytes` and
+only those rows remain, booty logs a warning and stops — it will not delete versions that are
+either actively in the retention window or operator-pinned.
+
+A no-progress guard halts eviction if a deletion makes no measurable change to the total (guards
+against `size=0` rows causing runaway deletes).
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--cacheMaxBytes` | `0` | Max total cache bytes before evicting oldest archived-unpinned versions. `0` = unlimited (eviction is opt-in). |
+
+> **Recommendation:** if you rely on the Archived OSes boot sub-menu for rollback, set
+> `--cacheMaxBytes` to bound how much disk the archive can consume. Without a limit, every
+> rotated-out version is kept indefinitely.
+
+### Archived OSes boot sub-menu
+
+When any archived versions are present, the interactive iPXE boot menu (served for
+`boot_mode='menu'` hosts) adds a nested **Archived OSes** entry below the main version list.
+Selecting it opens a second menu page containing every archived version across all OS types.
+Choosing an archived version boots it immediately — no re-download, no DB change, fully ephemeral
+(the selection is not written back). This is the primary rollback path.

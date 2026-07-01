@@ -134,6 +134,41 @@ Cache targets represent an (OS, arch, params) tuple that the reconciler discover
 > `PUT`/`DELETE /api/v1/hosts/{mac}` are wired but return 403 until auth (P10),
 > so the UI exposes no edit/delete actions.
 
+### Cache
+
+Cache inventory: the set of on-disk boot artifacts tracked in `cache_entries`. All endpoints are under `/api/v1`.
+
+| Method | Path | Purpose | Response |
+|--------|------|---------|----------|
+| `GET` | `/api/v1/cache` | List cache inventory. Optional filters: `os`, `arch`, `state` (`in-cycle`\|`archived`), `pinned` (`true`\|`false`). | `{"entries":[…]}` |
+| `POST` | `/api/v1/cache/{id}/pin` | Pin a cached version (exempt from eviction). **OPEN.** | cache entry JSON / `404` |
+| `POST` | `/api/v1/cache/{id}/unpin` | Unpin a cached version (eligible for eviction again). **OPEN.** | cache entry JSON / `404` |
+| `POST` | `/api/v1/cache/scan` | Reconcile the cache inventory to disk: recomputes sizes, repairs missing `cache_entries` rows, and counts on-disk version dirs with no matching `target_version`. **OPEN.** | `{"scanned":N,"updated":N,"orphans":N}` |
+| `DELETE` | `/api/v1/cache/{id}` | **403 until auth (P10).** | `403` |
+
+**Cache entry JSON** (`CacheEntryDTO`):
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | integer | `cache_entries.id` — stable row key. |
+| `os` | string | OS taxonomy name (`talos`, `flatcar`, `coreos`). |
+| `arch` | string | Architecture (`amd64`, `arm64`, …). |
+| `params` | object | Decoded target params (e.g. `{"schematic":"…"}` for Talos; `{}` for others). |
+| `version` | string | Version string. |
+| `size` | integer | Cached artifact bytes (summed from disk at last upsert). |
+| `state` | string | Derived: `in-cycle` \| `in-cycle-pinned` \| `archived` \| `archived-pinned`. |
+| `pinned` | bool | Whether this version is operator-pinned. |
+| `inWindow` | bool | Whether this version is currently in the reconciler's retention window. |
+| `fetchedAt` | string | ISO-8601 timestamp of the last successful cache or scan update. |
+
+**Filter notes.** The `state` query parameter maps to `in_window`: `state=in-cycle` returns all rows with `in_window=1` (both `in-cycle` and `in-cycle-pinned`); `state=archived` returns rows with `in_window=0`. To narrow to pinned-only or unpinned-only, combine with `pinned=true` or `pinned=false`. An unrecognised `state` value is silently ignored (no filter applied).
+
+**Scan notes.** `POST /cache/scan` repairs `cache_entries` rows from disk but does **not** recompute `in_window` — window membership requires a live discovery run and is self-healed by the next reconciler tick. Orphans are reported but never auto-adopted.
+
+> The management UI consumes these endpoints:
+> `GET /api/v1/cache`, `POST /api/v1/cache/{id}/pin`, `POST /api/v1/cache/{id}/unpin`,
+> `POST /api/v1/cache/scan`. `DELETE /api/v1/cache/{id}` is wired but returns 403 until auth (P10).
+
 ### Boot dispatch (P1c)
 
 `booty.ipxe` (the TFTP magic file) now dispatches per host state rather than solely by `host.OS`:
