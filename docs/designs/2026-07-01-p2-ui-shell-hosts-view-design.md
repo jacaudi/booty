@@ -77,9 +77,19 @@ the old `HostsView` (the new `Host` model has no such field).
 - New `web/embed.go` (`package web`): `//go:embed all:dist` → `var distFS embed.FS`, with an
   exported accessor returning `fs.Sub(distFS, "dist")`.
 - `pkg/http/http.go` swaps the `/ui/` handler from `http.Dir("./web/dist")` to
-  `http.FS(embedded)`. **Routing is otherwise unchanged**: `/` continues to 302 → `/ui/`
-  (`handleRequest`, `pkg/http/request.go`), and the UI is served under `/ui/`. The Huma
+  serving the embedded FS. **Routing is otherwise unchanged**: `/` continues to 302 → `/ui/`
+  (`handleRequest`, `pkg/http/request.go:17-19`), and the UI is served under `/ui/`. The Huma
   `/api/v1` mount and all legacy routes are untouched.
+- **Inject the `fs.FS`, don't hard-wire the embed.** The `/ui/` handler (including the SPA
+  fallback, §4.3) takes an `fs.FS` argument: production wires the real `web` embed FS; tests
+  inject an in-memory fixture FS containing `index.html` + a dummy asset. This is a genuine
+  present-build testability seam (it makes §9's serving test possible **and** resolves the
+  fact that CI compiles against a stub-only `dist` — see §4.2/§9), not speculative flexibility.
+- **Cache headers (known limitation).** `embed.FS` entries have a zero modtime, so
+  `http.ServeContent` emits no `Last-Modified`/`ETag` and Vite's content-hashed, meant-to-be-
+  immutable assets get revalidated-as-fresh on every load. Optional cheap win: a wrapper
+  setting `Cache-Control: immutable` on `/ui/assets/*`. Acceptable to punt for P2; noted so it
+  isn't a surprise.
 
 ### 4.2 Compile-everywhere (the committed-placeholder decision)
 `//go:embed` requires the embedded directory to exist **at Go compile time**, but `dist` is
@@ -97,9 +107,15 @@ convention) with no "modified index.html" churn.
 
 ### 4.3 SPA client-side routing
 React Router uses **BrowserRouter** with `basename="/ui"`. A small **SPA-fallback** handler
-serves the embedded `index.html` for any `/ui/*` path that does not resolve to a real
-embedded asset, so client routes (`/ui/hosts`, `/ui/about`) deep-link and refresh correctly.
-Vite keeps `base: '/ui/'`.
+serves the embedded `index.html` for unresolved `/ui/*` paths so client routes (`/ui/hosts`,
+`/ui/about`) deep-link and refresh correctly. Vite keeps `base: '/ui/'`.
+
+**Disambiguate missing-asset from client-route** (do not fall back blindly): fall back to
+`index.html` only for **non-asset** requests — path has no file extension, or `Accept`
+includes `text/html`. A genuinely-missing hashed asset (`/ui/assets/app-abc123.js`) must
+return a real **404**, not `200 text/html` — otherwise a broken asset silently serves the SPA
+shell as JS and masks the failure. (Path traversal is a non-issue: `embed.FS`/`io/fs` reject
+`..` and the FS is virtual.)
 
 *(Alternative considered: HashRouter needs zero server-side fallback but yields `/ui/#/hosts`
 URLs. The ~10-line fallback + clean URLs was preferred; this is the only reversible piece if
@@ -107,10 +123,15 @@ it proves troublesome.)*
 
 ### 4.4 Dockerfile
 The node `build-web` stage **stays**, but its `dist` output is copied **into the Go build
-stage before `go build`** so the embed directive picks it up. The **final distroless stage
+stage before `go build`** (`COPY --from=build-web /app/dist ./web/dist`, which makes buildx
+build `build-web` first) so the embed directive picks it up. The **final distroless stage
 drops** `COPY --from=build-web /app/dist /web/dist` — the assets now live inside the binary.
 This is the precise meaning of the roadmap's "drop the `COPY --from` web stage": the web
 build moves *earlier* (to feed embedding), and the final-image web copy is removed.
+
+**Silent-404 trap:** forgetting the `COPY --from=build-web` *into the build stage* yields a
+**green build that embeds only the `.gitkeep` stub and serves a 404 UI**. Guard it with an
+explicit verification step (§12): a running container's `/ui/` must return real HTML, not 404.
 
 ## 5. App shell + nav — the No-Wall seam
 
@@ -144,6 +165,10 @@ renders the routed view). No custom CSS beyond what antd needs — "AntD compone
   - *Approved row* → **Revoke** (`POST …/revoke`) and a **Boot menu** action to flip an
     approved host into menu mode.
   - **No edit / delete** buttons (`PUT`/`DELETE` are 403 until P10).
+- **MAC in the path:** the client must send the colon-bearing MAC as a single path segment
+  without double-encoding (don't `encodeURIComponent` colons to `%3A` expecting the backend to
+  re-normalize). Colons are legal `pchar` and MACs have no slashes, so `ServeMux`/Huma capture
+  the segment fine — just verify the round-trip once during implementation.
 - **States:** antd `Table` `loading` while fetching; errors surfaced via `Alert` / `message`;
   explicit empty state. Mutations **re-fetch** the list (replacing the old buggy optimistic
   local mutation) so the UI always reflects server truth.
@@ -174,7 +199,11 @@ P2 adds **no new API endpoints** (they exist from P1c/#44), so:
 ## 9. Testing
 
 - **Go (TDD, per project convention):** a test for the embed serving + SPA fallback — index
-  served, an asset served, and an unknown `/ui/x` path falls back to `index.html`.
+  served, an asset served, an unknown `/ui/x` route falls back to `index.html`, and a missing
+  `/ui/assets/*` request returns **404** (not the HTML shell). The test injects an **in-memory
+  fixture `fs.FS`** (per the §4.1 seam), so it does not depend on the stub-only `dist` that CI
+  compiles against — resolving the otherwise-contradiction between §4.2 (CI has no real
+  `index.html`) and this test.
 - **React:** **Vitest + React Testing Library** component tests for the Hosts view — renders
   both tables from mocked data; Approve / Revoke / Boot-menu invoke the correct client
   function (fetch mocked); loading and error states render.
@@ -215,6 +244,8 @@ P2 adds **no new API endpoints** (they exist from P1c/#44), so:
 5. The Vue scaffold, `ostreeImage`, and Cypress are **gone**; the nav/route registry and `api/`
    client seams are in place.
 6. Docs updated per §8.
+7. **Container smoke check:** a built image's `/ui/` returns real HTML (guards the §4.4
+   silent-404 trap — a green build that embedded only the stub).
 
 ---
 
