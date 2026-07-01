@@ -79,7 +79,7 @@ As of P3a, discovered versions that rotate out of the retention window are **arc
 deleted. Their on-disk artifacts are kept and their `cache_entries` row is marked `in_window=0`
 (state: `archived`). Archived versions remain fully bootable — the interactive boot menu surfaces
 them under a nested **Archived OSes** sub-menu (see below) so operators can roll back to a prior
-release without re-downloading anything. Manual-pinned rows are never touched by the archiver.
+release without re-downloading anything. Manual rows (source `manual`) are never archived, pinned or not.
 
 ### Size-based eviction (`--cacheMaxBytes`)
 
