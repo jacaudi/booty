@@ -80,3 +80,31 @@ func (s *Store) ListTargetVersions(targetID int64) ([]TargetVersion, error) {
 	}
 	return out, rows.Err()
 }
+
+// ListCachedInWindowVersions returns targetID's versions that are BOTH cached
+// (target_versions.cached=1) AND in-window (cache_entries.in_window=1) — the
+// second input of the #48 retention union. The conditions are load-bearing:
+// a Source-based union would resurrect archived rows every tick, and P3b's
+// bytes-less failure rows (cache_entries without bytes) must never count as
+// "known" or they could displace the last servable version into eviction.
+func (s *Store) ListCachedInWindowVersions(targetID int64) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT tv.version
+		   FROM target_versions tv
+		   JOIN cache_entries ce ON ce.target_version_id = tv.id
+		  WHERE tv.target_id = ? AND tv.cached = 1 AND ce.in_window = 1
+		  ORDER BY tv.id`, targetID)
+	if err != nil {
+		return nil, fmt.Errorf("db: list in-window cached %d: %w", targetID, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("db: scan in-window version: %w", err)
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}

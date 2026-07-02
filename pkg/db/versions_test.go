@@ -71,3 +71,42 @@ func TestTargetVersions_CascadeOnTargetDelete(t *testing.T) {
 		t.Errorf("versions survived target delete: %d (FK cascade not active)", len(got))
 	}
 }
+
+func TestListCachedInWindowVersions(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 2, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := func(version string, cached, inWindow bool) {
+		t.Helper()
+		if err := s.UpsertTargetVersion(TargetVersion{TargetID: id, Version: version, Source: "discovered", Cached: cached}); err != nil {
+			t.Fatal(err)
+		}
+		if cached {
+			tvID, err := s.TargetVersionID(id, version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.UpsertCacheEntry(tvID, 100); err != nil {
+				t.Fatal(err)
+			}
+			if !inWindow {
+				if err := s.SetCacheInWindow(tvID, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	seed("100.0.0", true, true)  // in-window AND cached -> counts
+	seed("99.0.0", true, false)  // archived -> must NOT resurrect
+	seed("98.0.0", false, false) // not cached (mid-download / P3b failure row shape) -> must NOT count
+
+	got, err := s.ListCachedInWindowVersions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "100.0.0" {
+		t.Fatalf("ListCachedInWindowVersions = %v, want [100.0.0] only", got)
+	}
+}
