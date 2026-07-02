@@ -81,6 +81,22 @@ func TestCreateTargetUnsafeParamIs422(t *testing.T) {
 	}
 }
 
+func TestCreateTargetUnexpectedParamIs422(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	// An unrequested key must be rejected: paramSegment gives "schematic"
+	// precedence over "channel", so an extra schematic on a flatcar target
+	// would become an UNVALIDATED path segment (traversal at reconcile time).
+	resp := api.Post("/api/v1/targets", map[string]any{
+		"os": "flatcar", "arch": "amd64",
+		"params": map[string]string{"channel": "beta", "schematic": "../../../etc/pwned"},
+		"mode": "discovery", "retainN": 1,
+	})
+	if resp.Code != 422 {
+		t.Fatalf("unexpected param key = %d, want 422", resp.Code)
+	}
+}
+
 func TestCreateFlatcarTargetRequiresChannel(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)
