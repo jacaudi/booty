@@ -22,8 +22,12 @@ import (
 //  1. DB step (keyed on the old shape existing): every flatcar/fedora-coreos
 //     target with params="{}" has its params rewritten in place to
 //     {"channel": <current flag>}. If the destination (os,arch,params) row
-//     already exists (operator pre-created it), the old row is DISABLED and
-//     logged — never silently merged.
+//     already exists, a PREDEFINED old row is DISABLED and logged — never
+//     silently merged (Predefined flips to false as the one-time
+//     already-handled marker). A non-predefined old-shape row (an operator
+//     created it pre-#48) that collides is left untouched — enabled, params
+//     unrewritten — and WARN-logged every startup until the operator
+//     resolves the collision.
 //  2. Disk step (keyed ONLY on directories, never on DB/params state): per OS
 //     root, if <cacheRoot>/<os>/- exists and <cacheRoot>/<os>/<flag-channel>
 //     does not, rename it; if both exist, WARN and leave "-" (scan reports
@@ -77,6 +81,8 @@ func MigrateChannelLayout(store *db.Store) error {
 			// then re-enabled" are otherwise indistinguishable (D1: API owns rows;
 			// migrate must not re-litigate an operator's later decision).
 			if !t.Predefined {
+				slog.Warn("cache: migrate: destination target exists but pre-#48 row is not predefined; leaving it untouched (disable it via PATCH if unwanted)",
+					"os", t.OS, "arch", t.Arch, "target", t.ID)
 				continue
 			}
 			t.Enabled = false

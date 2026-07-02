@@ -106,6 +106,32 @@ func TestMigrateDisablesOldRowWhenDestinationExists(t *testing.T) {
 	}
 }
 
+func TestMigrateLeavesNonPredefinedOldRowUntouchedWhenDestinationExists(t *testing.T) {
+	// A pre-#48 operator-created row (Params="{}", Predefined=false) that
+	// collides with an existing destination is left ENABLED and un-migrated
+	// (only Predefined-true rows are the migration's own handled-marker), but
+	// must be WARN-logged every startup until the operator resolves it.
+	store := migrateFixture(t)
+	oldID, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: "{}", Mode: "discovery", RetainN: 1, Predefined: false, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 2, Predefined: false, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MigrateChannelLayout(store); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	old, err := store.GetTarget(oldID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !old.Enabled || old.Params != "{}" {
+		t.Fatalf("non-predefined old row must be left untouched (still enabled, params unchanged): %+v", old)
+	}
+}
+
 func TestMigrateRenamesDashDirOnce(t *testing.T) {
 	store := migrateFixture(t)
 	root := cacheRoot()
