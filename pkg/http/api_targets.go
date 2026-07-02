@@ -100,8 +100,15 @@ func registerTargets(api huma.API, deps APIDeps) {
 			return nil, huma.Error422UnprocessableEntity("unknown OS " + in.Body.OS)
 		}
 		for _, p := range o.RequiredParams() {
-			if in.Body.Params[p] == "" {
+			v := in.Body.Params[p]
+			if v == "" {
 				return nil, huma.Error422UnprocessableEntity("missing required param: " + p)
+			}
+			// Required params are the path-discriminating ones (schematic/
+			// channel): they become cache dir + URL segments, so they must
+			// be path-safe (#48 §3).
+			if err := cache.ValidatePathParam(v); err != nil {
+				return nil, huma.Error422UnprocessableEntity("invalid param "+p, err)
 			}
 		}
 		encoded, err := cache.EncodeParams(in.Body.Params)
