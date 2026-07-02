@@ -34,11 +34,10 @@ func init() {
 	echo Hello from Booty!
 	set BASEURL [[coreos-baseurl]]
 	set CONFIGURL http://[[server]]/ignition.json
-	set STREAM [[coreos-channel]]
 	set VERSION [[coreos-version]]
 	set ARCH [[coreos-arch]]
 
-	kernel ${BASEURL}/fedora-coreos-${VERSION}-live-kernel-${ARCH} enforcing=0 initrd=main coreos.live.rootfs_url=${BASEURL}/fedora-coreos-${VERSION}-live-rootfs.${ARCH}.img ignition.firstboot ignition.platform.id=metal ignition.firstboot=1 ignition.config.url=${CONFIGURL}
+	kernel ${BASEURL}/fedora-coreos-${VERSION}-live-kernel.${ARCH} enforcing=0 initrd=main coreos.live.rootfs_url=${BASEURL}/fedora-coreos-${VERSION}-live-rootfs.${ARCH}.img ignition.firstboot ignition.platform.id=metal ignition.firstboot=1 ignition.config.url=${CONFIGURL}
 	initrd --name main ${BASEURL}/fedora-coreos-${VERSION}-live-initramfs.${ARCH}.img
 	boot`
 
