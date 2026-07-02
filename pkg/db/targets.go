@@ -73,6 +73,19 @@ func (s *Store) CreateTarget(t Target) (int64, error) {
 	return id, nil
 }
 
+// UpdateTargetParams rewrites a target's params IN PLACE by row id, preserving
+// its target_versions/cache_entries (row identity is unchanged). Used only by
+// the one-time #48 channel migration. The caller must pass the canonical
+// encoding and a path-safe value.
+func (s *Store) UpdateTargetParams(id int64, params string) error {
+	if _, err := s.db.Exec(
+		`UPDATE targets SET params = ?, updated_at = datetime('now') WHERE id = ?`,
+		params, id); err != nil {
+		return fmt.Errorf("db: update target params id=%d: %w", id, err)
+	}
+	return nil
+}
+
 // GetTarget returns the target with id, or sql.ErrNoRows if none.
 func (s *Store) GetTarget(id int64) (*Target, error) {
 	var t Target
