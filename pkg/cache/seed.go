@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 
@@ -10,55 +11,73 @@ import (
 	"github.com/spf13/viper"
 )
 
-// seedTargets upserts the predefined targets (Flatcar, Fedora CoreOS, Talos) and
-// one Talos target per distinct schematic configured on a registered Talos host,
-// preserving the old cron's talosSchematics() behavior. It runs every tick;
-// UpsertTarget makes it idempotent. Params use the canonical encoder so equal
-// param sets collide on UNIQUE(os,arch,params). Host schematics are read from
-// the same store (the reconciler's store IS the host store in production), so
-// seed.go has no pkg/hardware dependency.
+// seedTargets creates the predefined targets (Flatcar, Fedora CoreOS, Talos)
+// and one Talos target per distinct host-configured schematic — CREATE-IF-ABSENT
+// (#48 D1): flags are first-boot defaults; once a row exists the API owns
+// mode/retain_n/enabled and seed never touches it again. Changing a channel
+// flag later therefore creates a NEW predefined target for the new channel
+// (params are row identity); the old one stays until disabled via PATCH.
+// Flag values that become path segments are validated before any row is
+// written. It runs every tick; EnsureTarget makes it idempotent.
 //
 // ponytail: host-derived rows are NOT pruned when a host is later deleted — a
 // stale talos schematic target keeps caching until restart. Acceptable for P1b
 // (it only over-caches); add deletion-driven pruning when the host API lands
 // (P1c) if it matters.
 func seedTargets(store *db.Store) error {
-	predefined := []db.Target{
-		{OS: "flatcar", Arch: viper.GetString(config.FlatcarArchitecture), Params: "{}", Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true},
-		{OS: "fedora-coreos", Arch: viper.GetString(config.CoreOSArchitecture), Params: "{}", Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true},
-	}
-	talosArch := viper.GetString(config.TalosArchitecture)
-	talosRetain := viper.GetInt(config.TalosRetainMinors)
+	flatcarChannel := viper.GetString(config.FlatcarChannel)
+	coreosChannel := viper.GetString(config.CoreOSChannel)
 	defaultSchematic := viper.GetString(config.TalosSchematic)
+	for _, v := range []string{flatcarChannel, coreosChannel, defaultSchematic} {
+		if err := ValidatePathParam(v); err != nil {
+			return fmt.Errorf("cache: seed: %w", err)
+		}
+	}
 
+	flatcarParams, err := encodeParams(map[string]string{"channel": flatcarChannel})
+	if err != nil {
+		return fmt.Errorf("cache: encode params: %w", err)
+	}
+	coreosParams, err := encodeParams(map[string]string{"channel": coreosChannel})
+	if err != nil {
+		return fmt.Errorf("cache: encode params: %w", err)
+	}
 	defParams, err := encodeParams(map[string]string{"schematic": defaultSchematic})
 	if err != nil {
 		return fmt.Errorf("cache: encode params: %w", err)
 	}
-	predefined = append(predefined, db.Target{
-		OS: "talos", Arch: talosArch, Params: defParams, Mode: "discovery",
-		RetainN: talosRetain, Predefined: true, Enabled: true,
-	})
 
+	talosArch := viper.GetString(config.TalosArchitecture)
+	predefined := []db.Target{
+		{OS: "flatcar", Arch: viper.GetString(config.FlatcarArchitecture), Params: flatcarParams, Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true},
+		{OS: "fedora-coreos", Arch: viper.GetString(config.CoreOSArchitecture), Params: coreosParams, Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true},
+		{OS: "talos", Arch: talosArch, Params: defParams, Mode: "discovery", RetainN: viper.GetInt(config.TalosRetainMinors), Predefined: true, Enabled: true},
+	}
 	for _, t := range predefined {
-		if err := store.UpsertTarget(t); err != nil {
+		if err := store.EnsureTarget(t); err != nil {
 			return fmt.Errorf("cache: seed predefined %s: %w", t.OS, err)
 		}
 	}
 
 	// Host-derived Talos schematics (predefined=false), excluding the default.
+	// A host-supplied schematic also becomes a path segment: an invalid one is
+	// skipped with a warning (data problem — must not block predefined seeding).
 	schematics, err := hostTalosSchematics(store, defaultSchematic)
 	if err != nil {
 		return fmt.Errorf("cache: read host schematics: %w", err)
 	}
 	for _, schematic := range schematics {
+		if err := ValidatePathParam(schematic); err != nil {
+			slog.Warn("cache: skipping host schematic (not path-safe)", "schematic", schematic, "err", err)
+			continue
+		}
 		params, err := encodeParams(map[string]string{"schematic": schematic})
 		if err != nil {
 			return fmt.Errorf("cache: encode params: %w", err)
 		}
-		if err := store.UpsertTarget(db.Target{
+		if err := store.EnsureTarget(db.Target{
 			OS: "talos", Arch: talosArch, Params: params, Mode: "discovery",
-			RetainN: talosRetain, Predefined: false, Enabled: true,
+			RetainN: viper.GetInt(config.TalosRetainMinors), Predefined: false, Enabled: true,
 		}); err != nil {
 			return fmt.Errorf("cache: seed host schematic %s: %w", schematic, err)
 		}
