@@ -58,7 +58,24 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		if derr != nil {
 			slog.Warn("cache: discovery failed; keeping existing cached set", "os", t.OS, "target", t.ID, "err", derr)
 		} else {
-			retained = retentionFor(t.OS, discovered, t.RetainN)
+			// #48 §8: the retention window ranges over discovered ∪ (in-window
+			// AND cached), so single-version-discovery OSes (flatcar/fcos)
+			// accumulate history release-by-release under retainN>1. The
+			// in-window+cached source (never Source="discovered" rows) keeps
+			// archived versions from resurrecting, and is the guard P3b's
+			// bytes-less failure rows rely on. Evicted versions cannot return:
+			// eviction deletes the target_versions row entirely.
+			inWindow, werr := store.ListCachedInWindowVersions(t.ID)
+			if werr != nil {
+				return fmt.Errorf("cache: list in-window %d: %w", t.ID, werr)
+			}
+			known := slices.Clone(discovered)
+			for _, v := range inWindow {
+				if !slices.Contains(known, v) {
+					known = append(known, v)
+				}
+			}
+			retained = retentionFor(t.OS, known, t.RetainN)
 			pruneDiscovered = true
 		}
 	}
