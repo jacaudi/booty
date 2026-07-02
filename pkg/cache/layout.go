@@ -118,18 +118,19 @@ func paramSegment(params map[string]string) string {
 }
 
 // pathParamRE admits single-segment path-safe values: lowercase alnum start,
-// then alnum/dot/dash. No "/", no leading dot — so a value can never traverse
-// out of its cache segment ("a..b" is an odd but harmless single segment; a
-// literal ".." or "" is rejected).
-var pathParamRE = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*$`)
+// then alnum/dot/dash/underscore. No "/", no leading dot — so a value can
+// never traverse out of its cache segment ("a..b" is an odd but harmless
+// single segment; a literal ".." or "" is rejected).
+var pathParamRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// ValidatePathParam rejects a param value that cannot safely become the
-// path-discriminating cache segment (disk dir + URL). Single knowledge site
-// for "params that become path segments must be path-safe": the API create
-// handler, seedTargets, and the startup migration all call it.
+// ValidatePathParam rejects a value that cannot safely become a cache path
+// segment (disk dir + URL). Single knowledge site for "values that become
+// path segments must be path-safe": it guards ALL such values — params
+// (schematic/channel) AND arch — and is called by the API create handler,
+// seedTargets, and the startup migration.
 func ValidatePathParam(v string) error {
 	if !pathParamRE.MatchString(v) {
-		return fmt.Errorf("cache: param value %q is not path-safe (must match %s)", v, pathParamRE)
+		return fmt.Errorf("cache: value %q is not path-safe (must match %s)", v, pathParamRE)
 	}
 	return nil
 }

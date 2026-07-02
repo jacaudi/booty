@@ -51,6 +51,10 @@ func MigrateChannelLayout(store *db.Store) error {
 	if err != nil {
 		return fmt.Errorf("cache: migrate list targets: %w", err)
 	}
+	// Safety backstop: this index is keyed on the rewrite's distinct (os,arch)
+	// pairs, so any unforeseen collision this migration didn't anticipate hits
+	// the targets UNIQUE(os,arch,params) constraint on UpdateTargetParams below
+	// and aborts startup, rather than silently corrupting a row.
 	hasParams := map[string]bool{} // "os|arch|params" existence index
 	for _, t := range targets {
 		hasParams[t.OS+"|"+t.Arch+"|"+t.Params] = true
@@ -65,7 +69,18 @@ func MigrateChannelLayout(store *db.Store) error {
 			return fmt.Errorf("cache: migrate encode params: %w", err)
 		}
 		if hasParams[t.OS+"|"+t.Arch+"|"+newParams] {
+			// Predefined is the one-time "already handled this collision" marker:
+			// flipped false the first time this branch disables a row, so later
+			// startups skip silently even after an operator re-enables the row via
+			// PATCH (which never touches Predefined) — Enabled alone can't carry
+			// this because "never touched, freshly enabled" and "disabled once,
+			// then re-enabled" are otherwise indistinguishable (D1: API owns rows;
+			// migrate must not re-litigate an operator's later decision).
+			if !t.Predefined {
+				continue
+			}
 			t.Enabled = false
+			t.Predefined = false
 			if err := store.UpsertTarget(t); err != nil {
 				return fmt.Errorf("cache: migrate disable old %s row: %w", t.OS, err)
 			}

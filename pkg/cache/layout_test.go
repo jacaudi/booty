@@ -61,13 +61,13 @@ func TestParamSegmentPrecedence(t *testing.T) {
 }
 
 func TestValidatePathParam(t *testing.T) {
-	valid := []string{"stable", "beta", "alpha", "next", "testing", "lts-2024", "3033.2.0", "a.b-c", "a..b"}
+	valid := []string{"stable", "beta", "alpha", "next", "testing", "lts-2024", "3033.2.0", "a.b-c", "a..b", "x86_64", "arm64"}
 	for _, v := range valid {
 		if err := ValidatePathParam(v); err != nil {
 			t.Errorf("ValidatePathParam(%q) = %v, want nil", v, err)
 		}
 	}
-	invalid := []string{"", "..", ".", "a/b", "../etc", ".hidden", "-lead", "UPPER", "sp ace", "a\\b"}
+	invalid := []string{"", "..", ".", "a/b", "../etc", ".hidden", "-lead", "UPPER", "sp ace", "a\\b", "_lead"}
 	for _, v := range invalid {
 		if err := ValidatePathParam(v); err == nil {
 			t.Errorf("ValidatePathParam(%q) = nil, want error", v)

@@ -102,11 +102,25 @@ func TestListCachedInWindowVersions(t *testing.T) {
 	seed("99.0.0", true, false)  // archived -> must NOT resurrect
 	seed("98.0.0", false, false) // not cached (mid-download / P3b failure row shape) -> must NOT count
 
+	// A manual pin, cached and in-window, must NOT consume a window slot: it is
+	// always desired and never archived by the prune loop, so counting it would
+	// only displace a discovered version.
+	if err := s.UpsertTargetVersion(TargetVersion{TargetID: id, Version: "200.0.0", Source: "manual", Cached: true}); err != nil {
+		t.Fatal(err)
+	}
+	manualTvID, err := s.TargetVersionID(id, "200.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertCacheEntry(manualTvID, 100); err != nil {
+		t.Fatal(err)
+	}
+
 	got, err := s.ListCachedInWindowVersions(id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0] != "100.0.0" {
-		t.Fatalf("ListCachedInWindowVersions = %v, want [100.0.0] only", got)
+		t.Fatalf("ListCachedInWindowVersions = %v, want [100.0.0] only (manual pin excluded)", got)
 	}
 }

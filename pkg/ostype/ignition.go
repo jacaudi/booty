@@ -63,6 +63,12 @@ func (flatcar) DiscoverVersions(ctx context.Context, params map[string]string) (
 	return []string{v}, nil
 }
 
+// Artifacts intentionally ignores version: Flatcar release URLs are
+// channel-relative to /current, not version-scoped, so a retained-but-no-
+// longer-advertised version's URL resolves to whatever upstream currently
+// serves. Harmless in practice because ensureArtifact only downloads when
+// the on-disk file is absent — already-cached older versions are never
+// overwritten. P3b replaces this hand-built derivation with streams JSON.
 func (flatcar) Artifacts(version, arch string, params map[string]string) []Artifact {
 	base := flatcarBaseURL(params["channel"])
 	files := []string{"flatcar_production_pxe.vmlinuz", "flatcar_production_pxe_image.cpio.gz"}

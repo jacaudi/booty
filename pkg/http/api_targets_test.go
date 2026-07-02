@@ -97,6 +97,27 @@ func TestCreateTargetUnexpectedParamIs422(t *testing.T) {
 	}
 }
 
+func TestCreateTargetUnsafeArchIs422(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	resp := api.Post("/api/v1/targets", map[string]any{
+		"os": "fedora-coreos", "arch": "../../../../tmp/x",
+		"params": map[string]string{"channel": "stable"},
+		"mode":   "discovery", "retainN": 1,
+	})
+	if resp.Code != 422 {
+		t.Fatalf("traversal arch = %d, want 422 (arch becomes a path segment)", resp.Code)
+	}
+	resp = api.Post("/api/v1/targets", map[string]any{
+		"os": "fedora-coreos", "arch": "x86_64",
+		"params": map[string]string{"channel": "stable"},
+		"mode":   "discovery", "retainN": 1,
+	})
+	if resp.Code != 201 {
+		t.Fatalf("valid arch x86_64 = %d, want 201: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestCreateFlatcarTargetRequiresChannel(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)

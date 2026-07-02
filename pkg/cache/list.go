@@ -17,7 +17,7 @@ import (
 // taxonomy canonical names.
 type CacheEntry struct {
 	CacheName string // on-disk <os> segment: flatcar | coreos | talos
-	Segment   string // schematic, or "-"
+	Segment   string // schematic or channel, or "-"
 	Arch      string
 	Version   string
 }

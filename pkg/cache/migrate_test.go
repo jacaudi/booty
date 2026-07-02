@@ -81,6 +81,29 @@ func TestMigrateDisablesOldRowWhenDestinationExists(t *testing.T) {
 	if old.Enabled || old.Params != "{}" {
 		t.Fatalf("old row must be DISABLED (never merged): %+v", old)
 	}
+
+	// Idempotent: a second run must not re-touch the already-disabled row.
+	if err := MigrateChannelLayout(store); err != nil {
+		t.Fatalf("migrate (2nd): %v", err)
+	}
+	again, _ := store.GetTarget(oldID)
+	if *again != *old {
+		t.Fatalf("second run must leave the disabled row unchanged: %+v vs %+v", again, old)
+	}
+
+	// Operator deliberately re-enables the old row; migrate must respect that
+	// decision (D1: API owns rows) rather than re-disabling it on the next run.
+	old.Enabled = true
+	if err := store.UpsertTarget(*old); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateChannelLayout(store); err != nil {
+		t.Fatalf("migrate (3rd): %v", err)
+	}
+	reenabled, _ := store.GetTarget(oldID)
+	if !reenabled.Enabled {
+		t.Fatalf("operator-re-enabled row must stay ENABLED, migrate must not re-disable it: %+v", reenabled)
+	}
 }
 
 func TestMigrateRenamesDashDirOnce(t *testing.T) {

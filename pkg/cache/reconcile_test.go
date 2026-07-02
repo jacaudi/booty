@@ -287,3 +287,117 @@ func TestReconcileFlatcarRetainOneArchivesAndNeverResurrects(t *testing.T) {
 		}
 	}
 }
+
+// TestReconcileTwoFlatcarChannelsCacheIndependently is the issue #48 acceptance
+// criterion 3 e2e test: two targets for the same OS/arch but different channel
+// params must cache under distinct channel segments and never cross-pollute
+// each other's retention window.
+func TestReconcileTwoFlatcarChannelsCacheIndependently(t *testing.T) {
+	versions := map[string]string{"stable": "100.1.0", "beta": "200.1.0"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var channel string
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/stable/"):
+			channel = "stable"
+		case strings.HasPrefix(r.URL.Path, "/beta/"):
+			channel = "beta"
+		}
+		if strings.HasSuffix(r.URL.Path, "/version.txt") {
+			_, _ = w.Write([]byte("FLATCAR_VERSION=" + versions[channel] + "\n"))
+			return
+		}
+		_, _ = w.Write([]byte("artifact-bytes")) // vmlinuz / cpio.gz
+	}))
+	t.Cleanup(srv.Close)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.FlatcarURL, srv.URL+"/%s/%s")
+	viper.Set(config.FlatcarChannel, "stable")
+	viper.Set(config.FlatcarArchitecture, "amd64")
+	store := newReconcileStore(t)
+
+	stableID, err := store.CreateTarget(db.Target{
+		OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`,
+		Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget stable: %v", err)
+	}
+	betaID, err := store.CreateTarget(db.Target{
+		OS: "flatcar", Arch: "amd64", Params: `{"channel":"beta"}`,
+		Mode: "discovery", RetainN: 1, Predefined: false, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget beta: %v", err)
+	}
+
+	stableTgt, _ := store.GetTarget(stableID)
+	if err := reconcileTarget(t.Context(), store, 4, *stableTgt); err != nil {
+		t.Fatalf("reconcile stable: %v", err)
+	}
+	betaTgt, _ := store.GetTarget(betaID)
+	if err := reconcileTarget(t.Context(), store, 4, *betaTgt); err != nil {
+		t.Fatalf("reconcile beta: %v", err)
+	}
+
+	if !cacheDirExists("flatcar", "stable", "amd64", "100.1.0") {
+		t.Error("stable channel must cache under its own channel segment")
+	}
+	if !cacheDirExists("flatcar", "beta", "amd64", "200.1.0") {
+		t.Error("beta channel must cache under its own channel segment")
+	}
+
+	stableWin, err := store.ListCachedInWindowVersions(stableID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stableWin) != 1 || stableWin[0] != "100.1.0" {
+		t.Errorf("stable target's in-window versions = %v, want [100.1.0] only", stableWin)
+	}
+	betaWin, err := store.ListCachedInWindowVersions(betaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(betaWin) != 1 || betaWin[0] != "200.1.0" {
+		t.Errorf("beta target's in-window versions = %v, want [200.1.0] only", betaWin)
+	}
+}
+
+// TestReconcileManualPinDoesNotDisplaceDiscoveredFromWindow: a manual pin must
+// not consume a retention-window slot — it is always desired and never
+// archived by the prune loop, so it must not displace the discovered current
+// version out of the in-window set (issue final-review item 2).
+func TestReconcileManualPinDoesNotDisplaceDiscoveredFromWindow(t *testing.T) {
+	store, tid, _ := newFlatcarFixture(t, 1)
+	tgt, _ := store.GetTarget(tid)
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "200.0.0", Source: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	tgt, _ = store.GetTarget(tid)
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+
+	inWin, err := store.ListCachedInWindowVersions(tid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inWin) != 1 || inWin[0] != "100.0.0" {
+		t.Fatalf("discovered current must stay in-window despite the manual pin, got %v", inWin)
+	}
+
+	rows, _ := store.ListTargetVersions(tid)
+	var manualCached bool
+	for _, r := range rows {
+		if r.Version == "200.0.0" && r.Source == "manual" && r.Cached {
+			manualCached = true
+		}
+	}
+	if !manualCached {
+		t.Fatal("manual pin 200.0.0 must still be cached")
+	}
+}

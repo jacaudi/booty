@@ -100,6 +100,9 @@ func registerTargets(api huma.API, deps APIDeps) {
 		if !ok {
 			return nil, huma.Error422UnprocessableEntity("unknown OS " + in.Body.OS)
 		}
+		if err := cache.ValidatePathParam(in.Body.Arch); err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid arch", err)
+		}
 		// Reject params keys the OS doesn't declare: paramSegment picks the
 		// path-discriminating segment by fixed key precedence (schematic >
 		// channel), so an unrequested key would become an UNVALIDATED disk/

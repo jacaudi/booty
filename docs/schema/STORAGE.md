@@ -69,7 +69,10 @@ cache/talos/376567988ad3…b4ba/amd64/v1.10.1/
 > run, the renamed artifacts are mislabeled under the wrong channel for one cycle: the reconciler
 > discovers the real newest version for the (now-correct) channel and the mislabeled version simply
 > ages out as an archived entry once it rotates out of the retention window — bounded and
-> self-correcting, no manual cleanup required.
+> self-correcting, no manual cleanup required. Debian targets are NOT covered by this migration
+> (placeholder status, no predefined seeding): a pre-#48 operator-created debian target re-caches
+> under its channel segment on next reconcile, and the old `debian/-` directory is reported as
+> orphans by `POST /api/v1/cache/scan` like any other stale dir.
 
 ## How the cache is populated and pruned
 
