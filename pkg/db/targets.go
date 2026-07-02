@@ -37,6 +37,24 @@ func (s *Store) UpsertTarget(t Target) error {
 	return nil
 }
 
+// EnsureTarget inserts t only if no (os,arch,params) row exists; an existing
+// row is left completely untouched (ON CONFLICT DO NOTHING). This is the
+// create-if-absent seeding primitive (#48 D1): flags preseed a predefined row
+// on first boot, then the API owns mode/retain_n/enabled. Params MUST be the
+// canonical encoding so equal param sets collide on UNIQUE(os,arch,params).
+func (s *Store) EnsureTarget(t Target) error {
+	_, err := s.db.Exec(
+		`INSERT INTO targets (os, arch, params, mode, retain_n, predefined, enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(os, arch, params) DO NOTHING`,
+		t.OS, t.Arch, t.Params, t.Mode, t.RetainN, t.Predefined, t.Enabled,
+	)
+	if err != nil {
+		return fmt.Errorf("db: ensure target %s/%s: %w", t.OS, t.Arch, err)
+	}
+	return nil
+}
+
 // CreateTarget inserts t and returns its new id. A duplicate (os,arch,params)
 // violates the UNIQUE constraint and returns an error.
 func (s *Store) CreateTarget(t Target) (int64, error) {
