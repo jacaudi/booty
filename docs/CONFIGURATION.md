@@ -17,18 +17,51 @@ values used when neither a flag nor an env var is set.
 | `--serverHttpPort` | `80` | HTTP port advertised to clients (when it differs from `--httpPort`). |
 | `--joinString` | `""` | Optional `kubeadm join` string injected into rendered Ignition. |
 | `--flatcarArchitecture` | `amd64` | Architecture for Flatcar downloads. |
-| `--flatcarChannel` | `stable` | Flatcar release channel. |
+| `--flatcarChannel` | `stable` | Flatcar release channel — **first-boot default only** (see below). |
 | `--coreOSArchitecture` | `x86_64` | Architecture for Fedora CoreOS downloads. |
-| `--coreOSChannel` | `stable` | Fedora CoreOS stream/channel. |
+| `--coreOSChannel` | `stable` | Fedora CoreOS stream/channel — **first-boot default only** (see below). |
 | `--talosArchitecture` | `amd64` | Talos architecture token (`amd64` / `arm64`). |
-| `--talosSchematic` | `376567988ad3…b4ba` | Default Talos Image Factory schematic ID. |
-| `--talosRetainMinors` | `3` | Number of newest Talos minor lines to keep cached. |
+| `--talosSchematic` | `376567988ad3…b4ba` | Default Talos Image Factory schematic ID — **first-boot default only** (see below). |
+| `--talosRetainMinors` | `3` | Number of newest Talos minor lines to keep cached — **first-boot default only** (see below). |
 | `--talosConfigFile` | `config/machineconfig.yaml` | Talos machine-config template, relative to `--dataDir`. |
 | `--talosFactoryURL` | `https://factory.talos.dev` | Talos Image Factory base URL. |
 | `--proxyDHCPEnabled` | `false` | Enable the proxyDHCP responder (UDP 67 + 4011). |
 | `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | Pass-1 BIOS iPXE binary name (staged in `--dataDir`). |
 | `--proxyDHCPBootfileUEFI` | `ipxe.efi` | Pass-1 UEFI (x86-64) iPXE binary name. |
 | `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | Pass-1 ARM64 iPXE binary name. |
+
+> **First-boot defaults (#48).** `--flatcarChannel`, `--coreOSChannel`, `--talosSchematic`, and
+> `--talosRetainMinors` seed the **predefined** cache targets (Flatcar, Fedora CoreOS, Talos) only
+> when that target's row doesn't exist yet — a fresh install, or the one-time migration on first
+> startup after upgrading past #48 (see [schema/STORAGE.md](schema/STORAGE.md)). Once a predefined
+> row exists, these flags are never consulted for it again: the `/api/v1/targets` API owns
+> `enabled` / `retainN` / `mode` from that point on, and a value set via `PATCH` survives every
+> reconcile tick. Concretely:
+>
+> - Changing `--flatcarChannel` / `--coreOSChannel` after first boot does **not** retarget the
+>   existing predefined row — because the channel is part of the target's identity
+>   (`UNIQUE(os,arch,params)`), it seeds a **new** predefined target for the new channel on the
+>   next tick, alongside the old one. Disable the old channel's target with
+>   `PATCH /api/v1/targets/{id} {"enabled":false}` if it should stop being cached.
+> - **`--talosRetainMinors` behavior change:** bumping this flag after the Talos predefined target
+>   already exists has **no effect** on that row — it only sets the initial `retainN` at creation
+>   time. Adjust retention on an existing target with
+>   `PATCH /api/v1/targets/{id} {"retainN":<n>}` instead.
+>
+> See [schema/API.md](schema/API.md#targets) for the full create-if-absent / PATCH contract.
+
+### Retention windows for single-version-discovery OSes
+
+Flatcar and Fedora CoreOS discovery only ever returns **one** version — the channel's current
+build. For these OSes, `retainN` (via `--flatcarChannel`'s / `--coreOSChannel`'s predefined target,
+or `PATCH retainN` on any flatcar/fcos target) bounds a **window over known versions** rather than
+selecting from a larger discovered set: each reconcile tick, the newly-discovered version is added
+to the set of versions still in-window, and the newest `retainN` of that combined set are kept. The
+window therefore **grows one release at a time** as new versions are discovered — `retainN=3` takes
+three upstream releases to reach three cached versions, not one. It does **not backfill** older
+versions upstream no longer advertises; there is no way to retroactively populate history that was
+never seen while the reconciler was running. Versions that age out of the window are archived, not
+deleted (see [schema/STORAGE.md](schema/STORAGE.md)).
 
 ## Environment variables
 

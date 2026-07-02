@@ -34,22 +34,24 @@ keep cache and registration across restarts.
 Cached kernel/initramfs (and rootfs, for CoreOS) are stored under a uniform, segment-based path:
 
 ```
-<dataDir>/cache/<os>/<schematic-or-dash>/<arch>/<version>/
+<dataDir>/cache/<os>/<segment>/<arch>/<version>/
 ```
 
-The `<schematic-or-dash>` segment is the Talos Image Factory schematic ID for Talos, and a literal
-`-` (no schematic) for Flatcar and CoreOS. The **same segments** drive both the on-disk path and the
-HTTP base URL clients fetch from, so disk and URL cannot drift.
+`<segment>` is the single path-discriminating value carried in a target's params, chosen by fixed
+precedence: the Talos Image Factory **schematic** ID for Talos, else the release **channel** for
+Flatcar / Fedora CoreOS (and Debian), else a literal `-` if the target has neither. No OS carries
+both keys today, so the precedence is theoretical but fixed. The **same segments** drive both the
+on-disk path and the HTTP base URL clients fetch from, so disk and URL cannot drift.
 
 **Examples:**
 
 ```
-cache/flatcar/-/amd64/3598.5.0/
+cache/flatcar/stable/amd64/4230.2.2/
     flatcar_production_pxe.vmlinuz
     flatcar_production_pxe_image.cpio.gz
 
-cache/coreos/-/x86_64/39.20231101.3.0/
-    fedora-coreos-<version>-live-kernel-x86_64
+cache/coreos/stable/x86_64/44.20260607.3.1/
+    fedora-coreos-<version>-live-kernel.x86_64
     fedora-coreos-<version>-live-rootfs.x86_64.img
     fedora-coreos-<version>-live-initramfs.x86_64.img
 
@@ -58,14 +60,29 @@ cache/talos/376567988ad3…b4ba/amd64/v1.10.1/
     initramfs-<arch>.xz
 ```
 
+> **Migration (#48):** on the first startup after upgrading past #48, a pre-existing
+> `<os>/-` directory (Flatcar / Fedora CoreOS) is renamed to `<os>/<flag-channel>` — the channel
+> read from `--flatcarChannel` / `--coreOSChannel` at that startup — provided the destination
+> doesn't already exist. If both `<os>/-` and `<os>/<flag-channel>` exist, the `-` directory is left
+> in place; its versions surface as orphans via `POST /api/v1/cache/scan`, and nothing is deleted
+> automatically. If the operator changes the channel flag between the pre-#48 run and the migrated
+> run, the renamed artifacts are mislabeled under the wrong channel for one cycle: the reconciler
+> discovers the real newest version for the (now-correct) channel and the mislabeled version simply
+> ages out as an archived entry once it rotates out of the retention window — bounded and
+> self-correcting, no manual cleanup required.
+
 ## How the cache is populated and pruned
 
 - A single **cache reconciler** (`--cacheInterval`, default every 5 minutes; bounded by
   `--cacheConcurrency`) caches each declared target's artifacts eagerly — on startup and on each
   tick, never on boot. Predefined targets (Flatcar, Fedora CoreOS, Talos) are seeded automatically,
   plus one Talos target per distinct registered-host schematic.
-- **Flatcar / CoreOS:** the previous version's directory is removed when a newer one is cached
-  (single current version per channel).
+- **Flatcar / CoreOS:** the newest `retainN` versions are kept per channel (default `1`, the
+  historic "single current version" behavior). Discovery only ever returns the channel's current
+  build, so a window over `retainN > 1` accumulates history one release at a time as new versions
+  are discovered — it does not backfill versions upstream no longer advertises (see
+  [CONFIGURATION.md](../CONFIGURATION.md)). Versions that rotate out of the window are archived,
+  not deleted (see below).
 - **Talos:** the newest `--talosRetainMinors` minor lines are kept (default 3), per schematic and
   arch. As of P1b the reconciler now **prunes** discovered versions outside that set — a change from
   the retired cron, which cached the same set but never pruned. Manual pins are never pruned. The
