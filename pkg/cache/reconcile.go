@@ -54,7 +54,7 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 	var retained []string
 	pruneDiscovered := false
 	if t.Mode == "discovery" {
-		discovered, derr := o.DiscoverVersions(ctx)
+		discovered, derr := o.DiscoverVersions(ctx, params)
 		if derr != nil {
 			slog.Warn("cache: discovery failed; keeping existing cached set", "os", t.OS, "target", t.ID, "err", derr)
 		} else {

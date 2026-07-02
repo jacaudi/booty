@@ -60,7 +60,7 @@ func TestTalos_DiscoverVersions(t *testing.T) {
 	viper.Set(config.TalosFactoryURL, srv.URL)
 
 	o, _ := Lookup("talos")
-	got, err := o.DiscoverVersions(t.Context())
+	got, err := o.DiscoverVersions(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("DiscoverVersions: %v", err)
 	}
