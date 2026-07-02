@@ -36,7 +36,11 @@ type OS interface {
 	RequiredParams() []string
 	ValidateVersion(v string) error
 	CompareVersions(a, b string) int
-	DiscoverVersions(ctx context.Context) ([]string, error)
+	// DiscoverVersions returns the upstream-advertised versions for one target.
+	// params carries the target's decoded params: discovery for flatcar/fcos is
+	// channel-scoped (params["channel"]); talos/debian ignore the argument.
+	// (Same widening P1a already applied to Artifacts.)
+	DiscoverVersions(ctx context.Context, params map[string]string) ([]string, error)
 	Artifacts(version, arch string, params map[string]string) []Artifact
 }
 

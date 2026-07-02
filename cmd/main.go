@@ -252,6 +252,15 @@ func run(cmd *cobra.Command, argv []string) error {
 		slog.Info("hardware: preserved boot for pre-existing hosts", "count", n)
 	}
 
+	// One-time #48 migration: rewrite pre-channel target rows and rename
+	// <os>/- cache dirs to the flag channel. Must run before the reconciler's
+	// first pass — seedTargets (create-if-absent) would otherwise mint a NEW
+	// channel row next to the un-migrated "{}" one. Fail-fast: a malformed
+	// channel flag aborts startup.
+	if err := cache.MigrateChannelLayout(store); err != nil {
+		return fmt.Errorf("cache migrate: %w", err)
+	}
+
 	// Take ownership of the process lifecycle: a single signal context drives an
 	// ordered graceful shutdown of every subsystem started below.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

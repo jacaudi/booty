@@ -57,9 +57,15 @@ host database. Most filenames are served as plain cached files; two are **magic*
 
 - Common: `[[server]]` (= `serverIP:serverHttpPort`).
 - Flatcar: `[[flatcar-arch]]`, `[[flatcar-version]]`, `[[flatcar-baseurl]]`.
-- CoreOS: `[[coreos-arch]]`, `[[coreos-channel]]`, `[[coreos-version]]`, `[[coreos-baseurl]]`.
+- CoreOS: `[[coreos-arch]]`, `[[coreos-version]]`, `[[coreos-baseurl]]`.
 - Talos: `[[talos-schematic]]`, `[[talos-arch]]`, `[[talos-version]]`, `[[talos-baseurl]]`
   (version resolved from the newest cached release for the host's schematic).
+
+> **As of #48:** Flatcar and CoreOS resolve their channel the same way Talos resolves its
+> schematic — `host.AssignedParams["channel"]` if set, else the `--flatcarChannel` /
+> `--coreOSChannel` flag default — then serve the newest cached version under that channel.
+> `[[coreos-channel]]` is removed: the prior CoreOS template read the channel from a viper flag
+> directly and never consumed the token's value.
 
 ---
 
@@ -117,6 +123,44 @@ Cache targets represent an (OS, arch, params) tuple that the reconciler discover
 | `POST` | `/api/v1/targets/{id}/versions` | Pin a manual version on a target. Triggers async cache. **OPEN.** | `201` |
 | `DELETE` | `/api/v1/targets/{id}/versions/{v}` | **403 until auth (P10).** | `403` |
 
+**Required params, per OS** (as of #48, `flatcar` and `fedora-coreos` join `debian` in requiring a
+channel; `talos` requires a schematic):
+
+| OS | Required param(s) |
+|----|--------------------|
+| `talos` | `schematic` |
+| `flatcar` | `channel` |
+| `fedora-coreos` | `channel` |
+| `debian` | `channel` |
+
+`GET /api/v1/os` reports the authoritative required-params list per registered OS.
+
+**`POST /api/v1/targets` validation, in order** (all failures are `422`):
+
+1. `os` must be a registered OS (`ostype.Lookup`).
+2. `params` may only contain keys the OS's `RequiredParams()` declares — any other key is rejected
+   as `"unexpected param: <k>"`. This isn't just tidiness: `paramSegment` picks the
+   path-discriminating cache segment by fixed key precedence (`schematic` > `channel`), so an
+   unrequested key would silently become an **unvalidated** disk/URL path segment if it happened to
+   match one of those names.
+3. Every required param must be present and non-empty (`"missing required param: <p>"`).
+4. Every required param's **value** must match `^[a-z0-9][a-z0-9.-]*$` — lowercase-alnum start,
+   then alnum/dot/dash, no `/` — since required params become the cache directory + URL segment
+   (`"invalid param <p>"`). The same check runs on the `--flatcarChannel` / `--coreOSChannel` /
+   `--talosSchematic` flags at startup and on the one-time #48 migration, so a malformed flag or a
+   malformed API param are rejected the same way.
+
+**Predefined-seeding semantics (#48 D1).** The Flatcar, Fedora CoreOS, and Talos predefined targets
+are **create-if-absent**: `--flatcarChannel` / `--coreOSChannel` / `--talosSchematic` /
+`--talosRetainMinors` only populate a predefined row the first time it's created (fresh install, or
+the one-time migration described in [STORAGE.md](STORAGE.md)). Once a row exists, the flags are
+never read again for it — `PATCH /api/v1/targets/{id}` owns `enabled` / `retainN` / `mode` from
+then on, and survives every reconcile tick untouched. Changing a channel flag later does **not**
+update the existing row: because params are part of row identity (`UNIQUE(os,arch,params)`), it
+creates a **new** predefined target for the new channel on the next tick; the old channel's target
+keeps running until an operator disables it with `PATCH {"enabled":false}` (`DELETE` is `403` until
+P10).
+
 ### Hosts
 
 | Method | Path | Purpose | Response |
@@ -153,7 +197,7 @@ Cache inventory: the set of on-disk boot artifacts tracked in `cache_entries`. A
 | `id` | integer | `cache_entries.id` — stable row key. |
 | `os` | string | OS taxonomy name (`talos`, `flatcar`, `coreos`). |
 | `arch` | string | Architecture (`amd64`, `arm64`, …). |
-| `params` | object | Decoded target params (e.g. `{"schematic":"…"}` for Talos; `{}` for others). |
+| `params` | object | Decoded target params (e.g. `{"schematic":"…"}` for Talos; `{"channel":"…"}` for Flatcar / Fedora CoreOS / Debian). |
 | `version` | string | Version string. |
 | `size` | integer | Cached artifact bytes (summed from disk at last upsert). |
 | `state` | string | Derived: `in-cycle` \| `in-cycle-pinned` \| `archived` \| `archived-pinned`. |

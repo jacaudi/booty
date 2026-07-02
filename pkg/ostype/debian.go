@@ -33,8 +33,9 @@ func (debian) CompareVersions(a, b string) int { return compareDottedNumeric(a, 
 var debianFixedReleases = []string{"12.5", "11.9"}
 
 // DiscoverVersions returns the fixed supported set (see debianFixedReleases).
-// ctx is accepted to satisfy the OS interface and for the future real impl.
-func (debian) DiscoverVersions(ctx context.Context) ([]string, error) {
+// ctx and params are accepted to satisfy the OS interface; the fixed set is
+// channel-independent (channel only selects artifact codenames).
+func (debian) DiscoverVersions(ctx context.Context, _ map[string]string) ([]string, error) {
 	return slices.Clone(debianFixedReleases), nil
 }
 

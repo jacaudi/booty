@@ -29,7 +29,7 @@ func (talos) CompareVersions(a, b string) int { return semver.Compare(a, b) }
 
 // DiscoverVersions GETs <factory>/versions and decodes the JSON tag array
 // (mirrors pkg/versions/talos.go's fetchTalosVersions).
-func (talos) DiscoverVersions(ctx context.Context) ([]string, error) {
+func (talos) DiscoverVersions(ctx context.Context, _ map[string]string) ([]string, error) {
 	body, err := fetchMetadata(ctx, talosFactoryURL()+"/versions")
 	if err != nil {
 		return nil, err

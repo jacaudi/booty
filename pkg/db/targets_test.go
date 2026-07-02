@@ -70,6 +70,58 @@ func TestUpsertTarget_IdempotentOnConflict(t *testing.T) {
 	}
 }
 
+func TestEnsureTargetCreateIfAbsent(t *testing.T) {
+	s := newTestStore(t)
+	tgt := Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true}
+	if err := s.EnsureTarget(tgt); err != nil {
+		t.Fatalf("EnsureTarget (fresh): %v", err)
+	}
+	// Simulate an API PATCH: bump retain_n via UpsertTarget.
+	rows, _ := s.ListTargets()
+	if len(rows) != 1 {
+		t.Fatalf("want 1 target, got %d", len(rows))
+	}
+	patched := rows[0]
+	patched.RetainN = 5
+	if err := s.UpsertTarget(patched); err != nil {
+		t.Fatalf("UpsertTarget: %v", err)
+	}
+	// A second Ensure with the ORIGINAL retain_n must be a no-op (D1: flag is
+	// a first-boot default; the API owns the row thereafter).
+	if err := s.EnsureTarget(tgt); err != nil {
+		t.Fatalf("EnsureTarget (existing): %v", err)
+	}
+	rows, _ = s.ListTargets()
+	if len(rows) != 1 || rows[0].RetainN != 5 {
+		t.Fatalf("EnsureTarget must not clobber: got %+v", rows)
+	}
+}
+
+func TestUpdateTargetParamsPreservesVersions(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: "{}", Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertTargetVersion(TargetVersion{TargetID: id, Version: "4230.2.2", Source: "discovered", Cached: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateTargetParams(id, `{"channel":"stable"}`); err != nil {
+		t.Fatalf("UpdateTargetParams: %v", err)
+	}
+	got, err := s.GetTarget(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Params != `{"channel":"stable"}` {
+		t.Fatalf("params = %q, want rewritten in place", got.Params)
+	}
+	vs, _ := s.ListTargetVersions(id) // same row id → versions preserved
+	if len(vs) != 1 || vs[0].Version != "4230.2.2" || !vs[0].Cached {
+		t.Fatalf("target_versions must survive the in-place rewrite: %+v", vs)
+	}
+}
+
 func TestListTargets(t *testing.T) {
 	s := newTestStore(t)
 	if _, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "manual", Enabled: true}); err != nil {

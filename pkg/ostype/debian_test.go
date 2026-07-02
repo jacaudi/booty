@@ -36,7 +36,7 @@ func TestDebian_ValidateAndCompare(t *testing.T) {
 
 func TestDebian_DiscoverVersions_FixedSet(t *testing.T) {
 	o, _ := Lookup("debian")
-	got, err := o.DiscoverVersions(t.Context())
+	got, err := o.DiscoverVersions(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("DiscoverVersions: %v", err)
 	}

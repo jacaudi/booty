@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -199,5 +200,204 @@ func TestReconcileTarget_ManualNeverPruned(t *testing.T) {
 	}
 	if !sawManual {
 		t.Errorf("manual pin v1.5.0 was pruned: %v", rows)
+	}
+}
+
+// newFlatcarFixture spins a fake Flatcar release server whose version.txt
+// response can be changed between reconciles (via the returned *string), plus
+// a channel-params flatcar target. reconcileTarget is synchronous, so writes
+// to *version never overlap an in-flight request.
+func newFlatcarFixture(t *testing.T, retainN int) (*db.Store, int64, *string) {
+	t.Helper()
+	version := new(string)
+	*version = "100.0.0"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/version.txt") {
+			_, _ = w.Write([]byte("FLATCAR_VERSION=" + *version + "\n"))
+			return
+		}
+		_, _ = w.Write([]byte("artifact-bytes")) // vmlinuz / cpio.gz
+	}))
+	t.Cleanup(srv.Close)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.FlatcarURL, srv.URL+"/%s/%s")
+	viper.Set(config.FlatcarChannel, "stable")
+	viper.Set(config.FlatcarArchitecture, "amd64")
+	store := newReconcileStore(t)
+	tid, err := store.CreateTarget(db.Target{
+		OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`,
+		Mode: "discovery", RetainN: retainN, Predefined: true, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	return store, tid, version
+}
+
+// TestReconcileFlatcarAccumulatesWindow: with retainN=2, a single-version-
+// discovery OS keeps the previous release in-window when upstream moves on —
+// the #48 retention union (issue acceptance criterion 4).
+func TestReconcileFlatcarAccumulatesWindow(t *testing.T) {
+	store, tid, version := newFlatcarFixture(t, 2)
+	tgt, _ := store.GetTarget(tid)
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+	*version = "100.1.0" // upstream releases; 100.0.0 no longer advertised
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+	inWin, err := store.ListCachedInWindowVersions(tid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inWin) != 2 {
+		t.Fatalf("retainN=2 must keep both releases in-window, got %v", inWin)
+	}
+	if !cacheDirExists("flatcar", "stable", "amd64", "100.0.0") {
+		t.Fatal("previous release's artifacts must remain under the channel segment")
+	}
+}
+
+// TestReconcileFlatcarRetainOneArchivesAndNeverResurrects: with retainN=1 the
+// old release is archived when upstream moves on, and — because the union
+// draws only from in-window AND cached — it stays archived on every later tick.
+func TestReconcileFlatcarRetainOneArchivesAndNeverResurrects(t *testing.T) {
+	store, tid, version := newFlatcarFixture(t, 1)
+	tgt, _ := store.GetTarget(tid)
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+	*version = "100.1.0"
+	for range 3 { // several ticks: archived must not resurrect
+		if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inWin, _ := store.ListCachedInWindowVersions(tid)
+	if len(inWin) != 1 || inWin[0] != "100.1.0" {
+		t.Fatalf("retainN=1: only the newest may be in-window, got %v", inWin)
+	}
+	rows, _ := store.ListCacheEntries(db.CacheFilter{})
+	for _, r := range rows {
+		if r.Version == "100.0.0" && r.InWindow {
+			t.Fatal("archived 100.0.0 resurrected into the window (union must exclude archived)")
+		}
+	}
+}
+
+// TestReconcileTwoFlatcarChannelsCacheIndependently is the issue #48 acceptance
+// criterion 3 e2e test: two targets for the same OS/arch but different channel
+// params must cache under distinct channel segments and never cross-pollute
+// each other's retention window.
+func TestReconcileTwoFlatcarChannelsCacheIndependently(t *testing.T) {
+	versions := map[string]string{"stable": "100.1.0", "beta": "200.1.0"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var channel string
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/stable/"):
+			channel = "stable"
+		case strings.HasPrefix(r.URL.Path, "/beta/"):
+			channel = "beta"
+		}
+		if strings.HasSuffix(r.URL.Path, "/version.txt") {
+			_, _ = w.Write([]byte("FLATCAR_VERSION=" + versions[channel] + "\n"))
+			return
+		}
+		_, _ = w.Write([]byte("artifact-bytes")) // vmlinuz / cpio.gz
+	}))
+	t.Cleanup(srv.Close)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.FlatcarURL, srv.URL+"/%s/%s")
+	viper.Set(config.FlatcarChannel, "stable")
+	viper.Set(config.FlatcarArchitecture, "amd64")
+	store := newReconcileStore(t)
+
+	stableID, err := store.CreateTarget(db.Target{
+		OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`,
+		Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget stable: %v", err)
+	}
+	betaID, err := store.CreateTarget(db.Target{
+		OS: "flatcar", Arch: "amd64", Params: `{"channel":"beta"}`,
+		Mode: "discovery", RetainN: 1, Predefined: false, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget beta: %v", err)
+	}
+
+	stableTgt, _ := store.GetTarget(stableID)
+	if err := reconcileTarget(t.Context(), store, 4, *stableTgt); err != nil {
+		t.Fatalf("reconcile stable: %v", err)
+	}
+	betaTgt, _ := store.GetTarget(betaID)
+	if err := reconcileTarget(t.Context(), store, 4, *betaTgt); err != nil {
+		t.Fatalf("reconcile beta: %v", err)
+	}
+
+	if !cacheDirExists("flatcar", "stable", "amd64", "100.1.0") {
+		t.Error("stable channel must cache under its own channel segment")
+	}
+	if !cacheDirExists("flatcar", "beta", "amd64", "200.1.0") {
+		t.Error("beta channel must cache under its own channel segment")
+	}
+
+	stableWin, err := store.ListCachedInWindowVersions(stableID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stableWin) != 1 || stableWin[0] != "100.1.0" {
+		t.Errorf("stable target's in-window versions = %v, want [100.1.0] only", stableWin)
+	}
+	betaWin, err := store.ListCachedInWindowVersions(betaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(betaWin) != 1 || betaWin[0] != "200.1.0" {
+		t.Errorf("beta target's in-window versions = %v, want [200.1.0] only", betaWin)
+	}
+}
+
+// TestReconcileManualPinDoesNotDisplaceDiscoveredFromWindow: a manual pin must
+// not consume a retention-window slot — it is always desired and never
+// archived by the prune loop, so it must not displace the discovered current
+// version out of the in-window set (issue final-review item 2).
+func TestReconcileManualPinDoesNotDisplaceDiscoveredFromWindow(t *testing.T) {
+	store, tid, _ := newFlatcarFixture(t, 1)
+	tgt, _ := store.GetTarget(tid)
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "200.0.0", Source: "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	tgt, _ = store.GetTarget(tid)
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+
+	inWin, err := store.ListCachedInWindowVersions(tid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inWin) != 1 || inWin[0] != "100.0.0" {
+		t.Fatalf("discovered current must stay in-window despite the manual pin, got %v", inWin)
+	}
+
+	rows, _ := store.ListTargetVersions(tid)
+	var manualCached bool
+	for _, r := range rows {
+		if r.Version == "200.0.0" && r.Source == "manual" && r.Cached {
+			manualCached = true
+		}
+	}
+	if !manualCached {
+		t.Fatal("manual pin 200.0.0 must still be cached")
 	}
 }

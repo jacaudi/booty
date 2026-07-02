@@ -1,6 +1,7 @@
 package tftp
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -225,53 +226,67 @@ func applyTokens(s string, tokens map[string]string) string {
 }
 
 // bootTokensFor builds the [[token]] substitution map for one fully-specified
-// (osToLoad, schematic, arch, version) tuple. osToLoad is the ON-DISK os name
-// (flatcar|coreos|talos) — the same value bootTokens' switch keyed on and the
-// same value carried in the menu selection path's <cacheName> segment, so no
-// canonical-name translation is needed here. The menu selection-boot branch
-// calls this directly with the path-supplied tuple.
-//
-// NOTE: the coreos arm reads [[coreos-channel]] from viper, not from the tuple —
-// channel is a stream selector, not part of the (os,arch,version) identity, and
-// the explicit version already pins the BASEURL. This matches pre-extraction
-// behavior exactly.
-func bootTokensFor(osToLoad, schematic, arch, version, urlHost string) map[string]string {
+// (osToLoad, segment, arch, version) tuple. osToLoad is the ON-DISK os name
+// (flatcar|coreos|talos). segment is the path-discriminating cache segment —
+// the talos schematic or the flatcar/coreos channel — the same value carried
+// in the menu selection path's tuple, so no translation is needed here.
+func bootTokensFor(osToLoad, segment, arch, version, urlHost string) map[string]string {
 	tokens := map[string]string{
 		"[[server]]": urlHost,
 	}
 	switch osToLoad {
 	case "coreos":
-		tokens["[[coreos-channel]]"] = viper.GetString(config.CoreOSChannel)
 		tokens["[[coreos-arch]]"] = arch
 		tokens["[[coreos-version]]"] = version
-		tokens["[[coreos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "coreos", "-", arch, version)
+		tokens["[[coreos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "coreos", segment, arch, version)
 	case "flatcar":
 		tokens["[[flatcar-arch]]"] = arch
 		tokens["[[flatcar-version]]"] = version
-		tokens["[[flatcar-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "flatcar", "-", arch, version)
+		tokens["[[flatcar-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "flatcar", segment, arch, version)
 	case "talos":
-		tokens["[[talos-schematic]]"] = schematic
+		tokens["[[talos-schematic]]"] = segment
 		tokens["[[talos-arch]]"] = arch
 		tokens["[[talos-version]]"] = version
-		tokens["[[talos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "talos", schematic, arch, version)
+		tokens["[[talos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "talos", segment, arch, version)
 	}
 	return tokens
 }
 
-// bootTokens builds the per-request substitution map for the ASSIGNED/legacy boot
-// path: it resolves arch (viper), schematic (host override else viper), and
-// version (newest cached on disk) exactly as before, then delegates to
-// bootTokensFor. Output for assigned hosts is unchanged (TestBootTokensByteIdentical).
+// hostParams decodes host.AssignedParams (the P1c field; canonical JSON set by
+// the host API). nil host, empty field, or malformed JSON all yield an empty
+// map — the boot path then falls back to the flag defaults.
+// Noted asymmetry (#48 SGE #5): talos resolves its variant from the typed
+// host.Schematic column; flatcar/coreos read this JSON. Deliberately NOT
+// unified in #48.
+func hostParams(host *hardware.Host) map[string]string {
+	if host == nil || host.AssignedParams == "" {
+		return map[string]string{}
+	}
+	p, err := cache.DecodeParams(host.AssignedParams)
+	if err != nil {
+		slog.Warn("tftp: ignoring malformed assignedParams", "err", err)
+		return map[string]string{}
+	}
+	return p
+}
+
+// bootTokens builds the per-request substitution map for the ASSIGNED/legacy
+// boot path. Each OS resolves its path-discriminating variant the same way:
+// host override, else flag — schematic for talos (typed column), channel for
+// flatcar/coreos (AssignedParams) — then serves the newest cached version
+// under that segment.
 func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string {
 	switch osToLoad {
 	case "coreos":
+		channel := cmp.Or(hostParams(host)["channel"], viper.GetString(config.CoreOSChannel))
 		arch := viper.GetString(config.CoreOSArchitecture)
-		version := cache.NewestCached("coreos", arch, nil)
-		return bootTokensFor("coreos", "-", arch, version, urlHost)
+		version := cache.NewestCached("coreos", arch, map[string]string{"channel": channel})
+		return bootTokensFor("coreos", channel, arch, version, urlHost)
 	case "flatcar":
+		channel := cmp.Or(hostParams(host)["channel"], viper.GetString(config.FlatcarChannel))
 		arch := viper.GetString(config.FlatcarArchitecture)
-		version := cache.NewestCached("flatcar", arch, nil)
-		return bootTokensFor("flatcar", "-", arch, version, urlHost)
+		version := cache.NewestCached("flatcar", arch, map[string]string{"channel": channel})
+		return bootTokensFor("flatcar", channel, arch, version, urlHost)
 	case "talos":
 		schematic := viper.GetString(config.TalosSchematic)
 		if host != nil && host.Schematic != "" {

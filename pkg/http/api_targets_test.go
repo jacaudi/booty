@@ -2,6 +2,7 @@ package http
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/db"
@@ -62,5 +63,75 @@ func TestDeleteTargetIs403UntilAuth(t *testing.T) {
 	resp := api.Delete("/api/v1/targets/1")
 	if resp.Code != 403 {
 		t.Fatalf("DELETE /targets/1 = %d, want 403 (wired-but-disabled)", resp.Code)
+	}
+}
+
+func TestCreateTargetUnsafeParamIs422(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	cases := []map[string]any{
+		{"os": "flatcar", "arch": "amd64", "params": map[string]string{"channel": "../evil"}, "mode": "discovery", "retainN": 1},
+		{"os": "flatcar", "arch": "amd64", "params": map[string]string{"channel": "a/b"}, "mode": "discovery", "retainN": 1},
+		{"os": "talos", "arch": "amd64", "params": map[string]string{"schematic": "..%2f"}, "mode": "discovery", "retainN": 1},
+	}
+	for _, body := range cases {
+		if resp := api.Post("/api/v1/targets", body); resp.Code != 422 {
+			t.Errorf("POST %v = %d, want 422 (param becomes a path segment)", body, resp.Code)
+		}
+	}
+}
+
+func TestCreateTargetUnexpectedParamIs422(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	// An unrequested key must be rejected: paramSegment gives "schematic"
+	// precedence over "channel", so an extra schematic on a flatcar target
+	// would become an UNVALIDATED path segment (traversal at reconcile time).
+	resp := api.Post("/api/v1/targets", map[string]any{
+		"os": "flatcar", "arch": "amd64",
+		"params": map[string]string{"channel": "beta", "schematic": "../../../etc/pwned"},
+		"mode": "discovery", "retainN": 1,
+	})
+	if resp.Code != 422 {
+		t.Fatalf("unexpected param key = %d, want 422", resp.Code)
+	}
+}
+
+func TestCreateTargetUnsafeArchIs422(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	resp := api.Post("/api/v1/targets", map[string]any{
+		"os": "fedora-coreos", "arch": "../../../../tmp/x",
+		"params": map[string]string{"channel": "stable"},
+		"mode":   "discovery", "retainN": 1,
+	})
+	if resp.Code != 422 {
+		t.Fatalf("traversal arch = %d, want 422 (arch becomes a path segment)", resp.Code)
+	}
+	resp = api.Post("/api/v1/targets", map[string]any{
+		"os": "fedora-coreos", "arch": "x86_64",
+		"params": map[string]string{"channel": "stable"},
+		"mode":   "discovery", "retainN": 1,
+	})
+	if resp.Code != 201 {
+		t.Fatalf("valid arch x86_64 = %d, want 201: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestCreateFlatcarTargetRequiresChannel(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	// #48: flatcar/fedora-coreos are params-driven; channel is required.
+	if resp := api.Post("/api/v1/targets", map[string]any{
+		"os": "flatcar", "arch": "amd64", "mode": "discovery", "retainN": 1,
+	}); resp.Code != 422 {
+		t.Errorf("flatcar without channel = %d, want 422", resp.Code)
+	}
+	resp := api.Post("/api/v1/targets", map[string]any{
+		"os": "flatcar", "arch": "amd64", "params": map[string]string{"channel": "beta"},
+		"mode": "discovery", "retainN": 2,
+	})
+	if resp.Code != 201 || !strings.Contains(resp.Body.String(), `"channel":"beta"`) {
+		t.Errorf("flatcar with channel = %d: %s", resp.Code, resp.Body.String())
 	}
 }

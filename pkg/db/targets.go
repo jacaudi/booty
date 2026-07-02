@@ -37,6 +37,24 @@ func (s *Store) UpsertTarget(t Target) error {
 	return nil
 }
 
+// EnsureTarget inserts t only if no (os,arch,params) row exists; an existing
+// row is left completely untouched (ON CONFLICT DO NOTHING). This is the
+// create-if-absent seeding primitive (#48 D1): flags preseed a predefined row
+// on first boot, then the API owns mode/retain_n/enabled. Params MUST be the
+// canonical encoding so equal param sets collide on UNIQUE(os,arch,params).
+func (s *Store) EnsureTarget(t Target) error {
+	_, err := s.db.Exec(
+		`INSERT INTO targets (os, arch, params, mode, retain_n, predefined, enabled)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(os, arch, params) DO NOTHING`,
+		t.OS, t.Arch, t.Params, t.Mode, t.RetainN, t.Predefined, t.Enabled,
+	)
+	if err != nil {
+		return fmt.Errorf("db: ensure target %s/%s: %w", t.OS, t.Arch, err)
+	}
+	return nil
+}
+
 // CreateTarget inserts t and returns its new id. A duplicate (os,arch,params)
 // violates the UNIQUE constraint and returns an error.
 func (s *Store) CreateTarget(t Target) (int64, error) {
@@ -53,6 +71,19 @@ func (s *Store) CreateTarget(t Target) (int64, error) {
 		return 0, fmt.Errorf("db: create target id: %w", err)
 	}
 	return id, nil
+}
+
+// UpdateTargetParams rewrites a target's params IN PLACE by row id, preserving
+// its target_versions/cache_entries (row identity is unchanged). Used only by
+// the one-time #48 channel migration. The caller must pass the canonical
+// encoding and a path-safe value.
+func (s *Store) UpdateTargetParams(id int64, params string) error {
+	if _, err := s.db.Exec(
+		`UPDATE targets SET params = ?, updated_at = datetime('now') WHERE id = ?`,
+		params, id); err != nil {
+		return fmt.Errorf("db: update target params id=%d: %w", id, err)
+	}
+	return nil
 }
 
 // GetTarget returns the target with id, or sql.ErrNoRows if none.

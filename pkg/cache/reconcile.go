@@ -54,11 +54,30 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 	var retained []string
 	pruneDiscovered := false
 	if t.Mode == "discovery" {
-		discovered, derr := o.DiscoverVersions(ctx)
+		discovered, derr := o.DiscoverVersions(ctx, params)
 		if derr != nil {
 			slog.Warn("cache: discovery failed; keeping existing cached set", "os", t.OS, "target", t.ID, "err", derr)
 		} else {
-			retained = retentionFor(t.OS, discovered, t.RetainN)
+			// #48 §8: the retention window ranges over discovered ∪ (in-window
+			// AND cached AND discovered), so single-version-discovery OSes
+			// (flatcar/fcos) accumulate history release-by-release under
+			// retainN>1. The in-window+cached+discovered source keeps archived
+			// versions from resurrecting, is the guard P3b's bytes-less failure
+			// rows rely on, and excludes manual pins — always desired, never
+			// archived, so counting them would only displace a discovered
+			// version instead of adding coverage. Evicted versions cannot
+			// return: eviction deletes the target_versions row entirely.
+			inWindow, werr := store.ListCachedInWindowVersions(t.ID)
+			if werr != nil {
+				return fmt.Errorf("cache: list in-window %d: %w", t.ID, werr)
+			}
+			known := slices.Clone(discovered)
+			for _, v := range inWindow {
+				if !slices.Contains(known, v) {
+					known = append(known, v)
+				}
+			}
+			retained = retentionFor(t.OS, known, t.RetainN)
 			pruneDiscovered = true
 		}
 	}

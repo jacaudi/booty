@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/spf13/viper"
@@ -103,13 +104,35 @@ func cacheNameToCanonical(name string) string {
 }
 
 // paramSegment encodes a target's params into the single path-discriminating
-// cache segment: the Talos schematic when present, else "-" (Flatcar/CoreOS).
-// (Layout invariant, design §2.3: exactly one path-discriminating segment.)
+// cache segment: schematic (talos) > channel (flatcar/fcos/debian) > "-".
+// No OS carries both keys, so the precedence order is theoretical; documented
+// anyway. (Layout invariant, design §2.3: exactly one discriminating segment.)
 func paramSegment(params map[string]string) string {
 	if s := params["schematic"]; s != "" {
 		return s
 	}
+	if c := params["channel"]; c != "" {
+		return c
+	}
 	return "-"
+}
+
+// pathParamRE admits single-segment path-safe values: lowercase alnum start,
+// then alnum/dot/dash/underscore. No "/", no leading dot — so a value can
+// never traverse out of its cache segment ("a..b" is an odd but harmless
+// single segment; a literal ".." or "" is rejected).
+var pathParamRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// ValidatePathParam rejects a value that cannot safely become a cache path
+// segment (disk dir + URL). Single knowledge site for "values that become
+// path segments must be path-safe": it guards ALL such values — params
+// (schematic/channel) AND arch — and is called by the API create handler,
+// seedTargets, and the startup migration.
+func ValidatePathParam(v string) error {
+	if !pathParamRE.MatchString(v) {
+		return fmt.Errorf("cache: value %q is not path-safe (must match %s)", v, pathParamRE)
+	}
+	return nil
 }
 
 // encodeParams is the one canonical params encoder: json.Marshal emits map keys

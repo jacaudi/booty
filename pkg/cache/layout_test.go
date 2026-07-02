@@ -38,15 +38,40 @@ func TestNameBridge_FedoraCoreOS(t *testing.T) {
 	}
 }
 
-func TestParamSegment(t *testing.T) {
-	if got := paramSegment(map[string]string{"schematic": "abc"}); got != "abc" {
-		t.Errorf("paramSegment(schematic) = %q, want abc", got)
+func TestParamSegmentPrecedence(t *testing.T) {
+	cases := []struct {
+		name   string
+		params map[string]string
+		want   string
+	}{
+		{"schematic wins", map[string]string{"schematic": "abc123"}, "abc123"},
+		{"channel when no schematic", map[string]string{"channel": "beta"}, "beta"},
+		{"schematic beats channel (theoretical: no OS carries both)", map[string]string{"schematic": "abc", "channel": "beta"}, "abc"},
+		{"empty map", map[string]string{}, "-"},
+		{"nil map", nil, "-"},
+		{"empty channel value", map[string]string{"channel": ""}, "-"},
 	}
-	if got := paramSegment(nil); got != "-" {
-		t.Errorf("paramSegment(nil) = %q, want -", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := paramSegment(tc.params); got != tc.want {
+				t.Errorf("paramSegment(%v) = %q, want %q", tc.params, got, tc.want)
+			}
+		})
 	}
-	if got := paramSegment(map[string]string{"channel": "stable"}); got != "-" {
-		t.Errorf("paramSegment(channel-only) = %q, want -", got)
+}
+
+func TestValidatePathParam(t *testing.T) {
+	valid := []string{"stable", "beta", "alpha", "next", "testing", "lts-2024", "3033.2.0", "a.b-c", "a..b", "x86_64", "arm64"}
+	for _, v := range valid {
+		if err := ValidatePathParam(v); err != nil {
+			t.Errorf("ValidatePathParam(%q) = %v, want nil", v, err)
+		}
+	}
+	invalid := []string{"", "..", ".", "a/b", "../etc", ".hidden", "-lead", "UPPER", "sp ace", "a\\b", "_lead"}
+	for _, v := range invalid {
+		if err := ValidatePathParam(v); err == nil {
+			t.Errorf("ValidatePathParam(%q) = nil, want error", v)
+		}
 	}
 }
 

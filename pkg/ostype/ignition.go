@@ -2,6 +2,7 @@ package ostype
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"strconv"
@@ -23,9 +24,10 @@ func init() {
 
 type flatcar struct{}
 
-func (flatcar) Name() string             { return "flatcar" }
-func (flatcar) Family() Family           { return families["ignition"] }
-func (flatcar) RequiredParams() []string { return nil }
+func (flatcar) Name() string   { return "flatcar" }
+func (flatcar) Family() Family { return families["ignition"] }
+
+func (flatcar) RequiredParams() []string { return []string{"channel"} }
 
 // ValidateVersion accepts a bare Flatcar version (e.g. 3815.2.0) by validating
 // it as semver once a leading "v" is supplied.
@@ -42,10 +44,10 @@ func (flatcar) CompareVersions(a, b string) int {
 }
 
 // DiscoverVersions fetches the channel's current version.txt and returns the
-// single FLATCAR_VERSION it advertises. Channel/arch come from config (mirrors
-// pkg/versions/flatcar.go's RemoteFlatcarURL).
-func (flatcar) DiscoverVersions(ctx context.Context) ([]string, error) {
-	base := flatcarBaseURL()
+// single FLATCAR_VERSION it advertises. The channel comes from target params
+// (flag fallback); arch stays a flag.
+func (flatcar) DiscoverVersions(ctx context.Context, params map[string]string) ([]string, error) {
+	base := flatcarBaseURL(params["channel"])
 	body, err := fetchMetadata(ctx, base+"/version.txt")
 	if err != nil {
 		return nil, err
@@ -61,8 +63,14 @@ func (flatcar) DiscoverVersions(ctx context.Context) ([]string, error) {
 	return []string{v}, nil
 }
 
-func (flatcar) Artifacts(version, arch string, _ map[string]string) []Artifact {
-	base := flatcarBaseURL()
+// Artifacts intentionally ignores version: Flatcar release URLs are
+// channel-relative to /current, not version-scoped, so a retained-but-no-
+// longer-advertised version's URL resolves to whatever upstream currently
+// serves. Harmless in practice because ensureArtifact only downloads when
+// the on-disk file is absent — already-cached older versions are never
+// overwritten. P3b replaces this hand-built derivation with streams JSON.
+func (flatcar) Artifacts(version, arch string, params map[string]string) []Artifact {
+	base := flatcarBaseURL(params["channel"])
 	files := []string{"flatcar_production_pxe.vmlinuz", "flatcar_production_pxe_image.cpio.gz"}
 	out := make([]Artifact, 0, len(files))
 	for _, f := range files {
@@ -75,9 +83,10 @@ func (flatcar) Artifacts(version, arch string, _ map[string]string) []Artifact {
 
 type fedoraCoreOS struct{}
 
-func (fedoraCoreOS) Name() string             { return "fedora-coreos" }
-func (fedoraCoreOS) Family() Family           { return families["ignition"] }
-func (fedoraCoreOS) RequiredParams() []string { return nil }
+func (fedoraCoreOS) Name() string   { return "fedora-coreos" }
+func (fedoraCoreOS) Family() Family { return families["ignition"] }
+
+func (fedoraCoreOS) RequiredParams() []string { return []string{"channel"} }
 
 // ValidateVersion accepts a dotted-numeric FCOS build id (e.g. 39.20231101.3.0).
 func (fedoraCoreOS) ValidateVersion(v string) error {
@@ -99,9 +108,9 @@ func (fedoraCoreOS) CompareVersions(a, b string) int {
 }
 
 // DiscoverVersions fetches the channel streams JSON and returns its metal build
-// release for the configured CoreOS channel and architecture.
-func (fedoraCoreOS) DiscoverVersions(ctx context.Context) ([]string, error) {
-	body, err := fetchMetadata(ctx, coreosStreamsURL())
+// release for the target's channel (params, flag fallback) and the arch flag.
+func (fedoraCoreOS) DiscoverVersions(ctx context.Context, params map[string]string) ([]string, error) {
+	body, err := fetchMetadata(ctx, coreosStreamsURL(params["channel"]))
 	if err != nil {
 		return nil, err
 	}
@@ -112,10 +121,14 @@ func (fedoraCoreOS) DiscoverVersions(ctx context.Context) ([]string, error) {
 	return []string{rel}, nil
 }
 
-func (fedoraCoreOS) Artifacts(version, arch string, _ map[string]string) []Artifact {
-	base := coreosBuildBaseURL(version, arch)
+func (fedoraCoreOS) Artifacts(version, arch string, params map[string]string) []Artifact {
+	base := coreosBuildBaseURL(params["channel"], version, arch)
 	files := []string{
-		fmt.Sprintf("fedora-coreos-%s-live-kernel-%s", version, arch),
+		// Dot-form kernel: FCOS renamed live-kernel-<arch> → live-kernel.<arch>
+		// between FCOS 39 and 44 (verified 2026-07-01: dash 404s, dot 200s).
+		// initramfs/rootfs already used dots. P3b replaces this hand-built
+		// derivation with streams-JSON location fields.
+		fmt.Sprintf("fedora-coreos-%s-live-kernel.%s", version, arch),
 		fmt.Sprintf("fedora-coreos-%s-live-initramfs.%s.img", version, arch),
 		fmt.Sprintf("fedora-coreos-%s-live-rootfs.%s.img", version, arch),
 	}
@@ -155,20 +168,22 @@ func compareDottedNumeric(a, b string) int {
 	return 0
 }
 
-// URL helpers read the same viper config keys the legacy pkg/versions code
-// uses, so discovery hits identical upstreams.
-func flatcarBaseURL() string {
+// URL helpers derive per-target URLs: channel comes from target params (flag
+// fallback via cmp.Or); the URL templates and arch remain flags.
+func flatcarBaseURL(channel string) string {
 	return fmt.Sprintf(viper.GetString(config.FlatcarURL),
-		viper.GetString(config.FlatcarChannel), viper.GetString(config.FlatcarArchitecture))
+		cmp.Or(channel, viper.GetString(config.FlatcarChannel)),
+		viper.GetString(config.FlatcarArchitecture))
 }
 
 func coreosArch() string { return viper.GetString(config.CoreOSArchitecture) }
 
-func coreosStreamsURL() string {
-	return fmt.Sprintf(viper.GetString(config.CoreOSStreamsURL), viper.GetString(config.CoreOSChannel))
+func coreosStreamsURL(channel string) string {
+	return fmt.Sprintf(viper.GetString(config.CoreOSStreamsURL),
+		cmp.Or(channel, viper.GetString(config.CoreOSChannel)))
 }
 
-func coreosBuildBaseURL(version, arch string) string {
+func coreosBuildBaseURL(channel, version, arch string) string {
 	return fmt.Sprintf(viper.GetString(config.CoreOSURL),
-		viper.GetString(config.CoreOSChannel), version, arch)
+		cmp.Or(channel, viper.GetString(config.CoreOSChannel)), version, arch)
 }

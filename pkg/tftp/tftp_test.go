@@ -189,14 +189,16 @@ func TestAssignedTokensMatchLegacy(t *testing.T) {
 
 // TestBootTokensByteIdentical is a characterization guard: it pins the exact
 // output of bootTokens for all three OSes so the bootTokensFor extraction
-// (Task 2) cannot silently change the assigned-boot token map. It must pass
-// both before and after the refactor; a failure here means a want literal was
-// wrong (fix to match current behavior) or the refactor broke something.
+// (Task 2) cannot silently change the assigned-boot token map. #48 is a spec
+// change for flatcar/coreos (channel-segmented caching), so their expectations
+// are UPDATED here; talos stays byte-identical to the #44 guard's original
+// promise.
 func TestBootTokensByteIdentical(t *testing.T) {
 	viper.Reset()
 	root := t.TempDir()
 	viper.Set(config.DataDir, root)
 	viper.Set(config.FlatcarArchitecture, "amd64")
+	viper.Set(config.FlatcarChannel, "stable")
 	viper.Set(config.CoreOSArchitecture, "x86_64")
 	viper.Set(config.CoreOSChannel, "stable")
 	viper.Set(config.TalosArchitecture, "amd64")
@@ -207,8 +209,9 @@ func TestBootTokensByteIdentical(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	seed("flatcar", "-", "amd64", "3815.2.0")
-	seed("coreos", "-", "x86_64", "40.20240101.3.0")
+	// #48: flatcar/coreos artifacts live under the CHANNEL segment now.
+	seed("flatcar", "stable", "amd64", "3815.2.0")
+	seed("coreos", "stable", "x86_64", "40.20240101.3.0")
 	seed("talos", "schemX", "amd64", "v1.10.5")
 
 	const server = "10.0.0.1"
@@ -220,15 +223,17 @@ func TestBootTokensByteIdentical(t *testing.T) {
 			"[[server]]":          server,
 			"[[flatcar-arch]]":    "amd64",
 			"[[flatcar-version]]": "3815.2.0",
-			"[[flatcar-baseurl]]": "http://" + cache.CacheURLBase(server, "flatcar", "-", "amd64", "3815.2.0"),
+			"[[flatcar-baseurl]]": "http://" + cache.CacheURLBase(server, "flatcar", "stable", "amd64", "3815.2.0"),
 		}},
+		// [[coreos-channel]] is GONE (dead token: coreos.ipxe set ${STREAM} but
+		// never used it); the baseurl carries the channel segment instead.
 		{"coreos", map[string]string{
 			"[[server]]":         server,
-			"[[coreos-channel]]": "stable",
 			"[[coreos-arch]]":    "x86_64",
 			"[[coreos-version]]": "40.20240101.3.0",
-			"[[coreos-baseurl]]": "http://" + cache.CacheURLBase(server, "coreos", "-", "x86_64", "40.20240101.3.0"),
+			"[[coreos-baseurl]]": "http://" + cache.CacheURLBase(server, "coreos", "stable", "x86_64", "40.20240101.3.0"),
 		}},
+		// Talos: byte-identical to pre-#48 (the #44 guard's original promise).
 		{"talos", map[string]string{
 			"[[server]]":          server,
 			"[[talos-schematic]]": "schemX",
@@ -242,6 +247,52 @@ func TestBootTokensByteIdentical(t *testing.T) {
 		if !maps.Equal(got, tc.want) {
 			t.Errorf("%s: bootTokens = %v, want %v", tc.os, got, tc.want)
 		}
+	}
+}
+
+// TestBootTokensAssignedParamsChannelOverride: the flatcar/coreos arms resolve
+// channel exactly the way the talos arm resolves schematic — host override
+// (AssignedParams, the P1c field), else flag. #48 stops these arms ignoring it.
+func TestBootTokensAssignedParamsChannelOverride(t *testing.T) {
+	viper.Reset()
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.FlatcarArchitecture, "amd64")
+	viper.Set(config.FlatcarChannel, "stable")
+
+	if err := os.MkdirAll(filepath.Join(root, "cache", "flatcar", "beta", "amd64", "4300.1.0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	host := &hardware.Host{AssignedParams: `{"channel":"beta"}`}
+	tokens := bootTokens("flatcar", "10.0.0.1", host)
+	if tokens["[[flatcar-version]]"] != "4300.1.0" {
+		t.Errorf("version = %q, want 4300.1.0 (newest under the OVERRIDE channel)", tokens["[[flatcar-version]]"])
+	}
+	want := "http://" + cache.CacheURLBase("10.0.0.1", "flatcar", "beta", "amd64", "4300.1.0")
+	if tokens["[[flatcar-baseurl]]"] != want {
+		t.Errorf("baseurl = %q, want %q", tokens["[[flatcar-baseurl]]"], want)
+	}
+
+	// Malformed AssignedParams: ignored (flag fallback), never a panic.
+	bad := &hardware.Host{AssignedParams: `{not json`}
+	if got := bootTokens("flatcar", "10.0.0.1", bad); got["[[flatcar-baseurl]]"] == want {
+		t.Error("malformed AssignedParams must fall back to the flag channel")
+	}
+}
+
+// TestCoreOSTemplateChannelFreeAndDotKernel: the dead [[coreos-channel]] token
+// and its `set STREAM` line are removed, and the kernel filename uses the dot
+// form the #48 Artifacts fix caches (dash-form would 404 at boot).
+func TestCoreOSTemplateChannelFreeAndDotKernel(t *testing.T) {
+	tmpl := PXEConfig["coreos.ipxe"]
+	if strings.Contains(tmpl, "[[coreos-channel]]") || strings.Contains(tmpl, "STREAM") {
+		t.Errorf("coreos.ipxe must not reference the dead channel token/STREAM var:\n%s", tmpl)
+	}
+	if !strings.Contains(tmpl, "live-kernel.${ARCH}") {
+		t.Errorf("coreos.ipxe kernel line must use the dot form live-kernel.${ARCH}:\n%s", tmpl)
+	}
+	if strings.Contains(tmpl, "live-kernel-${ARCH}") {
+		t.Errorf("coreos.ipxe still uses the dash kernel form:\n%s", tmpl)
 	}
 }
 

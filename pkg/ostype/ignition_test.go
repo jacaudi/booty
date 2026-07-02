@@ -3,6 +3,7 @@ package ostype
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -73,12 +74,72 @@ func TestFlatcar_DiscoverVersions(t *testing.T) {
 	if !ok {
 		t.Fatal("flatcar not registered")
 	}
-	versions, err := o.DiscoverVersions(t.Context())
+	versions, err := o.DiscoverVersions(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("DiscoverVersions error: %v", err)
 	}
 	if len(versions) != 1 || versions[0] != "3815.2.0" {
 		t.Errorf("DiscoverVersions = %v, want [3815.2.0]", versions)
+	}
+}
+
+func TestFlatcar_DiscoverVersions_PerChannelParams(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/beta/"):
+			_, _ = w.Write([]byte("FLATCAR_VERSION=4300.1.0\n"))
+		default:
+			_, _ = w.Write([]byte("FLATCAR_VERSION=4230.2.2\n"))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.FlatcarURL, srv.URL+"/%s/%s")
+	viper.Set(config.FlatcarChannel, "stable")
+	viper.Set(config.FlatcarArchitecture, "amd64")
+
+	o, _ := Lookup("flatcar")
+	got, err := o.DiscoverVersions(t.Context(), map[string]string{"channel": "beta"})
+	if err != nil {
+		t.Fatalf("DiscoverVersions: %v", err)
+	}
+	if len(got) != 1 || got[0] != "4300.1.0" {
+		t.Errorf("channel=beta discovery = %v, want [4300.1.0] (params must beat the flag)", got)
+	}
+}
+
+func TestFlatcar_Artifacts_ChannelInURL(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
+	viper.Set(config.FlatcarChannel, "stable")
+	viper.Set(config.FlatcarArchitecture, "amd64")
+
+	o, _ := Lookup("flatcar")
+	for _, a := range o.Artifacts("4230.2.2", "amd64", map[string]string{"channel": "beta"}) {
+		if !strings.Contains(a.URL, "https://beta.release.flatcar-linux.net/") {
+			t.Errorf("artifact URL %q must use the params channel (beta)", a.URL)
+		}
+	}
+	// Empty channel: defensive fallback to the flag (a pre-migration row must
+	// not build a %!s(MISSING) URL).
+	for _, a := range o.Artifacts("4230.2.2", "amd64", nil) {
+		if !strings.Contains(a.URL, "https://stable.release.flatcar-linux.net/") {
+			t.Errorf("nil-params artifact URL %q must fall back to the flag channel", a.URL)
+		}
+	}
+}
+
+func TestFlatcar_RequiredParams(t *testing.T) {
+	o, _ := Lookup("flatcar")
+	if got := o.RequiredParams(); len(got) != 1 || got[0] != "channel" {
+		t.Errorf("flatcar RequiredParams = %v, want [channel]", got)
+	}
+	fc, _ := Lookup("fedora-coreos")
+	if got := fc.RequiredParams(); len(got) != 1 || got[0] != "channel" {
+		t.Errorf("fedora-coreos RequiredParams = %v, want [channel]", got)
 	}
 }
 
@@ -117,12 +178,38 @@ func TestFedoraCoreOS_DiscoverHonorsStreamsURLOverride(t *testing.T) {
 	viper.Set(config.CoreOSArchitecture, "x86_64")
 
 	o, _ := Lookup("fedora-coreos")
-	got, err := o.DiscoverVersions(t.Context())
+	got, err := o.DiscoverVersions(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("DiscoverVersions: %v", err)
 	}
 	if len(got) != 1 || got[0] != "40.20240101.3.0" {
 		t.Errorf("DiscoverVersions = %v, want [40.20240101.3.0] from the override", got)
+	}
+}
+
+func TestFedoraCoreOS_DiscoverVersions_PerChannelParams(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/next.json") {
+			_, _ = w.Write([]byte(`{"architectures":{"x86_64":{"artifacts":{"metal":{"release":"45.20260601.1.0"}}}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"architectures":{"x86_64":{"artifacts":{"metal":{"release":"44.20260607.3.1"}}}}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/streams/%s.json")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+
+	o, _ := Lookup("fedora-coreos")
+	got, err := o.DiscoverVersions(t.Context(), map[string]string{"channel": "next"})
+	if err != nil {
+		t.Fatalf("DiscoverVersions: %v", err)
+	}
+	if len(got) != 1 || got[0] != "45.20260601.1.0" {
+		t.Errorf("channel=next discovery = %v, want [45.20260601.1.0]", got)
 	}
 }
 
@@ -135,6 +222,33 @@ func TestFedoraCoreOS_Artifacts(t *testing.T) {
 	for _, a := range got {
 		if a.URL == "" || a.Filename == "" {
 			t.Errorf("incomplete fcos artifact: %+v", a)
+		}
+	}
+}
+
+func TestFedoraCoreOS_Artifacts_DotKernelAndChannel(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
+	viper.Set(config.CoreOSChannel, "stable")
+
+	o, _ := Lookup("fedora-coreos")
+	got := o.Artifacts("44.20260607.3.1", "x86_64", map[string]string{"channel": "testing"})
+	if len(got) != 3 {
+		t.Fatalf("fcos artifacts = %d, want 3", len(got))
+	}
+	// LIVE BUG fix: FCOS renamed live-kernel-<arch> (dash) to live-kernel.<arch>
+	// (dot) between FCOS 39 and 44 — the dash form 404s for every current build.
+	wantKernel := "fedora-coreos-44.20260607.3.1-live-kernel.x86_64"
+	if got[0].Filename != wantKernel {
+		t.Errorf("kernel filename = %q, want %q (dot form)", got[0].Filename, wantKernel)
+	}
+	for _, a := range got {
+		if !strings.Contains(a.URL, "/streams/testing/builds/") {
+			t.Errorf("artifact URL %q must use the params channel (testing)", a.URL)
+		}
+		if strings.Contains(a.URL, "live-kernel-x86_64") {
+			t.Errorf("artifact URL %q still uses the dash kernel form", a.URL)
 		}
 	}
 }
