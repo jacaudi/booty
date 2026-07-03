@@ -430,6 +430,25 @@ algorithm and armored-vs-binary handling in the plan. If it fails, the
 dependency/verification-path choice (ProtonMail/go-crypto) reopens before any code is
 written.
 
+> **SPIKE RESULT (2026-07-02, plan session) — PASSED.** ProtonMail/go-crypto **v1.4.1**
+> `openpgp.CheckDetachedSignature` verified the real
+> `flatcar_production_pxe.vmlinuz` + its production 622-byte `.sig` against the
+> published `Flatcar_Image_Signing_Key.asc`:
+> - **Framing:** the `.sig` is a **binary** detached signature (not armored) →
+>   use `CheckDetachedSignature`, not the `Armored` variant; the key file itself
+>   IS armored → `ReadArmoredKeyRing`.
+> - **Digest:** SHA-256 (no legacy-SHA-1 rejection issue). Signer: RSA subkey.
+> - **Tamper check:** bit-flip fails with `openpgp: invalid signature: RSA
+>   verification failure` — correct.
+> - **Rotation reality (feeds §3's rotation subsection):** primary key
+>   `F88CFEDEFF29A5B4D9523864E25D9AED0593B34A` (Flatcar Buildbot) never expires;
+>   signing uses **rotating subkeys** — the bundle carries 8 expired subkeys and
+>   the ACTIVE signing subkey `52F145DFD00BBDCD928CBB5A32DA80F91EF52974` expires
+>   **2027-03-08**. The embedded keyring must be refreshed via a booty release
+>   before that date (or when Flatcar rotates early) — pin this date in
+>   CONFIGURATION.md's rotation runbook.
+> The ProtonMail/go-crypto dependency choice is CONFIRMED.
+
 ## 10. Testing
 
 - `ostype`: FCOS `Artifacts` against an httptest streams JSON (current version →
