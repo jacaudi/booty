@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Alert, Button, Space, Table, Tag, Tooltip, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { CacheEntry } from '../api/cache'
-import { listCache, pinCache, scanCache, unpinCache } from '../api/cache'
+import { listCache, pinCache, reverifyCacheEntry, scanCache, unpinCache } from '../api/cache'
 
 function humanSize(n: number): string {
   if (n < 1024) return `${n} B`
@@ -66,6 +66,20 @@ export default function CacheView() {
     { title: 'Pinned', key: 'pinned', render: (_, e) => (e.pinned ? 'Yes' : 'No') },
     { title: 'Fetched', dataIndex: 'fetchedAt', key: 'fetchedAt' },
     {
+      title: 'Verified',
+      key: 'verified',
+      render: (_, e) => {
+        if (e.verified === true) return <Tag color="green">✓</Tag>
+        if (e.verified === false)
+          return (
+            <Tooltip title={e.verifyErr || 'verification failed'}>
+              <Tag color="red">✗</Tag>
+            </Tooltip>
+          )
+        return <Tag>—</Tag>
+      },
+    },
+    {
       title: 'Actions',
       key: 'actions',
       render: (_, e) => (
@@ -75,6 +89,7 @@ export default function CacheView() {
           ) : (
             <Button size="small" onClick={() => act(() => pinCache(e.id), `Pinned ${e.version}`)}>Pin</Button>
           )}
+          <Button size="small" onClick={() => act(() => reverifyCacheEntry(e.id), `Reverified ${e.version}`)}>Reverify</Button>
           <Tooltip title="available after authentication (P10)">
             <Button size="small" danger disabled>Delete</Button>
           </Tooltip>

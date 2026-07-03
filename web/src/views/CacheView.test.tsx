@@ -45,4 +45,28 @@ describe('CacheView', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Scan' }))
     expect(api.scanCache).toHaveBeenCalled()
   })
+
+  it('renders three distinct Verified states', async () => {
+    vi.mocked(api.listCache).mockResolvedValue([
+      entry({ id: 1, version: 'v1', verified: true }),
+      entry({ id: 2, version: 'v2', verified: false, verifyErr: 'signature mismatch' }),
+      entry({ id: 3, version: 'v3', verified: null }),
+    ])
+    render(<CacheView />)
+    await waitFor(() => screen.getByText('v1'))
+    expect(screen.getByText('✓')).toBeInTheDocument()
+    expect(screen.getByText('✗')).toBeInTheDocument()
+    expect(screen.getByText('—')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Reverify' })).toHaveLength(3)
+  })
+
+  it('reverify calls reverifyCacheEntry then reloads', async () => {
+    vi.mocked(api.listCache).mockResolvedValue([entry({ id: 5, verified: null })])
+    vi.mocked(api.reverifyCacheEntry).mockResolvedValue(undefined)
+    render(<CacheView />)
+    await waitFor(() => screen.getByText('v1'))
+    await userEvent.click(screen.getByRole('button', { name: 'Reverify' }))
+    expect(api.reverifyCacheEntry).toHaveBeenCalledWith(5)
+    await waitFor(() => expect(api.listCache).toHaveBeenCalledTimes(2))
+  })
 })

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { listCache, pinCache, scanCache } from './cache'
+import { listCache, pinCache, reverifyCacheEntry, scanCache } from './cache'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -17,6 +17,13 @@ describe('cache api client', () => {
     vi.stubGlobal('fetch', fetchMock)
     await pinCache(7)
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache/7/pin', { method: 'POST' })
+  })
+
+  it('reverifyCacheEntry POSTs to the reverify path', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await reverifyCacheEntry(7)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache/7/reverify', { method: 'POST' })
   })
 
   it('scanCache POSTs /cache/scan and returns the summary', async () => {

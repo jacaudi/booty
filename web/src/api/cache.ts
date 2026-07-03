@@ -11,6 +11,8 @@ export interface CacheEntry {
   pinned: boolean
   inWindow: boolean
   fetchedAt: string
+  verified?: boolean | null
+  verifyErr?: string
 }
 
 export interface ScanResult {
@@ -30,6 +32,10 @@ export function pinCache(id: number): Promise<unknown> {
 
 export function unpinCache(id: number): Promise<unknown> {
   return request(`/cache/${id}/unpin`, { method: 'POST' })
+}
+
+export function reverifyCacheEntry(id: number): Promise<unknown> {
+  return request(`/cache/${id}/reverify`, { method: 'POST' })
 }
 
 export function scanCache(): Promise<ScanResult | undefined> {
