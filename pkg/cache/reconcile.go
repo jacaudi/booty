@@ -91,6 +91,13 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 	cacheName := canonicalToCacheName(t.OS)
 	segment := paramSegment(params)
 
+	// Prior-tick cached state, read BEFORE the desired loop's per-version upserts
+	// reset cached=0. The land-path idempotency skip below consults it.
+	cachedByVersion := make(map[string]bool, len(existing))
+	for _, v := range existing {
+		cachedByVersion[v.Version] = v.Cached
+	}
+
 	// Upsert + ensure-artifacts for every desired version (retained discovered +
 	// all manual pins). Manual rows keep source="manual".
 	desired := append(slices.Clone(retained), manual...)
@@ -99,14 +106,39 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		if slices.Contains(manual, version) {
 			source = "manual"
 		}
-		if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: t.ID, Version: version, Source: source}); err != nil {
-			return fmt.Errorf("cache: upsert %d/%s: %w", t.ID, version, err)
-		}
 		dir := cacheDir(cacheName, segment, t.Arch, version)
 		arts, aerr := o.Artifacts(ctx, version, t.Arch, params)
 		if aerr != nil {
+			// No artifact list → cannot evaluate the skip guard, so do NOT touch
+			// the row: a settled version keeps its cached=1 through a transient
+			// upstream blip (the #48-window drop this fix also guards against).
 			slog.Warn("cache: artifacts unavailable; skipping version this tick", "os", t.OS, "version", version, "err", aerr)
 			continue
+		}
+
+		// Idempotency (restores the retired ensureArtifact's skip-if-present): a
+		// version already cached=1 in the prior snapshot whose every final file is
+		// on disk is SETTLED — skip the whole version (no re-download, no
+		// re-verify, and critically no cached=0 reset), instead of re-running a
+		// full HTTP GET for every artifact each CacheInterval tick.
+		//
+		// Safety: cached=1 is set ONLY on the successful all-landed path (never on
+		// a rejected/failed version), so the skip cannot admit a version that
+		// never passed admission; finalFilesPresent forces the full land path when
+		// any byte is missing. The verified column is intentionally NOT consulted:
+		// a legitimately not-verifiable version (Talos/Debian have no sha/sig, or a
+		// version landed under `off`) records verified=NULL yet is fully settled,
+		// and gating the skip on non-NULL verified would re-download it forever
+		// under the default `warn`. Policy tightening is NOT retroactive: a version
+		// admitted under a looser prior policy stays on disk until the reverify
+		// endpoint re-checks it on demand — matching the design (§5, D15); no
+		// retroactive re-verification happens here.
+		if cachedByVersion[version] && finalFilesPresent(dir, arts) {
+			continue
+		}
+
+		if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: t.ID, Version: version, Source: source}); err != nil {
+			return fmt.Errorf("cache: upsert %d/%s: %w", t.ID, version, err)
 		}
 		policy := viper.GetString(config.SignaturePolicy)
 		verdicts := make([]artifactVerdict, len(arts))

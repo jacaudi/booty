@@ -13,6 +13,7 @@ import (
 	"regexp"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
 
@@ -50,6 +51,23 @@ func artifactPath(dir, srcURL string) (string, error) {
 		return "", fmt.Errorf("cache: parse url %q: %w", srcURL, err)
 	}
 	return filepath.Join(dir, path.Base(u.Path)), nil
+}
+
+// finalFilesPresent reports whether every artifact's final (landed) file already
+// exists in dir. It is the disk half of the land-path idempotency skip: a version
+// marked cached whose bytes are all present needs no re-download. Any missing
+// file (or an unparseable URL) returns false so the caller re-runs the full land.
+func finalFilesPresent(dir string, arts []ostype.Artifact) bool {
+	for _, a := range arts {
+		p, err := artifactPath(dir, a.URL)
+		if err != nil {
+			return false
+		}
+		if _, err := os.Stat(p); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // removeVersionDir removes a single version-scoped directory and its contents.

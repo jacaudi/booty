@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -478,6 +479,133 @@ func TestLandArtifact_PolicyTable(t *testing.T) {
 				t.Errorf(".partial must never remain after landArtifact")
 			}
 		})
+	}
+}
+
+// TestReconcileSkipsAlreadyCachedVersion proves the land-path idempotency the
+// retired ensureArtifact used to give: once a version is fully cached (bytes on
+// disk + cached=1), a SECOND reconcile tick must NOT re-download its artifacts.
+// A per-artifact request counter (non-.json = artifact byte fetch) makes the
+// regression observable: without the version-level skip guard the second tick
+// re-runs DownloadStaged for every artifact and the counter climbs; with it the
+// counter stays put and the version remains cached=1. Runs under the default
+// `warn` with matching sha256 so the version lands verified=1 (cached+verified).
+func TestReconcileSkipsAlreadyCachedVersion(t *testing.T) {
+	body := []byte("fcos-artifact")
+	sha := hexSHA(body)
+	var artifactHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			_, _ = fmt.Fprintf(w, `{"architectures":{"x86_64":{"artifacts":{"metal":{`+
+				`"release":"44.0.0.0","formats":{"pxe":{`+
+				`"kernel":{"location":"%[1]s/44/kernel","sha256":"%[2]s"},`+
+				`"initramfs":{"location":"%[1]s/44/initramfs","sha256":"%[2]s"},`+
+				`"rootfs":{"location":"%[1]s/44/rootfs","sha256":"%[2]s"}`+
+				`}}}}}}}`, "http://"+r.Host, sha)
+			return
+		}
+		artifactHits.Add(1)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.SignaturePolicy, "warn")
+
+	store := newReconcileStore(t)
+	tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt, _ := store.GetTarget(tid)
+
+	// First tick: artifacts are fetched and the version lands cached+verified.
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+	firstHits := artifactHits.Load()
+	if firstHits == 0 {
+		t.Fatal("first tick must fetch artifacts")
+	}
+	rows, _ := store.ListCacheEntries(db.CacheFilter{})
+	if len(rows) != 1 || rows[0].Verified == nil || !*rows[0].Verified {
+		t.Fatalf("first tick must land one verified=1 row, got %+v", rows)
+	}
+
+	// Second tick: the version is settled (bytes present + cached=1), so the
+	// reconciler must skip it — no additional artifact fetches.
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+	if got := artifactHits.Load(); got != firstHits {
+		t.Fatalf("second tick re-downloaded a settled version: artifact hits %d → %d (want no increase)", firstHits, got)
+	}
+	vers, _ := store.ListTargetVersions(tid)
+	var stillCached bool
+	for _, v := range vers {
+		if v.Version == "44.0.0.0" && v.Cached {
+			stillCached = true
+		}
+	}
+	if !stillCached {
+		t.Fatalf("settled version must remain cached=1 across ticks, got %+v", vers)
+	}
+}
+
+// TestLandArtifact_FlatcarShapeValidSignatureLandsUnderWarn closes the coverage
+// gap the retention tests leave: they run under `off` (dodging Flatcar's
+// production keyring + fake .sig), so Flatcar's SIGNATURE-based land shape
+// (SigURL + GPGKey, NO sha256) is never exercised under the DEFAULT `warn`.
+// A subtly-wrong key/sig scheme would silently classForgery every artifact →
+// rejected → Flatcar stops caching under warn, uncaught. This drives a
+// Flatcar-shaped two-file set with GENUINE valid detached signatures (throwaway
+// keyring via gpgFixture) through landArtifact under warn, then aggregates the
+// verdicts, proving the whole shape lands with classPass and version-level
+// verified=true. (Throwaway keys, not the production key, so this proves the
+// land/verify WIRING for the shape — not Flatcar's actual upstream key/sig,
+// which is not hermetically testable.)
+func TestLandArtifact_FlatcarShapeValidSignatureLandsUnderWarn(t *testing.T) {
+	// Flatcar's two-file PXE set; each file gets its own valid detached sig.
+	files := map[string][]byte{
+		"flatcar_production_pxe.vmlinuz":       []byte("vmlinuz-bytes"),
+		"flatcar_production_pxe_image.cpio.gz": []byte("cpio-bytes"),
+	}
+	art := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		_, _ = w.Write(files[name])
+	}))
+	t.Cleanup(art.Close)
+
+	dir := t.TempDir()
+	verdicts := make([]artifactVerdict, 0, len(files))
+	for name, contents := range files {
+		keyring, sigURL, closeFn := gpgFixture(t, contents) // valid sig over the served bytes
+		t.Cleanup(closeFn)
+		a := ostype.Artifact{Filename: name, URL: art.URL + "/" + name, SigURL: sigURL, GPGKey: keyring}
+		landed, v, err := landArtifact(t.Context(), dir, a, "warn")
+		if err != nil {
+			t.Fatalf("landArtifact %s: %v", name, err)
+		}
+		if !landed || v.class != classPass {
+			t.Fatalf("%s: landed=%v class=%d, want landed=true class=%d (classPass)", name, landed, v.class, classPass)
+		}
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s: valid-sig artifact must exist at final path: %v", name, err)
+		}
+		verdicts = append(verdicts, v)
+	}
+
+	verified, verifyErr := aggregateVerdicts(verdicts)
+	if verified == nil || !*verified {
+		t.Fatalf("flatcar-shaped valid sigs must aggregate to verified=true, got %v", verified)
+	}
+	if verifyErr != "" {
+		t.Fatalf("valid signatures must produce no verify_err, got %q", verifyErr)
 	}
 }
 
