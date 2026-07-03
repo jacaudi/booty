@@ -49,6 +49,7 @@ const (
 	CoreOSStreamsURL       = "coreOSStreamsURL"
 	SignaturePolicy        = "signaturePolicy"
 	PreseedFile            = "preseedFile"
+	ConfigRevisionsKeep    = "configRevisionsKeep"
 )
 
 // httpClient is the package-level HTTP client used for DownloadStaged.
@@ -68,6 +69,7 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(TalosRetainMinors, 3)
 	viper.SetDefault(TalosConfigFile, "config/machineconfig.yaml")
 	viper.SetDefault(PreseedFile, "config/preseed.cfg")
+	viper.SetDefault(ConfigRevisionsKeep, 10)
 	viper.SetDefault(TalosFactoryURL, "https://factory.talos.dev")
 	viper.SetDefault(CacheInterval, 5*time.Minute)
 	viper.SetDefault(CacheConcurrency, 4)

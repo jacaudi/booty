@@ -56,6 +56,8 @@ var args struct {
 
 	preseedFile string
 
+	configRevisionsKeep int
+
 	signaturePolicy string
 }
 
@@ -220,6 +222,13 @@ func init() {
 		"preseedFile",
 		"config/preseed.cfg",
 		"Debian preseed template served at /preseed (relative to dataDir)",
+	)
+
+	flags.IntVar(
+		&args.configRevisionsKeep,
+		"configRevisionsKeep",
+		10,
+		"Number of newest config revisions to retain per config (the active revision is always kept)",
 	)
 
 	Cmd.AddCommand(newVersionCmd())
