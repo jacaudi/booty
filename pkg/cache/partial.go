@@ -17,7 +17,7 @@ func SweepPartials(root string) error {
 		if err != nil {
 			return nil // best-effort: skip unreadable subtrees
 		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), ".partial") {
+		if !d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".partial") {
 			if rerr := os.Remove(p); rerr != nil {
 				slog.Warn("cache: sweep partial failed", "path", p, "err", rerr)
 			}

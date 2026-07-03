@@ -48,7 +48,7 @@ func Scan(store *db.Store) (ScanResult, error) {
 			var size int64
 			entries, _ := os.ReadDir(dir)
 			for _, e := range entries {
-				if strings.HasSuffix(e.Name(), ".partial") {
+				if strings.HasSuffix(strings.ToLower(e.Name()), ".partial") {
 					continue // in-flight download, not a cached artifact
 				}
 				if fi, err := e.Info(); err == nil {

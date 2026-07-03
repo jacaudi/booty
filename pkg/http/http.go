@@ -34,14 +34,7 @@ func StartHTTP(deps APIDeps) *http.Server {
 	myHandler.HandleFunc("/unregister", handleUnregistrationRequest)
 	myHandler.HandleFunc("/booty.json", handleDataRequest)
 	myHandler.HandleFunc("/info", handleInfoRequest)
-	dataFS := http.FileServer(http.Dir(viper.GetString(config.DataDir)))
-	myHandler.Handle("/data/", http.StripPrefix("/data/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isPartialPath(r.URL.Path) {
-			http.NotFound(w, r)
-			return
-		}
-		dataFS.ServeHTTP(w, r)
-	})))
+	myHandler.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(viper.GetString(config.DataDir))))
 	uiFS, err := web.DistFS()
 	if err != nil {
 		slog.Error("ui embed", "err", err)
@@ -71,10 +64,29 @@ func StartHTTP(deps APIDeps) *http.Server {
 	return s
 }
 
+// dataFileHandler serves files under dataDir, blocking any request whose
+// (decoded) path targets an in-flight staged download (see isPartialPath).
+// Extracted from StartHTTP's /data/ registration so it is independently
+// testable via httptest without standing up the full mux/server.
+func dataFileHandler(dataDir string) http.Handler {
+	dataFS := http.FileServer(http.Dir(dataDir))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPartialPath(r.URL.Path) {
+			http.NotFound(w, r)
+			return
+		}
+		dataFS.ServeHTTP(w, r)
+	})
+}
+
 // isPartialPath reports whether a request path targets an in-flight staged
 // download. Such files must never be served (they are incomplete/unverified);
 // the boot path never references them, this guards direct /data/ browsing.
-func isPartialPath(p string) bool { return strings.HasSuffix(p, ".partial") }
+// Case-insensitive: a .partial file is always written lowercase, but on a
+// case-insensitive dev filesystem (e.g. macOS/APFS) a request for
+// "kernel.PARTIAL" would otherwise resolve to the same on-disk file and
+// bypass a case-sensitive check.
+func isPartialPath(p string) bool { return strings.HasSuffix(strings.ToLower(p), ".partial") }
 
 func logRequest(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
