@@ -1,7 +1,9 @@
 package cache
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -702,6 +704,40 @@ func TestReconcileFCOSVerification(t *testing.T) {
 		rows, _ := store.ListCacheEntries(db.CacheFilter{})
 		if len(rows) != 1 || !rows[0].InWindow || rows[0].Verified == nil || *rows[0].Verified {
 			t.Fatalf("want an in-window verified=0 row, got %+v", rows)
+		}
+	})
+
+	// The whole point of `warn` is to WARN the operator: a corruption/checksum
+	// failure that LANDS with verified=0 must also emit a WARN log line, not just
+	// flip a silent DB flag. Capture the default logger and assert the WARN fires,
+	// carrying the version and verify_err. (Only reachable under warn: strict
+	// rejects, off records verified=NULL.)
+	t.Run("warn logs a WARN when a mismatch lands", func(t *testing.T) {
+		store, tgt, srv := setup(t, "warn", hexSHA([]byte("wrong")))
+		t.Cleanup(srv.Close)
+		t.Cleanup(viper.Reset)
+
+		var logbuf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logbuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		t.Cleanup(func() { slog.SetDefault(prev) })
+
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatal(err)
+		}
+
+		logged := logbuf.String()
+		if !strings.Contains(logged, "failed verification") {
+			t.Fatalf("warn policy must emit a WARN when a mismatch lands; got log: %q", logged)
+		}
+		if !strings.Contains(logged, "level=WARN") {
+			t.Fatalf("verification-failure log must be at WARN level; got: %q", logged)
+		}
+		if !strings.Contains(logged, "44.0.0.0") {
+			t.Fatalf("WARN must identify the landed version; got: %q", logged)
+		}
+		if !strings.Contains(logged, "verifyErr=") {
+			t.Fatalf("WARN must carry verifyErr; got: %q", logged)
 		}
 	})
 

@@ -118,7 +118,7 @@ until auth lands in P10).
 ### Flatcar signing-key rotation runbook
 
 The Flatcar image-signing public key is **embedded at compile time**
-(`//go:embed pkg/ostype/keys/flatcar.asc`) — there is no hot reload. Flatcar signs releases with
+(`//go:embed keys/flatcar.asc`) — there is no hot reload. Flatcar signs releases with
 **rotating subkeys**; the currently-active signing subkey
 `52F145DFD00BBDCD928CBB5A32DA80F91EF52974` **expires 2027-03-08**. Before that date (or whenever
 Flatcar rotates early), the operator must ship a **new booty release** that re-vendors the key:

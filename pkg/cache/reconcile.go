@@ -201,6 +201,16 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 			if err := store.SetCacheVerified(tvID, verified, verifyErr); err != nil {
 				return fmt.Errorf("cache: record verdict %d/%s: %w", t.ID, version, err)
 			}
+			if !*verified {
+				// Landed WITH a verification failure — reachable only under `warn`
+				// (strict rejects the version above; off records verified=NULL, so
+				// verified==nil here). The point of `warn` is to warn the operator;
+				// the silent verified=0 DB flag is not that, so emit the WARN the
+				// design + CONFIGURATION.md promise. Observability only — the
+				// land/reject decision was already made by landArtifact.
+				slog.Warn("cache: landed artifact with failed verification (signaturePolicy=warn)",
+					"os", t.OS, "arch", t.Arch, "version", version, "verifyErr", verifyErr)
+			}
 		}
 	}
 
