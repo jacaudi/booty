@@ -2,6 +2,8 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,9 +47,10 @@ const (
 	CacheConcurrency       = "cacheConcurrency"
 	CacheMaxBytes          = "cacheMaxBytes"
 	CoreOSStreamsURL       = "coreOSStreamsURL"
+	SignaturePolicy        = "signaturePolicy"
 )
 
-// httpClient is the package-level HTTP client used for DownloadFile.
+// httpClient is the package-level HTTP client used for DownloadStaged.
 // The 5-minute Timeout is a hard ceiling covering the entire request
 // lifecycle (connect + headers + body); ctx-driven cancellation
 // composes on top, so whichever fires first wins.
@@ -70,6 +73,7 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(CoreOSStreamsURL, "https://builds.coreos.fedoraproject.org/streams/%s.json")
 	viper.SetDefault(FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
 	viper.SetDefault(CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
+	viper.SetDefault(SignaturePolicy, "warn")
 	// https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64
 	// https://stable.release.flatcar-linux.net/amd64-usr/current/version.txt
 
@@ -82,54 +86,55 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.BindEnv(DatabasePath, "DATABASE_PATH")
 }
 
-// DownloadFile streams the body at rawURL into <destDir>/<filename>, where
-// filename is the trailing path segment of rawURL (query strings stripped).
-// The request honors ctx cancellation and httpClient.Timeout (5 minutes);
-// whichever fires first wins. A >=400 status is rejected before any file is
-// created. Callers are responsible for ensuring destDir exists.
-func DownloadFile(ctx context.Context, destDir, rawURL string) error {
-	slog.Info("downloading", "url", rawURL)
+// DownloadStaged streams the body at rawURL into <destDir>/<base>.partial (base
+// is rawURL's trailing path segment, query stripped), computing the SHA-256 hex
+// digest WHILE streaming (io.TeeReader — no second disk read). It returns the
+// partial path and the digest. On transport error, non-2xx status, or a write
+// failure the .partial is removed and an error returned — nothing lands at the
+// final name. The caller (cache.landArtifact) owns verification + the rename.
+func DownloadStaged(ctx context.Context, destDir, rawURL string) (string, string, error) {
+	slog.Info("downloading (staged)", "url", rawURL)
 
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("config: parse url %q: %w", rawURL, err)
+		return "", "", fmt.Errorf("config: parse url %q: %w", rawURL, err)
 	}
+	base := path.Base(u.Path)
+	if base == "." || base == ".." || base == "/" {
+		return "", "", fmt.Errorf("config: url %q yields unsafe filename %q", rawURL, base)
+	}
+	partialPath := filepath.Join(destDir, base+".partial")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return fmt.Errorf("config: build request: %w", err)
+		return "", "", fmt.Errorf("config: build request: %w", err)
 	}
-
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("config: get %s: %w", rawURL, err)
+		return "", "", fmt.Errorf("config: get %s: %w", rawURL, err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("config: get %s: status %s", rawURL, resp.Status)
+		return "", "", fmt.Errorf("config: get %s: status %s", rawURL, resp.Status)
 	}
 
-	base := path.Base(u.Path)
-	if base == "." || base == ".." || base == "/" {
-		return fmt.Errorf("config: url %q yields unsafe filename %q", rawURL, base)
-	}
-	filename := filepath.Join(destDir, base)
-	slog.Info("creating file", "file", filename)
-
-	f, err := os.Create(filename)
+	f, err := os.Create(partialPath)
 	if err != nil {
-		return fmt.Errorf("config: create %s: %w", filename, err)
+		return "", "", fmt.Errorf("config: create %s: %w", partialPath, err)
 	}
-	defer f.Close()
-
-	n, err := io.Copy(f, resp.Body)
+	hasher := sha256.New()
+	n, err := io.Copy(f, io.TeeReader(resp.Body, hasher))
+	closeErr := f.Close()
 	if err != nil {
-		return fmt.Errorf("config: write %s: %w", filename, err)
+		_ = os.Remove(partialPath)
+		return "", "", fmt.Errorf("config: write %s: %w", partialPath, err)
 	}
-
-	slog.Info("download complete", "url", rawURL, "bytes", n)
-	return nil
+	if closeErr != nil {
+		_ = os.Remove(partialPath)
+		return "", "", fmt.Errorf("config: close %s: %w", partialPath, closeErr)
+	}
+	slog.Info("staged download complete", "url", rawURL, "bytes", n)
+	return partialPath, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // DatabasePathValue resolves the SQLite database path: the explicit
@@ -142,4 +147,17 @@ func DatabasePathValue() string {
 		return p
 	}
 	return filepath.Join(viper.GetString(DataDir), "booty.db")
+}
+
+// ValidateSignaturePolicy rejects an unknown --signaturePolicy value at startup
+// (fail-fast; booty has no AutomaticEnv/config file, so the flag is the source).
+// strict = refuse any verification failure; warn = refuse forgeries, land
+// corruption + log; off = never verify.
+func ValidateSignaturePolicy() error {
+	switch v := viper.GetString(SignaturePolicy); v {
+	case "strict", "warn", "off":
+		return nil
+	default:
+		return fmt.Errorf("config: invalid signaturePolicy %q (want strict|warn|off)", v)
+	}
 }

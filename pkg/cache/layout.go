@@ -4,10 +4,8 @@
 package cache
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"os"
 	"path"
@@ -15,6 +13,7 @@ import (
 	"regexp"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
 
@@ -43,8 +42,9 @@ func CacheURLBase(server, osName, schematic, arch, version string) string {
 }
 
 // artifactPath returns the on-disk path an artifact URL resolves to inside dir,
-// using the SAME trailing-path-segment derivation ensureArtifact/DownloadFile
-// use. It is the single source for "where did this URL's bytes land".
+// using the SAME trailing-path-segment derivation config.DownloadStaged uses
+// (path.Base of the URL, query stripped). It is the single source for "where
+// did this URL's bytes land" and is used for size accounting after landing.
 func artifactPath(dir, srcURL string) (string, error) {
 	u, err := url.Parse(srcURL)
 	if err != nil {
@@ -53,23 +53,21 @@ func artifactPath(dir, srcURL string) (string, error) {
 	return filepath.Join(dir, path.Base(u.Path)), nil
 }
 
-// ensureArtifact downloads srcURL into dir if not already present (idempotent).
-// The on-disk filename is the URL's trailing path segment (query stripped) —
-// the SAME derivation config.DownloadFile uses — so the existence check and the
-// written file always agree.
-func ensureArtifact(ctx context.Context, dir, srcURL string) error {
-	dst, err := artifactPath(dir, srcURL)
-	if err != nil {
-		return err
+// finalFilesPresent reports whether every artifact's final (landed) file already
+// exists in dir. It is the disk half of the land-path idempotency skip: a version
+// marked cached whose bytes are all present needs no re-download. Any missing
+// file (or an unparseable URL) returns false so the caller re-runs the full land.
+func finalFilesPresent(dir string, arts []ostype.Artifact) bool {
+	for _, a := range arts {
+		p, err := artifactPath(dir, a.URL)
+		if err != nil {
+			return false
+		}
+		if _, err := os.Stat(p); err != nil {
+			return false
+		}
 	}
-	if _, err := os.Stat(dst); err == nil {
-		slog.Debug("artifact already cached", "file", dst)
-		return nil
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	return config.DownloadFile(ctx, dir, srcURL)
+	return true
 }
 
 // removeVersionDir removes a single version-scoped directory and its contents.

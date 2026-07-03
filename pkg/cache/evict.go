@@ -14,8 +14,11 @@ import (
 // coordinator goroutine.
 //
 // The no-progress guard: eviction trusts the DB `size` column; a size=0 row
-// would free nothing yet keep the loop deleting. So each pass re-checks
-// SumCacheBytes and stops if a deletion makes no measurable progress.
+// would free nothing yet keep the loop deleting. D14 (ListArchivedUnpinned's
+// size>0 filter) is the primary defense — it excludes zero-byte rows from
+// candidacy entirely. This guard is the backstop: each pass still re-checks
+// SumCacheBytes and stops if a deletion makes no measurable progress, in case
+// the size column is wrong in some other way.
 func evictOverBudget(store *db.Store, maxBytes int64) error {
 	if maxBytes <= 0 {
 		return nil
@@ -28,16 +31,30 @@ func evictOverBudget(store *db.Store, maxBytes int64) error {
 		if total <= maxBytes {
 			return nil
 		}
-		candidates, err := store.ListArchivedUnpinned() // oldest fetched_at first
+		candidates, err := store.ListArchivedUnpinned() // oldest fetched_at first, size>0
 		if err != nil {
 			return fmt.Errorf("cache: evict list: %w", err)
 		}
-		if len(candidates) == 0 {
-			slog.Warn("cache: over budget but only in-window/pinned versions remain; not evicting",
+		// D13: never evict the newest cached version of a target — those are the
+		// bytes NewestCached serves to the boot path. Version ordering is
+		// ostype-specific (not SQL-expressible), so the guard lives here, using
+		// NewestCached (the disk-scan authority). Skip protected candidates and
+		// take the first evictable one.
+		var c *db.CacheEntryRow
+		for i := range candidates {
+			cand := candidates[i]
+			params, _ := decodeParams(cand.Params)
+			if cand.Version == NewestCached(canonicalToCacheName(cand.OS), cand.Arch, params) {
+				continue
+			}
+			c = &candidates[i]
+			break
+		}
+		if c == nil {
+			slog.Warn("cache: over budget but only in-window/pinned/newest versions remain; not evicting",
 				"totalBytes", total, "maxBytes", maxBytes)
 			return nil
 		}
-		c := candidates[0]
 		params, _ := decodeParams(c.Params)
 		cacheName := canonicalToCacheName(c.OS)
 		segment := paramSegment(params)

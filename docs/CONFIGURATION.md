@@ -12,6 +12,7 @@ values used when neither a flag nor an env var is set.
 | `--debug` | `false` | Enable debug-level (verbose) logging. |
 | `--cacheInterval` | `5m` | Interval between cache reconcile passes (discovery refresh). |
 | `--cacheConcurrency` | `4` | Max concurrent artifact downloads during a reconcile pass. |
+| `--signaturePolicy` | `warn` | Artifact verification policy: `strict` \| `warn` \| `off` (see [below](#signature-verification---signaturepolicy)). An unknown value fails startup. |
 | `--dataDir` | `/data` | Directory for all stateful data (cache, templates, host DB). |
 | `--serverIP` | `127.0.0.1` | LAN-reachable IP that clients use to reach booty. **Set this.** |
 | `--serverHttpPort` | `80` | HTTP port advertised to clients (when it differs from `--httpPort`). |
@@ -62,6 +63,76 @@ three upstream releases to reach three cached versions, not one. It does **not b
 versions upstream no longer advertises; there is no way to retroactively populate history that was
 never seen while the reconciler was running. Versions that age out of the window are archived, not
 deleted (see [schema/STORAGE.md](schema/STORAGE.md)).
+
+## Signature verification (`--signaturePolicy`)
+
+booty verifies the integrity of the boot artifacts it downloads before serving them. The mechanism
+is **per-OS** (Fedora CoreOS: SHA-256 from the streams JSON; Flatcar: detached GPG `.sig` against an
+embedded keyring; Talos/Debian: no mechanism yet), and the **policy** is one global flag:
+
+| Value | Behavior |
+|-------|----------|
+| `strict` | Any verifiable artifact that **fails** verification does not land — the whole version is refused and the prior cached version keeps serving. Refuses **both** failure classes (below). |
+| `warn` *(default)* | A GPG **signature mismatch** (forgery signal) is refused, exactly as under `strict`. A **checksum / non-forgery** failure lands anyway, logs a `WARN`, and records `verified=0`. |
+| `off` | No verification runs; artifacts land unchecked and `verified` stays `NULL`. |
+
+Verification is **admission-time only** and applies to the newest discovered version; a passing
+version records `verified=1`, and a version with no verification mechanism records `verified=NULL`
+(see [schema/DATABASE.md](schema/DATABASE.md)). The verdict is surfaced in the Cache view and via
+`POST /api/v1/cache/{id}/reverify`.
+
+**Scope — `strict` does not refuse "unverifiable" OSes.** `strict` means *verifiable artifacts that
+fail verification do not land*. It does **not** refuse OSes or versions that have **no** verification
+mechanism — Talos, Debian, and FCOS pattern-fallback pins (a manually pinned older FCOS version with
+no per-artifact `sha256`) — which land with `verified=NULL` under **every** policy.
+
+### Failure classes — what the default `warn` does (D15)
+
+`warn` is **not** "provenance is advisory." A verification failure is classified, and the two classes
+are treated differently:
+
+- **Signature mismatch (forgery signal)** — a GPG `.sig` that does not validate against the embedded
+  key. This is a tamper indicator: it is **refused even under `warn`** (the version does not land and
+  does not boot), identically to `strict`.
+- **Corruption / non-forgery failure** — a SHA-256 mismatch, a short/unparseable sidecar, or an
+  unknown/expired signing key. Under `warn` these **land** (logged, `verified=0`) — the availability
+  trade-off `warn` exists for; under `strict` they are **refused**.
+
+So `strict` refuses every failure class; `warn` refuses only forgeries; `off` verifies nothing.
+
+**`warn` is advisory against a capable network attacker — use `strict` in production.** Because a
+Flatcar artifact and its `.sig` are fetched from the **same channel**, an attacker who can tamper the
+artifact can also substitute a self-signed `.sig`. That substitution surfaces as an *unknown-issuer*
+verdict, which is the **corruption** class — so it **lands under `warn`** (`verified=0`, logged) even
+though it is really an attack. `warn` only reliably stops the naive/accidental case (corruption, or a
+forged `.sig` still signed such that it fails as a signature mismatch). **`strict` is the only policy
+that closes this hole** — recommend `strict` for production.
+
+**Policy is non-retroactive.** Tightening `warn` → `strict` does **not** auto-evict a version already
+admitted under `warn`: the reconciler's idempotency skip guard leaves settled (`cached=1`, files
+present) versions in place and does not re-verify them. The recourse is
+`POST /api/v1/cache/{id}/reverify`, which re-checks the version under the current policy and re-records
+`verified=0` so the operator can **see** it; removal is then a manual decision (`DELETE` is `403`
+until auth lands in P10).
+
+### Flatcar signing-key rotation runbook
+
+The Flatcar image-signing public key is **embedded at compile time**
+(`//go:embed keys/flatcar.asc`) — there is no hot reload. Flatcar signs releases with
+**rotating subkeys**; the currently-active signing subkey
+`52F145DFD00BBDCD928CBB5A32DA80F91EF52974` **expires 2027-03-08**. Before that date (or whenever
+Flatcar rotates early), the operator must ship a **new booty release** that re-vendors the key:
+
+1. Re-fetch the published key into `pkg/ostype/keys/flatcar.asc`
+   (from <https://www.flatcar.org/security/image-signing-key/Flatcar_Image_Signing_Key.asc>).
+2. Update the expiry-horizon assertion in `pkg/ostype/flatcar_key_test.go` (which pins the active
+   subkey fingerprint and asserts it does not expire before the horizon date).
+3. Build and redeploy.
+
+Until that release ships, an expired/rotated key makes Flatcar verification fail as an
+**unknown/expired signing key** (the corruption class): under `strict` this **halts all new Flatcar
+caching** (a provisioning outage fixable only by a code release), while under `warn` the version
+still **lands** with `verified=0`.
 
 ## Environment variables
 

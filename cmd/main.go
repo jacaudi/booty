@@ -53,6 +53,8 @@ var args struct {
 	talosRetainMinors int
 	talosConfigFile   string
 	talosFactoryURL   string
+
+	signaturePolicy string
 }
 
 var (
@@ -92,6 +94,13 @@ func init() {
 		"cacheMaxBytes",
 		0,
 		"Max cache size in bytes before evicting oldest archived-unpinned versions (0 = unlimited)",
+	)
+
+	flags.StringVar(
+		&args.signaturePolicy,
+		"signaturePolicy",
+		"warn",
+		"Signature policy: strict (reject unverified), warn (block tampering, allow+log other verify failures), off (no verification)",
 	)
 
 	flags.StringVar(
@@ -231,6 +240,10 @@ func run(cmd *cobra.Command, argv []string) error {
 	setupLogging(viper.GetBool(config.Debug))
 	slog.Info("Starting Booty!")
 	config.LoadConfig(cmd)
+
+	if err := config.ValidateSignaturePolicy(); err != nil {
+		return err
+	}
 
 	// Open the authoritative SQLite store (fail-fast: pragmas + migrations run
 	// here) and share it with the host store before Load runs its one-time

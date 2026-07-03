@@ -9,6 +9,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/db"
+	"github.com/jeefy/booty/pkg/ostype"
 )
 
 // CacheEntryDTO is the wire shape of a cached version's inventory detail.
@@ -23,6 +24,8 @@ type CacheEntryDTO struct {
 	Pinned    bool              `json:"pinned"`
 	InWindow  bool              `json:"inWindow"`
 	FetchedAt string            `json:"fetchedAt"`
+	Verified  *bool             `json:"verified,omitempty"`
+	VerifyErr string            `json:"verifyErr,omitempty"`
 }
 
 func cacheState(inWindow, pinned bool) string {
@@ -42,6 +45,7 @@ func toCacheDTO(r db.CacheEntryRow) CacheEntryDTO {
 		ID: r.ID, OS: r.OS, Arch: r.Arch, Params: params, Version: r.Version,
 		Size: r.Size, State: cacheState(r.InWindow, r.Pinned), Pinned: r.Pinned,
 		InWindow: r.InWindow, FetchedAt: r.FetchedAt,
+		Verified: r.Verified, VerifyErr: r.VerifyErr,
 	}
 }
 
@@ -130,6 +134,38 @@ func registerCache(api huma.API, deps APIDeps) {
 			return nil, huma.Error500InternalServerError("scan", err)
 		}
 		return &struct{ Body cache.ScanResult }{Body: res}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "reverify-cache", Method: http.MethodPost, Path: "/cache/{id}/reverify",
+		Summary: "Recompute a cached version's verification verdict from disk", Tags: []string{"cache"},
+	}, func(ctx context.Context, in *struct{ ID string `path:"id"` }) (*struct{ Body CacheEntryDTO }, error) {
+		n, err := strconv.ParseInt(in.ID, 10, 64)
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity("id must be an integer")
+		}
+		row, err := deps.Store.GetCacheEntry(n)
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				return nil, huma.Error404NotFound("cache entry not found")
+			}
+			return nil, huma.Error500InternalServerError("get entry", err)
+		}
+		// An explicit operator ask always verifies (ignores --signaturePolicy off).
+		// Reset the FCOS streams memo so reverify sees a fresh doc (D17).
+		ostype.ResetStreamsCache()
+		verified, verifyErr, verr := cache.VerifyVersion(ctx, deps.Store, n)
+		if verr != nil {
+			return nil, huma.Error500InternalServerError("verify", verr)
+		}
+		if err := deps.Store.SetCacheVerified(row.TargetVersionID, verified, verifyErr); err != nil {
+			return nil, huma.Error500InternalServerError("record verdict", err)
+		}
+		r, err := deps.Store.GetCacheEntry(n)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("reload entry", err)
+		}
+		return &struct{ Body CacheEntryDTO }{Body: toCacheDTO(r)}, nil
 	})
 
 	huma.Register(api, huma.Operation{

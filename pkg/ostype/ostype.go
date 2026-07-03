@@ -11,10 +11,16 @@ import (
 	"slices"
 )
 
-// Artifact is one downloadable boot file and its upstream URL.
+// Artifact is one downloadable boot file, its upstream URL, and optional
+// verification material. FCOS sets SHA256 (from the streams JSON); Flatcar sets
+// SigURL (a detached GPG sidecar) + GPGKey (the armored keyring); both empty
+// means "no mechanism" (talos, debian) — pass-through, verified stays NULL.
 type Artifact struct {
 	Filename string
 	URL      string
+	SHA256   string // hex; FCOS
+	SigURL   string // detached GPG signature sidecar; Flatcar (URL + ".sig")
+	GPGKey   []byte // armored public keyring for SigURL; Flatcar's embedded key
 }
 
 // Family is plain DATA — every field is a constant. The version/arch/baseurl
@@ -41,7 +47,11 @@ type OS interface {
 	// channel-scoped (params["channel"]); talos/debian ignore the argument.
 	// (Same widening P1a already applied to Artifacts.)
 	DiscoverVersions(ctx context.Context, params map[string]string) ([]string, error)
-	Artifacts(version, arch string, params map[string]string) []Artifact
+	// Artifacts returns the version's downloadable files and their verification
+	// material. It is networked+fallible for FCOS (streams JSON); talos/debian/
+	// flatcar ignore ctx and return a nil error. reconcileTarget is the only
+	// caller (the boot path never calls Artifacts).
+	Artifacts(ctx context.Context, version, arch string, params map[string]string) ([]Artifact, error)
 }
 
 // families is the single source of the family contract.

@@ -1,8 +1,8 @@
 package config
 
 import (
-	"context"
-	"errors"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,77 +34,6 @@ func TestLoadConfig_ProxyDHCPDefaults(t *testing.T) {
 	}
 }
 
-func TestDownloadFile_TimesOut(t *testing.T) {
-	viper.Reset()
-	dir := t.TempDir()
-	viper.Set(DataDir, dir)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(500 * time.Millisecond)
-		_, _ = w.Write([]byte("late"))
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	err := DownloadFile(ctx, dir, srv.URL+"/foo.bin")
-	if err == nil {
-		t.Fatalf("DownloadFile: err = nil, want timeout")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("DownloadFile: err = %v, want wrap of context.DeadlineExceeded", err)
-	}
-}
-
-func TestDownloadFile_StripsQueryStringFromFilename(t *testing.T) {
-	viper.Reset()
-	dir := t.TempDir()
-	viper.Set(DataDir, dir)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("x"))
-	}))
-	defer srv.Close()
-
-	if err := DownloadFile(context.Background(), dir, srv.URL+"/foo.bin?token=secret"); err != nil {
-		t.Fatalf("DownloadFile: %v", err)
-	}
-
-	want := filepath.Join(dir, "foo.bin")
-	if _, err := os.Stat(want); err != nil {
-		t.Errorf("expected file at %s, stat err: %v", want, err)
-	}
-
-	bad := filepath.Join(dir, "foo.bin?token=secret")
-	if _, err := os.Stat(bad); err == nil {
-		t.Errorf("query-tainted filename %s should not exist", bad)
-	}
-}
-
-func TestDownloadFile_SuccessRoundTrip(t *testing.T) {
-	viper.Reset()
-	dir := t.TempDir()
-	viper.Set(DataDir, dir)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("hello"))
-	}))
-	defer srv.Close()
-
-	if err := DownloadFile(context.Background(), dir, srv.URL+"/greeting.txt"); err != nil {
-		t.Fatalf("DownloadFile: %v", err)
-	}
-
-	got, err := os.ReadFile(filepath.Join(dir, "greeting.txt"))
-	if err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	if string(got) != "hello" {
-		t.Errorf("body = %q, want %q", string(got), "hello")
-	}
-}
-
 func TestLoadConfig_CacheDefaults(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
@@ -123,19 +52,69 @@ func TestLoadConfig_CacheDefaults(t *testing.T) {
 	}
 }
 
-func TestDownloadFile_RejectsErrorStatus(t *testing.T) {
-	viper.Reset()
-	dir := t.TempDir()
-
+func TestDownloadStagedHashesToPartial(t *testing.T) {
+	body := []byte("artifact-bytes")
+	sum := sha256.Sum256(body)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusInternalServerError)
+		_, _ = w.Write(body)
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
 
-	if err := DownloadFile(context.Background(), dir, srv.URL+"/boom.bin"); err == nil {
-		t.Fatalf("DownloadFile: err = nil, want error for 500 status")
+	dir := t.TempDir()
+	partial, gotSHA, err := DownloadStaged(t.Context(), dir, srv.URL+"/flatcar_production_pxe.vmlinuz")
+	if err != nil {
+		t.Fatalf("DownloadStaged: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "boom.bin")); statErr == nil {
-		t.Errorf("rejected download must not create %s", filepath.Join(dir, "boom.bin"))
+	if want := filepath.Join(dir, "flatcar_production_pxe.vmlinuz.partial"); partial != want {
+		t.Errorf("partialPath = %q, want %q", partial, want)
+	}
+	if _, err := os.Stat(partial); err != nil {
+		t.Errorf(".partial must exist after staging: %v", err)
+	}
+	// The FINAL name must NOT exist yet (caller owns the rename).
+	if _, err := os.Stat(filepath.Join(dir, "flatcar_production_pxe.vmlinuz")); !os.IsNotExist(err) {
+		t.Error("final-named file must not exist after staging")
+	}
+	if gotSHA != hex.EncodeToString(sum[:]) {
+		t.Errorf("sha256 = %q, want %q", gotSHA, hex.EncodeToString(sum[:]))
+	}
+}
+
+func TestDownloadStagedRejects404AndLeavesNoPartial(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	if _, _, err := DownloadStaged(t.Context(), dir, srv.URL+"/missing.img"); err == nil {
+		t.Fatal("a 404 must return an error")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "missing.img.partial")); !os.IsNotExist(err) {
+		t.Error("a rejected download must leave no .partial behind")
+	}
+}
+
+func TestLoadConfig_SignaturePolicyDefault(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(DataDir, t.TempDir())
+	LoadConfig(&cobra.Command{})
+	if got := viper.GetString(SignaturePolicy); got != "warn" {
+		t.Errorf("SignaturePolicy default = %q, want %q", got, "warn")
+	}
+}
+
+func TestValidateSignaturePolicy(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	for _, ok := range []string{"strict", "warn", "off"} {
+		viper.Set(SignaturePolicy, ok)
+		if err := ValidateSignaturePolicy(); err != nil {
+			t.Errorf("%q must be valid: %v", ok, err)
+		}
+	}
+	viper.Set(SignaturePolicy, "loose")
+	if err := ValidateSignaturePolicy(); err == nil {
+		t.Error("an unknown policy must fail startup")
 	}
 }

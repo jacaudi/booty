@@ -51,7 +51,10 @@ func TestDebian_DiscoverVersions_FixedSet(t *testing.T) {
 
 func TestDebian_Artifacts(t *testing.T) {
 	o, _ := Lookup("debian")
-	got := o.Artifacts("12.5", "amd64", map[string]string{"channel": "stable"})
+	got, err := o.Artifacts(t.Context(), "12.5", "amd64", map[string]string{"channel": "stable"})
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
 	if len(got) != 2 {
 		t.Fatalf("debian artifacts = %d, want 2 (linux, initrd.gz)", len(got))
 	}

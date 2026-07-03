@@ -141,3 +141,65 @@ func TestEvictNeverTouchesPinned(t *testing.T) {
 		t.Fatal("pinned archived version must never be evicted")
 	}
 }
+
+// TestEvictNeverRemovesNewestCachedVersion (D13): with two archived flatcar
+// versions on disk and a byte budget below their total, eviction reclaims the
+// OLDER one but must leave the NEWEST cached version — the bytes NewestCached
+// serves — even though it is archived, so the boot fallback never 404s.
+//
+// Discriminating fixture: the NEWEST version (100.1.0) is seeded FIRST, so it
+// gets the lower id / earlier fetched_at and sorts to candidates[0] under
+// ListArchivedUnpinned's ORDER BY fetched_at ASC, id ASC. Unguarded code would
+// therefore evict candidates[0] — the newest version — which is exactly the
+// bug D13 exists to prevent. Seeding oldest-first (as an earlier version of
+// this test did) never exercises the guard's skip branch, since the older
+// version already sorts first and unguarded code evicts it "by accident".
+func TestEvictNeverRemovesNewestCachedVersion(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	store := newReconcileStore(t)
+
+	tid, err := store.CreateTarget(db.Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := func(version string) int64 {
+		if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: version, Source: "discovered", Cached: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(cacheDir("flatcar", "stable", "amd64", version), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		tvID, _ := store.TargetVersionID(tid, version)
+		if err := store.UpsertCacheEntry(tvID, 1000); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetCacheInWindow(tvID, false); err != nil { // both archived
+			t.Fatal(err)
+		}
+		return tvID
+	}
+	seed("100.1.0") // newest by CompareVersions — seeded FIRST so it sorts to candidates[0]
+	seed("100.0.0") // older — seeded SECOND
+
+	if err := evictOverBudget(store, 1500); err != nil { // budget below 2000 total
+		t.Fatalf("evict: %v", err)
+	}
+	if !cacheDirExists("flatcar", "stable", "amd64", "100.1.0") {
+		t.Error("newest cached version must NEVER be evicted (D13) — boot fallback would 404")
+	}
+	rows, _ := store.ListCacheEntries(db.CacheFilter{})
+	rowSurvived := false
+	for _, r := range rows {
+		if r.Version == "100.1.0" {
+			rowSurvived = true
+		}
+	}
+	if !rowSurvived {
+		t.Error("newest cached version's row must NEVER be evicted (D13)")
+	}
+	if cacheDirExists("flatcar", "stable", "amd64", "100.0.0") {
+		t.Error("older archived version should have been evicted")
+	}
+}

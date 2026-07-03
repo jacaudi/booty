@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 )
@@ -21,6 +22,8 @@ type CacheEntryRow struct {
 	FetchedAt       string
 	InWindow        bool
 	Pinned          bool
+	Verified        *bool  // NULL = no verdict; true/false = P3b verification result
+	VerifyErr       string // errors.Join of failing artifacts' messages ("" when none)
 }
 
 // CacheFilter filters ListCacheEntries. Empty fields mean "no filter".
@@ -33,7 +36,7 @@ type CacheFilter struct {
 
 const cacheEntryJoin = `
 	SELECT ce.id, ce.target_version_id, t.os, t.arch, t.params, tv.version,
-	       ce.size, ce.fetched_at, ce.in_window, ce.pinned
+	       ce.size, ce.fetched_at, ce.in_window, ce.pinned, ce.verified, ce.verify_err
 	  FROM cache_entries ce
 	  JOIN target_versions tv ON tv.id = ce.target_version_id
 	  JOIN targets t          ON t.id  = tv.target_id`
@@ -53,6 +56,47 @@ func (s *Store) UpsertCacheEntry(targetVersionID, size int64) error {
 	)
 	if err != nil {
 		return fmt.Errorf("db: upsert cache_entry tv=%d: %w", targetVersionID, err)
+	}
+	return nil
+}
+
+// SetCacheVerified records a version's verification verdict on its cache_entries
+// row. A nil verified clears the column to NULL ("no verdict") — required when a
+// reverify finds zero verifiable artifacts (e.g. an FCOS pattern-fallback pin).
+// It touches only verified/verify_err; size/in_window/pinned are unchanged.
+// No-op if the row is absent.
+func (s *Store) SetCacheVerified(targetVersionID int64, verified *bool, verifyErr string) error {
+	var v any
+	if verified != nil {
+		v = boolToInt(*verified)
+	}
+	if _, err := s.db.Exec(
+		`UPDATE cache_entries SET verified = ?, verify_err = ? WHERE target_version_id = ?`,
+		v, verifyErr, targetVersionID); err != nil {
+		return fmt.Errorf("db: set verified tv=%d: %w", targetVersionID, err)
+	}
+	return nil
+}
+
+// UpsertCacheEntryArchived writes the failure-visibility row for a version that
+// was REJECTED (bytes never landed / were removed): size=0, in_window=0,
+// verified=0 with the verify_err text, so the Cache view shows an archived,
+// failed row with the error tooltip instead of silence. size=0 keeps it out of
+// the eviction candidate set and the byte budget (D14). It never clobbers pinned.
+func (s *Store) UpsertCacheEntryArchived(targetVersionID int64, verifyErr string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO cache_entries (target_version_id, size, in_window, verified, verify_err)
+		 VALUES (?, 0, 0, 0, ?)
+		 ON CONFLICT(target_version_id) DO UPDATE SET
+		   size       = 0,
+		   fetched_at = datetime('now'),
+		   in_window  = 0,
+		   verified   = 0,
+		   verify_err = excluded.verify_err`,
+		targetVersionID, verifyErr,
+	)
+	if err != nil {
+		return fmt.Errorf("db: upsert archived cache_entry tv=%d: %w", targetVersionID, err)
 	}
 	return nil
 }
@@ -121,11 +165,13 @@ func (s *Store) SumCacheBytes() (int64, error) {
 	return n, nil
 }
 
-// ListArchivedUnpinned returns archived (in_window=0), unpinned rows, oldest
-// fetched_at first — the eviction candidate order.
+// ListArchivedUnpinned returns archived (in_window=0), unpinned, NON-EMPTY
+// (size>0) rows, oldest fetched_at first — the eviction candidate order. size=0
+// failure-visibility rows are excluded (D14): they free no bytes, so evicting
+// them would stall the no-progress guard while real archived bytes go unreclaimed.
 func (s *Store) ListArchivedUnpinned() ([]CacheEntryRow, error) {
 	return s.queryCacheRows(cacheEntryJoin +
-		" WHERE ce.in_window = 0 AND ce.pinned = 0 ORDER BY ce.fetched_at ASC, ce.id ASC")
+		" WHERE ce.in_window = 0 AND ce.pinned = 0 AND ce.size > 0 ORDER BY ce.fetched_at ASC, ce.id ASC")
 }
 
 func (s *Store) queryCacheRows(q string, args ...any) ([]CacheEntryRow, error) {
@@ -138,11 +184,18 @@ func (s *Store) queryCacheRows(q string, args ...any) ([]CacheEntryRow, error) {
 	for rows.Next() {
 		var r CacheEntryRow
 		var inWin, pinned int
+		var verified sql.NullInt64
+		var verifyErr sql.NullString
 		if err := rows.Scan(&r.ID, &r.TargetVersionID, &r.OS, &r.Arch, &r.Params,
-			&r.Version, &r.Size, &r.FetchedAt, &inWin, &pinned); err != nil {
+			&r.Version, &r.Size, &r.FetchedAt, &inWin, &pinned, &verified, &verifyErr); err != nil {
 			return nil, fmt.Errorf("db: scan cache_entry: %w", err)
 		}
 		r.InWindow, r.Pinned = inWin == 1, pinned == 1
+		if verified.Valid {
+			b := verified.Int64 == 1
+			r.Verified = &b
+		}
+		r.VerifyErr = verifyErr.String
 		out = append(out, r)
 	}
 	return out, rows.Err()

@@ -7,8 +7,10 @@ import (
 	"os"
 	"slices"
 
+	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/ostype"
+	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -29,6 +31,10 @@ import (
 // sequentially, so a per-version cap is functionally identical to a global cap
 // at booty's ~3 upstreams.
 func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db.Target) error {
+	// D17: fetch the FCOS channel streams doc at most once per pass; reset the
+	// memo at pass entry so a later pass resolves new builds against a fresh doc.
+	ostype.ResetStreamsCache()
+
 	o, ok := ostype.Lookup(t.OS) // t.OS is the canonical taxonomy name
 	if !ok {
 		return fmt.Errorf("cache: unknown OS %q for target %d", t.OS, t.ID)
@@ -85,6 +91,13 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 	cacheName := canonicalToCacheName(t.OS)
 	segment := paramSegment(params)
 
+	// Prior-tick cached state, read BEFORE the desired loop's per-version upserts
+	// reset cached=0. The land-path idempotency skip below consults it.
+	cachedByVersion := make(map[string]bool, len(existing))
+	for _, v := range existing {
+		cachedByVersion[v.Version] = v.Cached
+	}
+
 	// Upsert + ensure-artifacts for every desired version (retained discovered +
 	// all manual pins). Manual rows keep source="manual".
 	desired := append(slices.Clone(retained), manual...)
@@ -93,53 +106,110 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		if slices.Contains(manual, version) {
 			source = "manual"
 		}
+		dir := cacheDir(cacheName, segment, t.Arch, version)
+		arts, aerr := o.Artifacts(ctx, version, t.Arch, params)
+		if aerr != nil {
+			// No artifact list → cannot evaluate the skip guard, so do NOT touch
+			// the row: a settled version keeps its cached=1 through a transient
+			// upstream blip (the #48-window drop this fix also guards against).
+			slog.Warn("cache: artifacts unavailable; skipping version this tick", "os", t.OS, "version", version, "err", aerr)
+			continue
+		}
+
+		// Idempotency (restores the retired ensureArtifact's skip-if-present): a
+		// version already cached=1 in the prior snapshot whose every final file is
+		// on disk is SETTLED — skip the whole version (no re-download, no
+		// re-verify, and critically no cached=0 reset), instead of re-running a
+		// full HTTP GET for every artifact each CacheInterval tick.
+		//
+		// Safety: cached=1 is set ONLY on the successful all-landed path (never on
+		// a rejected/failed version), so the skip cannot admit a version that
+		// never passed admission; finalFilesPresent forces the full land path when
+		// any byte is missing. The verified column is intentionally NOT consulted:
+		// a legitimately not-verifiable version (Talos/Debian have no sha/sig, or a
+		// version landed under `off`) records verified=NULL yet is fully settled,
+		// and gating the skip on non-NULL verified would re-download it forever
+		// under the default `warn`. Policy tightening is NOT retroactive: a version
+		// admitted under a looser prior policy stays on disk until the reverify
+		// endpoint re-checks it on demand — matching the design (§5, D15); no
+		// retroactive re-verification happens here.
+		if cachedByVersion[version] && finalFilesPresent(dir, arts) {
+			continue
+		}
+
 		if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: t.ID, Version: version, Source: source}); err != nil {
 			return fmt.Errorf("cache: upsert %d/%s: %w", t.ID, version, err)
 		}
-		dir := cacheDir(cacheName, segment, t.Arch, version)
+		policy := viper.GetString(config.SignaturePolicy)
+		verdicts := make([]artifactVerdict, len(arts))
+		landedFlags := make([]bool, len(arts))
 		vg := new(errgroup.Group)
 		vg.SetLimit(max(concurrency, 1))
-		for _, a := range o.Artifacts(version, t.Arch, params) {
+		for i, a := range arts {
 			vg.Go(func() error {
-				if err := ensureArtifact(ctx, dir, a.URL); err != nil {
+				landed, v, err := landArtifact(ctx, dir, a, policy)
+				if err != nil {
 					slog.Warn("cache: artifact fetch failed", "os", t.OS, "version", version, "file", a.Filename, "err", err)
 					return err
 				}
+				verdicts[i], landedFlags[i] = v, landed
 				return nil
 			})
 		}
-		// A fresh group per version scopes errgroup's sticky error to THIS
-		// version: one bad artifact never blocks caching later versions/targets.
-		// cached=1 only when all of this version's artifacts are present.
-		//
-		// ponytail: `cached` is a COARSE boolean, re-derived from scratch every
-		// reconcile — the boot path reads the disk (NewestCached), not this flag,
-		// so it never needs precise per-artifact state. P3's cache_entries table
-		// owns size/verification/per-artifact detail; don't build that here.
-		if vg.Wait() == nil {
-			if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: t.ID, Version: version, Source: source, Cached: true}); err != nil {
-				return fmt.Errorf("cache: mark cached %d/%s: %w", t.ID, version, err)
+		if vg.Wait() != nil {
+			continue // transport error → whole version retried next tick (nothing recorded)
+		}
+
+		tvID, verr := store.TargetVersionID(t.ID, version)
+		if verr != nil {
+			return fmt.Errorf("cache: resolve tv id %d/%s: %w", t.ID, version, verr)
+		}
+		verified, verifyErr := aggregateVerdicts(verdicts)
+
+		if slices.Contains(landedFlags, false) {
+			// Version REJECTED (a failure the policy refuses to land). Version-level
+			// atomicity: wipe the partial-or-landed dir so NewestCached falls back
+			// to the prior cached version (§6), and record a failure-visibility row.
+			if err := removeVersionDir(cacheName, segment, t.Arch, version); err != nil {
+				slog.Warn("cache: remove rejected version dir failed", "os", t.OS, "version", version, "err", err)
 			}
-			// P3a: write the authoritative cache_entries detail (size, in_window=1)
-			// adjacent to the coarse `cached` boolean, on this same coordinator
-			// goroutine. Sum artifact bytes via the same on-disk derivation
-			// ensureArtifact uses (artifactPath), so disk and DB agree.
-			var size int64
-			for _, a := range o.Artifacts(version, t.Arch, params) {
-				p, perr := artifactPath(dir, a.URL)
-				if perr != nil {
-					continue
-				}
-				if fi, serr := os.Stat(p); serr == nil {
-					size += fi.Size()
-				}
+			if err := store.UpsertCacheEntryArchived(tvID, verifyErr); err != nil {
+				return fmt.Errorf("cache: record rejected %d/%s: %w", t.ID, version, err)
 			}
-			tvID, verr := store.TargetVersionID(t.ID, version)
-			if verr != nil {
-				return fmt.Errorf("cache: resolve tv id %d/%s: %w", t.ID, version, verr)
+			slog.Error("cache: version rejected by verification", "os", t.OS, "version", version, "policy", policy, "err", verifyErr)
+			continue
+		}
+
+		// All artifacts landed → mark cached, record size + verdict.
+		if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: t.ID, Version: version, Source: source, Cached: true}); err != nil {
+			return fmt.Errorf("cache: mark cached %d/%s: %w", t.ID, version, err)
+		}
+		var size int64
+		for _, a := range arts {
+			p, perr := artifactPath(dir, a.URL)
+			if perr != nil {
+				continue
 			}
-			if err := store.UpsertCacheEntry(tvID, size); err != nil {
-				return fmt.Errorf("cache: upsert cache_entry %d/%s: %w", t.ID, version, err)
+			if fi, serr := os.Stat(p); serr == nil {
+				size += fi.Size()
+			}
+		}
+		if err := store.UpsertCacheEntry(tvID, size); err != nil {
+			return fmt.Errorf("cache: upsert cache_entry %d/%s: %w", t.ID, version, err)
+		}
+		if verified != nil { // NULL (off / not-verifiable) leaves the P3a column untouched
+			if err := store.SetCacheVerified(tvID, verified, verifyErr); err != nil {
+				return fmt.Errorf("cache: record verdict %d/%s: %w", t.ID, version, err)
+			}
+			if !*verified {
+				// Landed WITH a verification failure — reachable only under `warn`
+				// (strict rejects the version above; off records verified=NULL, so
+				// verified==nil here). The point of `warn` is to warn the operator;
+				// the silent verified=0 DB flag is not that, so emit the WARN the
+				// design + CONFIGURATION.md promise. Observability only — the
+				// land/reject decision was already made by landArtifact.
+				slog.Warn("cache: landed artifact with failed verification (signaturePolicy=warn)",
+					"os", t.OS, "arch", t.Arch, "version", version, "verifyErr", verifyErr)
 			}
 		}
 	}

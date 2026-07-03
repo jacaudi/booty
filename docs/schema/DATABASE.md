@@ -86,8 +86,10 @@ Detailed cache inventory, one row per `target_version`. Added in P3a.
 | `fetched_at` | TEXT NOT NULL DEFAULT `datetime('now')` | ISO-8601 timestamp of the last successful cache or size update. Used as the eviction ordering key (oldest first). |
 | `in_window` | INTEGER NOT NULL DEFAULT 1 | `1` = currently in the retention window (in-cycle); `0` = rotated out (archived). Flipped by the reconciler; never by the API. |
 | `pinned` | INTEGER NOT NULL DEFAULT 0 | `1` = operator-pinned; exempt from eviction. Set/cleared via `POST /cache/{id}/pin` and `/unpin`. A pin survives re-caching (upsert never clobbers `pinned`). |
-| `verified` | INTEGER | **NULL in P3a — reserved for P3b** artifact-integrity verification. |
-| `verify_err` | TEXT | **NULL in P3a — reserved for P3b** verification error detail. |
+| `verified` | INTEGER (nullable) | Tri-state artifact-integrity verdict, **populated by P3b**. `NULL` = no verdict (no verification mechanism declared — Talos/Debian, FCOS pattern-fallback pins — or not attempted under `--signaturePolicy off`); `1` = every verifiable artifact of the version passed; `0` = at least one verifiable artifact failed. Written by the reconcile land-path and by `POST /cache/{id}/reverify`; `UpsertCacheEntry` never clobbers it (P3a contract preserved). |
+| `verify_err` | TEXT | Failure detail when `verified=0`, else empty. Defined as the `errors.Join` of every failing artifact's message across the version, each carrying its failure-class text (`checksum mismatch` / `signature mismatch` / `unknown or expired signing key`). |
+
+**Failure-visibility rows (P3b).** When a version is **rejected** by verification (a failure the policy refuses to land — see [CONFIGURATION.md](../CONFIGURATION.md)), its bytes never land (or are removed) but a row is still written so the Cache view can show *why* it won't cache: `size=0`, `in_window=0`, `verified=0`, and `verify_err` set. The `size=0` keeps the row out of the eviction candidate set and the byte budget (it frees nothing). No migration is involved — `verified`/`verify_err` shipped in P3a's `0002_cache_entries.sql` (as `NULL`); P3b only writes them.
 
 **Derived state model.** The wire API derives a human-readable `state` string from `(in_window, pinned)`:
 

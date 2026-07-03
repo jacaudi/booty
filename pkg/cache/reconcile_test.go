@@ -1,15 +1,20 @@
 package cache
 
 import (
+	"bytes"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
 
@@ -225,6 +230,12 @@ func newFlatcarFixture(t *testing.T, retainN int) (*db.Store, int64, *string) {
 	viper.Set(config.FlatcarURL, srv.URL+"/%s/%s")
 	viper.Set(config.FlatcarChannel, "stable")
 	viper.Set(config.FlatcarArchitecture, "amd64")
+	// These tests exercise retention-window behavior, not signatures. The fixture
+	// serves fake ".sig" bytes that cannot be a valid signature by the embedded
+	// PRODUCTION flatcar key, so verification would classify them as a forgery and
+	// reject. Run under `off` so land is signature-independent; the admission gate
+	// is covered separately (TestLandArtifact_PolicyTable + TestReconcileFCOSVerification).
+	viper.Set(config.SignaturePolicy, "off")
 	store := newReconcileStore(t)
 	tid, err := store.CreateTarget(db.Target{
 		OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`,
@@ -315,6 +326,8 @@ func TestReconcileTwoFlatcarChannelsCacheIndependently(t *testing.T) {
 	viper.Set(config.FlatcarURL, srv.URL+"/%s/%s")
 	viper.Set(config.FlatcarChannel, "stable")
 	viper.Set(config.FlatcarArchitecture, "amd64")
+	// Retention/independence test — land signature-independently (see newFlatcarFixture).
+	viper.Set(config.SignaturePolicy, "off")
 	store := newReconcileStore(t)
 
 	stableID, err := store.CreateTarget(db.Target{
@@ -400,4 +413,379 @@ func TestReconcileManualPinDoesNotDisplaceDiscoveredFromWindow(t *testing.T) {
 	if !manualCached {
 		t.Fatal("manual pin 200.0.0 must still be cached")
 	}
+}
+
+// TestLandArtifact_PolicyTable drives landArtifact directly with hand-built
+// Artifacts (the unit under test), covering the §5 D15 matrix without needing a
+// full reconcile. Exactly the rows below: a matching sha256 lands; a checksum
+// mismatch (corruption) lands under warn and is rejected under strict; a
+// signature mismatch (FORGERY) is rejected under BOTH warn AND strict — the
+// key admission property, that warn refuses forgeries; a valid GPG signature
+// lands; and under off nothing is verified (lands, not-verifiable). This is the
+// ONLY place the forgery-rejected-under-warn branch is exercised end-to-end
+// (reconcile cannot reach it — see Step-1 mechanism note below).
+func TestLandArtifact_PolicyTable(t *testing.T) {
+	body := []byte("artifact-bytes")
+	sum := hexSHA(body)
+	keyring, sigURL, closeGood := gpgFixture(t, body) // valid sig over body
+	t.Cleanup(closeGood)
+	// Forgery: a signature made over DIFFERENT bytes ("other") by a key that IS
+	// in forgeKeyring, then checked against the served body → the key is known
+	// but the content does not match → RSA verification failure → classForgery
+	// (NOT ErrUnknownIssuer, which would be corruption). This is what "forgery"
+	// means: a valid-by-a-trusted-key signature over content that was tampered.
+	forgeKeyring, forgeSigURL, closeForge := gpgFixture(t, []byte("other"))
+	t.Cleanup(closeForge)
+
+	art := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(art.Close)
+	base := art.URL
+
+	cases := []struct {
+		name       string
+		policy     string
+		a          ostype.Artifact
+		wantLanded bool
+		wantClass  verifyClass
+	}{
+		{"pass sha256 warn", "warn", ostype.Artifact{Filename: "rootfs.img", URL: base + "/rootfs.img", SHA256: sum}, true, classPass},
+		{"checksum mismatch warn lands", "warn", ostype.Artifact{Filename: "rootfs.img", URL: base + "/rootfs.img", SHA256: hexSHA([]byte("x"))}, true, classCorruption},
+		{"checksum mismatch strict rejects", "strict", ostype.Artifact{Filename: "rootfs.img", URL: base + "/rootfs.img", SHA256: hexSHA([]byte("x"))}, false, classCorruption},
+		{"valid sig warn lands", "warn", ostype.Artifact{Filename: "vmlinuz", URL: base + "/vmlinuz", SigURL: sigURL, GPGKey: keyring}, true, classPass},
+		// FORGERY rejects under BOTH policies — warn is NOT "provenance advisory".
+		{"forgery warn rejects", "warn", ostype.Artifact{Filename: "vmlinuz", URL: base + "/vmlinuz", SigURL: forgeSigURL, GPGKey: forgeKeyring}, false, classForgery},
+		{"forgery strict rejects", "strict", ostype.Artifact{Filename: "vmlinuz", URL: base + "/vmlinuz", SigURL: forgeSigURL, GPGKey: forgeKeyring}, false, classForgery},
+		{"off never verifies", "off", ostype.Artifact{Filename: "rootfs.img", URL: base + "/rootfs.img", SHA256: hexSHA([]byte("x"))}, true, classNotVerifiable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			landed, v, err := landArtifact(t.Context(), dir, tc.a, tc.policy)
+			if err != nil {
+				t.Fatalf("landArtifact: %v", err)
+			}
+			if landed != tc.wantLanded || v.class != tc.wantClass {
+				t.Fatalf("landed=%v class=%d, want landed=%v class=%d", landed, v.class, tc.wantLanded, tc.wantClass)
+			}
+			final := filepath.Join(dir, filepath.Base(tc.a.Filename))
+			_, statErr := os.Stat(final)
+			if tc.wantLanded && statErr != nil {
+				t.Errorf("landed artifact must exist at final path")
+			}
+			if !tc.wantLanded && statErr == nil {
+				t.Errorf("rejected artifact must NOT exist at final path")
+			}
+			if _, err := os.Stat(final + ".partial"); err == nil {
+				t.Errorf(".partial must never remain after landArtifact")
+			}
+		})
+	}
+}
+
+// TestReconcileSkipsAlreadyCachedVersion proves the land-path idempotency the
+// retired ensureArtifact used to give: once a version is fully cached (bytes on
+// disk + cached=1), a SECOND reconcile tick must NOT re-download its artifacts.
+// A per-artifact request counter (non-.json = artifact byte fetch) makes the
+// regression observable: without the version-level skip guard the second tick
+// re-runs DownloadStaged for every artifact and the counter climbs; with it the
+// counter stays put and the version remains cached=1. Runs under the default
+// `warn` with matching sha256 so the version lands verified=1 (cached+verified).
+func TestReconcileSkipsAlreadyCachedVersion(t *testing.T) {
+	body := []byte("fcos-artifact")
+	sha := hexSHA(body)
+	var artifactHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			_, _ = fmt.Fprintf(w, `{"architectures":{"x86_64":{"artifacts":{"metal":{`+
+				`"release":"44.0.0.0","formats":{"pxe":{`+
+				`"kernel":{"location":"%[1]s/44/kernel","sha256":"%[2]s"},`+
+				`"initramfs":{"location":"%[1]s/44/initramfs","sha256":"%[2]s"},`+
+				`"rootfs":{"location":"%[1]s/44/rootfs","sha256":"%[2]s"}`+
+				`}}}}}}}`, "http://"+r.Host, sha)
+			return
+		}
+		artifactHits.Add(1)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.SignaturePolicy, "warn")
+
+	store := newReconcileStore(t)
+	tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt, _ := store.GetTarget(tid)
+
+	// First tick: artifacts are fetched and the version lands cached+verified.
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+	firstHits := artifactHits.Load()
+	if firstHits == 0 {
+		t.Fatal("first tick must fetch artifacts")
+	}
+	rows, _ := store.ListCacheEntries(db.CacheFilter{})
+	if len(rows) != 1 || rows[0].Verified == nil || !*rows[0].Verified {
+		t.Fatalf("first tick must land one verified=1 row, got %+v", rows)
+	}
+
+	// Second tick: the version is settled (bytes present + cached=1), so the
+	// reconciler must skip it — no additional artifact fetches.
+	if err := reconcileTarget(t.Context(), store, 4, *tgt); err != nil {
+		t.Fatal(err)
+	}
+	if got := artifactHits.Load(); got != firstHits {
+		t.Fatalf("second tick re-downloaded a settled version: artifact hits %d → %d (want no increase)", firstHits, got)
+	}
+	vers, _ := store.ListTargetVersions(tid)
+	var stillCached bool
+	for _, v := range vers {
+		if v.Version == "44.0.0.0" && v.Cached {
+			stillCached = true
+		}
+	}
+	if !stillCached {
+		t.Fatalf("settled version must remain cached=1 across ticks, got %+v", vers)
+	}
+}
+
+// TestLandArtifact_FlatcarShapeValidSignatureLandsUnderWarn closes the coverage
+// gap the retention tests leave: they run under `off` (dodging Flatcar's
+// production keyring + fake .sig), so Flatcar's SIGNATURE-based land shape
+// (SigURL + GPGKey, NO sha256) is never exercised under the DEFAULT `warn`.
+// A subtly-wrong key/sig scheme would silently classForgery every artifact →
+// rejected → Flatcar stops caching under warn, uncaught. This drives a
+// Flatcar-shaped two-file set with GENUINE valid detached signatures (throwaway
+// keyring via gpgFixture) through landArtifact under warn, then aggregates the
+// verdicts, proving the whole shape lands with classPass and version-level
+// verified=true. (Throwaway keys, not the production key, so this proves the
+// land/verify WIRING for the shape — not Flatcar's actual upstream key/sig,
+// which is not hermetically testable.)
+func TestLandArtifact_FlatcarShapeValidSignatureLandsUnderWarn(t *testing.T) {
+	// Flatcar's two-file PXE set; each file gets its own valid detached sig.
+	files := map[string][]byte{
+		"flatcar_production_pxe.vmlinuz":       []byte("vmlinuz-bytes"),
+		"flatcar_production_pxe_image.cpio.gz": []byte("cpio-bytes"),
+	}
+	art := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		_, _ = w.Write(files[name])
+	}))
+	t.Cleanup(art.Close)
+
+	dir := t.TempDir()
+	verdicts := make([]artifactVerdict, 0, len(files))
+	for name, contents := range files {
+		keyring, sigURL, closeFn := gpgFixture(t, contents) // valid sig over the served bytes
+		t.Cleanup(closeFn)
+		a := ostype.Artifact{Filename: name, URL: art.URL + "/" + name, SigURL: sigURL, GPGKey: keyring}
+		landed, v, err := landArtifact(t.Context(), dir, a, "warn")
+		if err != nil {
+			t.Fatalf("landArtifact %s: %v", name, err)
+		}
+		if !landed || v.class != classPass {
+			t.Fatalf("%s: landed=%v class=%d, want landed=true class=%d (classPass)", name, landed, v.class, classPass)
+		}
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s: valid-sig artifact must exist at final path: %v", name, err)
+		}
+		verdicts = append(verdicts, v)
+	}
+
+	verified, verifyErr := aggregateVerdicts(verdicts)
+	if verified == nil || !*verified {
+		t.Fatalf("flatcar-shaped valid sigs must aggregate to verified=true, got %v", verified)
+	}
+	if verifyErr != "" {
+		t.Fatalf("valid signatures must produce no verify_err, got %q", verifyErr)
+	}
+}
+
+// TestReconcileFCOSVerification exercises the reconcile admission/atomicity
+// branch hermetically: an FCOS streams+artifacts server whose declared sha256
+// either matches (land, verified=1) or mismatches (under strict → reject:
+// version dir removed + a size=0/in_window=0/verified=0 failure row; under warn
+// → land + verified=0). No GPG/embedded key needed — sha256 is enough to drive
+// both branches through the REAL fedoraCoreOS.Artifacts seam.
+func TestReconcileFCOSVerification(t *testing.T) {
+	body := []byte("fcos-artifact")
+	good := hexSHA(body)
+
+	fcosServer := func(sha string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, ".json") {
+				_, _ = fmt.Fprintf(w, `{"architectures":{"x86_64":{"artifacts":{"metal":{`+
+					`"release":"44.0.0.0","formats":{"pxe":{`+
+					`"kernel":{"location":"%[1]s/44/kernel","sha256":"%[2]s"},`+
+					`"initramfs":{"location":"%[1]s/44/initramfs","sha256":"%[2]s"},`+
+					`"rootfs":{"location":"%[1]s/44/rootfs","sha256":"%[2]s"}`+
+					`}}}}}}}`, "http://"+r.Host, sha)
+				return
+			}
+			_, _ = w.Write(body)
+		}))
+	}
+
+	setup := func(t *testing.T, policy, sha string) (*db.Store, db.Target, *httptest.Server) {
+		srv := fcosServer(sha)
+		viper.Reset()
+		viper.Set(config.DataDir, t.TempDir())
+		viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+		viper.Set(config.CoreOSArchitecture, "x86_64")
+		viper.Set(config.CoreOSChannel, "stable")
+		viper.Set(config.SignaturePolicy, policy)
+		store := newReconcileStore(t)
+		tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tgt, _ := store.GetTarget(tid)
+		return store, *tgt, srv
+	}
+
+	t.Run("matching sha lands verified=1", func(t *testing.T) {
+		store, tgt, srv := setup(t, "warn", good)
+		t.Cleanup(srv.Close)
+		t.Cleanup(viper.Reset)
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatal(err)
+		}
+		rows, _ := store.ListCacheEntries(db.CacheFilter{})
+		if len(rows) != 1 || rows[0].Verified == nil || !*rows[0].Verified || !rows[0].InWindow {
+			t.Fatalf("want one in-window verified=1 row, got %+v", rows)
+		}
+		if !cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+			t.Fatal("verified version must land on disk")
+		}
+	})
+
+	t.Run("strict rejects mismatch: dir removed + failure row", func(t *testing.T) {
+		store, tgt, srv := setup(t, "strict", hexSHA([]byte("wrong")))
+		t.Cleanup(srv.Close)
+		t.Cleanup(viper.Reset)
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatal(err)
+		}
+		if cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+			t.Fatal("strict must remove the rejected version dir (atomicity)")
+		}
+		rows, _ := store.ListCacheEntries(db.CacheFilter{})
+		if len(rows) != 1 || rows[0].InWindow || rows[0].Size != 0 || rows[0].Verified == nil || *rows[0].Verified || rows[0].VerifyErr == "" {
+			t.Fatalf("want a size=0/in_window=0/verified=0 failure row with an err, got %+v", rows)
+		}
+		vers, _ := store.ListTargetVersions(tgt.ID)
+		for _, v := range vers {
+			if v.Version == "44.0.0.0" && v.Cached {
+				t.Fatal("rejected version must not be marked cached")
+			}
+		}
+	})
+
+	t.Run("warn lands mismatch with verified=0", func(t *testing.T) {
+		store, tgt, srv := setup(t, "warn", hexSHA([]byte("wrong")))
+		t.Cleanup(srv.Close)
+		t.Cleanup(viper.Reset)
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatal(err)
+		}
+		if !cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+			t.Fatal("warn must land a checksum-mismatch (corruption) version")
+		}
+		rows, _ := store.ListCacheEntries(db.CacheFilter{})
+		if len(rows) != 1 || !rows[0].InWindow || rows[0].Verified == nil || *rows[0].Verified {
+			t.Fatalf("want an in-window verified=0 row, got %+v", rows)
+		}
+	})
+
+	// The whole point of `warn` is to WARN the operator: a corruption/checksum
+	// failure that LANDS with verified=0 must also emit a WARN log line, not just
+	// flip a silent DB flag. Capture the default logger and assert the WARN fires,
+	// carrying the version and verify_err. (Only reachable under warn: strict
+	// rejects, off records verified=NULL.)
+	t.Run("warn logs a WARN when a mismatch lands", func(t *testing.T) {
+		store, tgt, srv := setup(t, "warn", hexSHA([]byte("wrong")))
+		t.Cleanup(srv.Close)
+		t.Cleanup(viper.Reset)
+
+		var logbuf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logbuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		t.Cleanup(func() { slog.SetDefault(prev) })
+
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatal(err)
+		}
+
+		logged := logbuf.String()
+		if !strings.Contains(logged, "failed verification") {
+			t.Fatalf("warn policy must emit a WARN when a mismatch lands; got log: %q", logged)
+		}
+		if !strings.Contains(logged, "level=WARN") {
+			t.Fatalf("verification-failure log must be at WARN level; got: %q", logged)
+		}
+		if !strings.Contains(logged, "44.0.0.0") {
+			t.Fatalf("WARN must identify the landed version; got: %q", logged)
+		}
+		if !strings.Contains(logged, "verifyErr=") {
+			t.Fatalf("WARN must carry verifyErr; got: %q", logged)
+		}
+	})
+
+	// Reconcile-level rejection + prior-version survival (D13/AC#4). The newest
+	// version (44.0.0.0) fails verification under strict → rejected: its dir is
+	// removed and a failure-visibility row is written. A PRIOR good version
+	// (43.0.0.0), already cached on disk, must SURVIVE so NewestCached falls back
+	// to it and the boot path never 404s. This drives the class-agnostic reconcile
+	// rejection/atomicity path (see Step-1 mechanism note: forgery-under-warn
+	// itself is proven at the landArtifact unit level, not reachable here).
+	t.Run("reject removes newest but preserves the prior cached version", func(t *testing.T) {
+		store, tgt, srv := setup(t, "strict", hexSHA([]byte("wrong")))
+		t.Cleanup(srv.Close)
+		t.Cleanup(viper.Reset)
+
+		// Seed a prior good cached version on disk + in the DB (the version that is
+		// currently serving before the newest lands).
+		if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: tgt.ID, Version: "43.0.0.0", Source: "discovered", Cached: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(cacheDir("coreos", "stable", "x86_64", "43.0.0.0"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		priorID, _ := store.TargetVersionID(tgt.ID, "43.0.0.0")
+		if err := store.UpsertCacheEntry(priorID, 1000); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatal(err)
+		}
+
+		// Rejected newest: dir gone + a size=0/in_window=0/verified=0 failure row.
+		if cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+			t.Fatal("strict must remove the rejected newest version dir (atomicity)")
+		}
+		byVer := map[string]db.CacheEntryRow{}
+		rows, _ := store.ListCacheEntries(db.CacheFilter{})
+		for _, r := range rows {
+			byVer[r.Version] = r
+		}
+		rej, ok := byVer["44.0.0.0"]
+		if !ok || rej.InWindow || rej.Size != 0 || rej.Verified == nil || *rej.Verified || rej.VerifyErr == "" {
+			t.Fatalf("want a size=0/in_window=0/verified=0 failure row for the rejected version, got %+v", rej)
+		}
+		// The prior version's dir must survive — the boot fallback depends on it.
+		if !cacheDirExists("coreos", "stable", "x86_64", "43.0.0.0") {
+			t.Fatal("prior cached version dir must survive the newest version's rejection (D13/AC#4)")
+		}
+	})
 }
