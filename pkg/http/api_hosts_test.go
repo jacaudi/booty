@@ -216,6 +216,36 @@ func TestBindUnknownOSFamilyIs422(t *testing.T) {
 	}
 }
 
+// TestApproveInvalidBindingLeavesHostUnapproved pins the validate-before-approve
+// fix in the approve handler: a family-mismatched config (or any other
+// validation failure) must be caught BEFORE hardware.Approve/SetAssignment run,
+// so the host stays pending/unapproved and unbound. Before the fix, approve
+// wrote Approve+SetAssignment first and only then validated the binding via
+// bindHostConfigRoles, so this exact request left the host approved (and
+// booting the server-default config) despite the 422.
+func TestApproveInvalidBindingLeavesHostUnapproved(t *testing.T) {
+	deps := hostsTestDeps(t) // host OS = flatcar (ignition family → butane)
+	api := newTestAPI(t, deps)
+	cid, err := deps.Store.CreateConfig("talos-cfg", "machineconfig") // wrong kind for flatcar
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve", map[string]any{"configId": cid})
+	if resp.Code != 422 {
+		t.Fatalf("approve with mismatched config = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.Approved {
+		t.Fatalf("validation failure must leave host unapproved, but Approved=true")
+	}
+	if h.ConfigID != nil {
+		t.Fatalf("validation failure must bind nothing, but config was persisted: %v", *h.ConfigID)
+	}
+}
+
 // TestBindValidConfigInvalidRoleBindsNothing pins the validate-all-then-write
 // fix in bindHostConfigRoles: a request with a VALID config but a
 // nonexistent role must fail the whole bind — including the config half —

@@ -186,7 +186,7 @@ func registerConfigs(api huma.API, deps APIDeps) {
 		vars := stubVars()
 		if in.Body.MAC != "" {
 			if h, herr := hardware.GetMacAddress(in.Body.MAC); herr == nil {
-				vars = previewVars(deps.Store, h)
+				vars = previewVars(deps.Store, h, c.Kind)
 			}
 		}
 		out, ct, report, rerr := renderConfig(c.Kind, src, vars)
@@ -313,8 +313,16 @@ func stubVars() TemplateVars {
 	}
 }
 
-// previewVars populates render vars from a real host for preview (host:port
-// .ServerIP so ignition-family previews match serving).
-func previewVars(store *db.Store, host *hardware.Host) TemplateVars {
-	return ignitionVars(store, host)
+// previewVars populates render vars from a real host for preview, DISPATCHED
+// BY THE CONFIG'S KIND (not the host's OS) so preview uses the same vars the
+// boot path would use for that kind: butane/preseed get the ignition-family
+// vars (host:port .ServerIP); machineconfig gets the machineconfig-family vars
+// (host-only .ServerIP + .ServerHTTPPort, .Schematic, .TalosVersion, .Roles).
+func previewVars(store *db.Store, host *hardware.Host, kind string) TemplateVars {
+	switch kind {
+	case "machineconfig":
+		return machineConfigPreviewVars(store, host)
+	default: // "butane", "preseed"
+		return ignitionVars(store, host)
+	}
 }

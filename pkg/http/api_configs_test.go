@@ -109,3 +109,47 @@ func TestConfigGetNotFoundIs404(t *testing.T) {
 		t.Fatalf("missing config = %d, want 404", resp.Code)
 	}
 }
+
+// TestConfigPreviewUsesPerKindVars pins previewVars' per-kind dispatch: a
+// machineconfig preview must use the machineconfig-family vars (HOST-ONLY
+// .ServerIP, port carried separately in .ServerHTTPPort) — the same vars the
+// boot path would use — not the ignition-family host:port .ServerIP. Contrast
+// with a preseed preview (ignition family), which DOES get host:port.
+func TestConfigPreviewUsesPerKindVars(t *testing.T) {
+	deps := hostsTestDeps(t) // seeds host aa:bb:cc:dd:ee:40, OS=flatcar
+	api := newTestAPI(t, deps)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.ServerIP, "10.0.0.1")
+	viper.Set(config.ServerHttpPort, "8080")
+
+	mcResp := api.Post("/api/v1/configs", map[string]any{
+		"name": "mc", "kind": "machineconfig", "source": "server={{ .ServerIP }}",
+	})
+	if mcResp.Code != 201 {
+		t.Fatalf("create machineconfig config: %d %s", mcResp.Code, mcResp.Body.String())
+	}
+	psResp := api.Post("/api/v1/configs", map[string]any{
+		"name": "ps", "kind": "preseed", "source": "server={{ .ServerIP }}",
+	})
+	if psResp.Code != 201 {
+		t.Fatalf("create preseed config: %d %s", psResp.Code, psResp.Body.String())
+	}
+
+	mcPreview := api.Post("/api/v1/configs/1/preview", map[string]any{"mac": "aa:bb:cc:dd:ee:40"})
+	if mcPreview.Code != 200 {
+		t.Fatalf("preview machineconfig = %d: %s", mcPreview.Code, mcPreview.Body.String())
+	}
+	if !strings.Contains(mcPreview.Body.String(), "server=10.0.0.1") ||
+		strings.Contains(mcPreview.Body.String(), "server=10.0.0.1:8080") {
+		t.Fatalf("machineconfig preview must render HOST-ONLY ServerIP, got: %s", mcPreview.Body.String())
+	}
+
+	psPreview := api.Post("/api/v1/configs/2/preview", map[string]any{"mac": "aa:bb:cc:dd:ee:40"})
+	if psPreview.Code != 200 {
+		t.Fatalf("preview preseed = %d: %s", psPreview.Code, psPreview.Body.String())
+	}
+	if !strings.Contains(psPreview.Body.String(), "server=10.0.0.1:8080") {
+		t.Fatalf("preseed preview must render host:port ServerIP, got: %s", psPreview.Body.String())
+	}
+}

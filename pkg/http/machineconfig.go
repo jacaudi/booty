@@ -117,13 +117,38 @@ func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 // machineConfigVars populates TemplateVars for the TALOS family: .ServerIP is
 // host-ONLY with a separate .ServerHTTPPort (the live machineconfig semantics —
 // must NOT be host:port); .TalosVersion is newly sourced from the newest cached
-// talos version for the host's schematic; .Roles from host_roles.
+// talos version for the host's schematic; .Roles from host_roles. Hostname/UUID/
+// Serial seed from the request query string, since Talos legitimately fetches
+// its config before the host exists in the DB.
 func machineConfigVars(store *db.Store, r *http.Request, host *hardware.Host) TemplateVars {
+	return machineConfigVarsCore(store, host,
+		r.URL.Query().Get("hostname"), r.URL.Query().Get("uuid"), r.URL.Query().Get("serial"))
+}
+
+// machineConfigPreviewVars is machineConfigVars' preview-path sibling: preview
+// has no *http.Request, so Hostname/UUID/Serial seed from the host record
+// instead of a query string. Shares machineConfigVarsCore with the serving
+// path so ServerIP/Schematic/TalosVersion/Roles computation cannot drift
+// between "what would actually boot" and "what preview shows".
+func machineConfigPreviewVars(store *db.Store, host *hardware.Host) TemplateVars {
+	var hostname, uuid, serial string
+	if host != nil {
+		hostname, uuid, serial = host.Hostname, host.UUID, host.Serial
+	}
+	return machineConfigVarsCore(store, host, hostname, uuid, serial)
+}
+
+// machineConfigVarsCore holds the TALOS-family var population SHARED by the
+// serving and preview paths. hostname/uuid/serial are pre-resolved by the
+// caller because their source differs (request query vs. the host record);
+// everything else (ServerIP host-only + ServerHTTPPort, Schematic resolution,
+// TalosVersion, Roles, MAC/IP) is identical for both.
+func machineConfigVarsCore(store *db.Store, host *hardware.Host, hostname, uuid, serial string) TemplateVars {
 	schematic := viper.GetString(config.TalosSchematic)
 	vars := TemplateVars{
-		Hostname:       r.URL.Query().Get("hostname"),
-		UUID:           r.URL.Query().Get("uuid"),
-		Serial:         r.URL.Query().Get("serial"),
+		Hostname:       hostname,
+		UUID:           uuid,
+		Serial:         serial,
 		ServerIP:       viper.GetString(config.ServerIP),
 		ServerHTTPPort: viper.GetString(config.ServerHttpPort),
 		JoinString:     viper.GetString(config.JoinString),
