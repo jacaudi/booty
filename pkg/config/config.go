@@ -47,6 +47,7 @@ const (
 	CacheConcurrency       = "cacheConcurrency"
 	CacheMaxBytes          = "cacheMaxBytes"
 	CoreOSStreamsURL       = "coreOSStreamsURL"
+	SignaturePolicy        = "signaturePolicy"
 )
 
 // httpClient is the package-level HTTP client used for DownloadFile.
@@ -72,6 +73,7 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(CoreOSStreamsURL, "https://builds.coreos.fedoraproject.org/streams/%s.json")
 	viper.SetDefault(FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
 	viper.SetDefault(CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
+	viper.SetDefault(SignaturePolicy, "warn")
 	// https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64
 	// https://stable.release.flatcar-linux.net/amd64-usr/current/version.txt
 
@@ -195,4 +197,17 @@ func DatabasePathValue() string {
 		return p
 	}
 	return filepath.Join(viper.GetString(DataDir), "booty.db")
+}
+
+// ValidateSignaturePolicy rejects an unknown --signaturePolicy value at startup
+// (fail-fast; booty has no AutomaticEnv/config file, so the flag is the source).
+// strict = refuse any verification failure; warn = refuse forgeries, land
+// corruption + log; off = never verify.
+func ValidateSignaturePolicy() error {
+	switch v := viper.GetString(SignaturePolicy); v {
+	case "strict", "warn", "off":
+		return nil
+	default:
+		return fmt.Errorf("config: invalid signaturePolicy %q (want strict|warn|off)", v)
+	}
 }

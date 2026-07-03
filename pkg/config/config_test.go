@@ -184,3 +184,17 @@ func TestDownloadFile_RejectsErrorStatus(t *testing.T) {
 		t.Errorf("rejected download must not create %s", filepath.Join(dir, "boom.bin"))
 	}
 }
+
+func TestValidateSignaturePolicy(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	for _, ok := range []string{"strict", "warn", "off"} {
+		viper.Set(SignaturePolicy, ok)
+		if err := ValidateSignaturePolicy(); err != nil {
+			t.Errorf("%q must be valid: %v", ok, err)
+		}
+	}
+	viper.Set(SignaturePolicy, "loose")
+	if err := ValidateSignaturePolicy(); err == nil {
+		t.Error("an unknown policy must fail startup")
+	}
+}
