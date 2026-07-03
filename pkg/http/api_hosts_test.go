@@ -82,3 +82,92 @@ func TestMenuHostUnknownMAC404(t *testing.T) {
 		t.Fatalf("want 'host not found' in 404 body, got: %s", resp.Body.String())
 	}
 }
+
+// hostsTestDeps mirrors hostsTestSetup (reusing its store/hardware wiring) and
+// additionally seeds a single approved-candidate flatcar host used by the P4
+// bind/approve-with-body tests below.
+func hostsTestDeps(t *testing.T) APIDeps {
+	t.Helper()
+	deps := hostsTestSetup(t)
+	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:40", hardware.Host{MAC: "aa:bb:cc:dd:ee:40", OS: "flatcar"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	return deps
+}
+
+func TestApproveEmptyBodyBackwardCompatible(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	// Empty body must behave exactly like today's approve (approve + assign).
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve", map[string]any{})
+	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"approved":true`) {
+		t.Fatalf("approve empty = %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestApproveWithConfigAndRolesAtomic(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	cid, err := deps.Store.CreateConfig("cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	rid, err := deps.Store.CreateRole("cp", nil)
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve", map[string]any{
+		"configId": cid, "roleIds": []int64{rid},
+	})
+	if resp.Code != 200 {
+		t.Fatalf("approve+attach = %d: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID == nil || *h.ConfigID != cid {
+		t.Fatalf("config not bound: %v", h.ConfigID)
+	}
+	roles, err := deps.Store.ListHostRoles("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("list host roles: %v", err)
+	}
+	if len(roles) != 1 || roles[0].ID != rid {
+		t.Fatalf("roles not bound: %+v", roles)
+	}
+}
+
+func TestBindFamilyMismatchIs422(t *testing.T) {
+	deps := hostsTestDeps(t) // host OS = flatcar (ignition family → butane)
+	api := newTestAPI(t, deps)
+	cid, err := deps.Store.CreateConfig("talos-cfg", "machineconfig") // wrong kind for flatcar
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/bind", map[string]any{"configId": cid})
+	if resp.Code != 422 {
+		t.Fatalf("family mismatch bind = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestBindRebindsApprovedHost(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve", map[string]any{})
+	cid, err := deps.Store.CreateConfig("cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/bind", map[string]any{"configId": cid})
+	if resp.Code != 200 {
+		t.Fatalf("bind = %d: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID == nil || *h.ConfigID != cid {
+		t.Fatalf("rebind failed: %v", h.ConfigID)
+	}
+}
