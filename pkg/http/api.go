@@ -37,5 +37,6 @@ func registerOperations(api huma.API, deps APIDeps) {
 	registerHosts(grp, deps)   // Task 7
 	registerCache(grp, deps)   // P3a
 	registerConfigs(grp, deps) // P4 T8
+	registerRoles(grp, deps)   // P4 T9
 }
 
