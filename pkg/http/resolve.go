@@ -34,8 +34,13 @@ func resolveConfig(store *db.Store, host *hardware.Host) (source []byte, kind st
 			// SURFACE, not silently paper over with a role default. Return ok=false
 			// immediately so the serving handler falls through to the server-default
 			// FILE — never substitute a rung-2 role config for a wrong explicit bind.
-			slog.Warn("http: explicit host config kind mismatches family; not substituting role default",
-				"mac", host.MAC, "os", host.OS, "configID", *host.ConfigID, "kind", k)
+			if famOK {
+				slog.Warn("http: explicit host config kind mismatches family; not substituting role default",
+					"mac", host.MAC, "os", host.OS, "configID", *host.ConfigID, "kind", k)
+			} else {
+				slog.Warn("http: explicit host config present but host OS family lookup missed; not substituting role default",
+					"mac", host.MAC, "os", host.OS, "configID", *host.ConfigID, "kind", k)
+			}
 			return nil, "", false
 		}
 		// A bound-but-unloadable config (missing / no active revision — distinct from
@@ -59,8 +64,13 @@ func resolveConfig(store *db.Store, host *hardware.Host) (source []byte, kind st
 		if famOK && k == configKindForFamily(fam.ConfigKind) {
 			return src, k, true
 		}
-		slog.Warn("http: role-default config kind mismatches host family; skipping",
-			"mac", host.MAC, "os", host.OS, "role", r.Name, "kind", k)
+		if famOK {
+			slog.Warn("http: role-default config kind mismatches host family; skipping",
+				"mac", host.MAC, "os", host.OS, "role", r.Name, "kind", k)
+		} else {
+			slog.Warn("http: role-default config present but host OS family lookup missed; skipping",
+				"mac", host.MAC, "os", host.OS, "role", r.Name, "kind", k)
+		}
 	}
 	return nil, "", false
 }

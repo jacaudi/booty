@@ -104,6 +104,52 @@ func TestResolveConfigExplicitMismatchDoesNotSubstituteRoleDefault(t *testing.T)
 	}
 }
 
+// TestResolveConfigUnloadableBindingFallsThroughToRole pins the other half of
+// F4 / design §5: a rung-1 host.ConfigID that is bound but UNLOADABLE (points
+// at a nonexistent config row) is distinct from a family mismatch — it must
+// NOT short-circuit to ok=false, and must fall through to a successful rung-2
+// role default.
+func TestResolveConfigUnloadableBindingFallsThroughToRole(t *testing.T) {
+	s := resolveStore(t)
+	const mac = "aa:bb:cc:dd:ee:26"
+	if err := s.UpsertHost(db.Host{MAC: mac}); err != nil {
+		t.Fatal(err)
+	}
+	cid := mkConfig(t, s, "role-cfg", "butane", "role-source")
+	rid, _ := s.CreateRole("worker", &cid)
+	if err := s.SetHostRoles(mac, []int64{rid}); err != nil {
+		t.Fatal(err)
+	}
+	var nonexistent int64 = 99999 // bound but unloadable — not present in the DB
+	src, kind, ok := resolveConfig(s, &hardware.Host{MAC: mac, OS: "flatcar", ConfigID: &nonexistent})
+	if !ok || kind != "butane" || string(src) != "role-source" {
+		t.Fatalf("unloadable rung-1 binding = (%q,%q,%v), want fall-through to role-source/butane/true", src, kind, ok)
+	}
+}
+
+// TestResolveConfigRoleDefaultMismatchSkipsToNextRole pins that rung 2 walks
+// roles by name-asc and CONTINUES past a role whose default config mismatches
+// the host family, rather than returning ok=false on the first mismatch.
+func TestResolveConfigRoleDefaultMismatchSkipsToNextRole(t *testing.T) {
+	s := resolveStore(t)
+	const mac = "aa:bb:cc:dd:ee:27"
+	if err := s.UpsertHost(db.Host{MAC: mac}); err != nil {
+		t.Fatal(err)
+	}
+	wrong := mkConfig(t, s, "wrong-kind", "machineconfig", "machine: {}")
+	right := mkConfig(t, s, "right-kind", "butane", "role-source")
+	// "aaa" sorts before "bbb"; only "aaa"'s default is family-mismatched.
+	rAaa, _ := s.CreateRole("aaa", &wrong)
+	rBbb, _ := s.CreateRole("bbb", &right)
+	if err := s.SetHostRoles(mac, []int64{rAaa, rBbb}); err != nil {
+		t.Fatal(err)
+	}
+	src, kind, ok := resolveConfig(s, &hardware.Host{MAC: mac, OS: "flatcar"})
+	if !ok || kind != "butane" || string(src) != "role-source" {
+		t.Fatalf("rung 2 skip-mismatch = (%q,%q,%v), want fall-through to role-source/butane/true", src, kind, ok)
+	}
+}
+
 func TestResolveConfigUnknownOSFallsThrough(t *testing.T) {
 	s := resolveStore(t)
 	cid := mkConfig(t, s, "c", "butane", "x")
