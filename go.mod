@@ -10,6 +10,7 @@ replace (
 )
 
 require (
+	github.com/ProtonMail/go-crypto v1.4.1
 	github.com/buger/jsonparser v1.1.1
 	github.com/coreos/butane v0.19.0
 	github.com/coreos/ignition/v2 v2.17.0
@@ -29,6 +30,7 @@ require (
 require (
 	github.com/aws/aws-sdk-go v1.47.9 // indirect
 	github.com/clarketm/json v1.17.1 // indirect
+	github.com/cloudflare/circl v1.6.2 // indirect
 	github.com/coreos/go-json v0.0.0-20230131223807-18775e0fb4fb // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
@@ -56,6 +58,7 @@ require (
 	github.com/subosito/gotenv v1.2.0 // indirect
 	github.com/u-root/uio v0.0.0-20230220225925-ffce2a382923 // indirect
 	github.com/vincent-petithory/dataurl v1.0.0 // indirect
+	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
