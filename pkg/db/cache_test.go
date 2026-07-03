@@ -163,3 +163,32 @@ func TestUpsertCacheEntryArchivedWritesFailureRow(t *testing.T) {
 		t.Fatalf("failure row must be in_window=0 size=0 verified=0 + err, got %+v", r)
 	}
 }
+
+func TestUpsertCacheEntryArchivedFreshInsert(t *testing.T) {
+	s := newTestStore(t)
+	targetID, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertTargetVersion(TargetVersion{TargetID: targetID, Version: "100.0.0", Source: "discovered", Cached: true}); err != nil {
+		t.Fatal(err)
+	}
+	tvID, err := s.TargetVersionID(targetID, "100.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No UpsertCacheEntry call: bytes never landed, so there is no cache_entries
+	// row yet — this exercises the fresh-INSERT branch, not ON CONFLICT.
+	if err := s.UpsertCacheEntryArchived(tvID, "gpg: signature mismatch"); err != nil {
+		t.Fatalf("UpsertCacheEntryArchived: %v", err)
+	}
+	rows, _ := s.ListCacheEntries(CacheFilter{})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	r := rows[0]
+	if r.InWindow || r.Size != 0 || r.Verified == nil || *r.Verified || r.VerifyErr != "gpg: signature mismatch" || r.Pinned {
+		t.Fatalf("fresh-insert failure row must be in_window=0 size=0 verified=false pinned=false + err, got %+v", r)
+	}
+}

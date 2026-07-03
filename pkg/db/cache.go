@@ -64,6 +64,7 @@ func (s *Store) UpsertCacheEntry(targetVersionID, size int64) error {
 // row. A nil verified clears the column to NULL ("no verdict") — required when a
 // reverify finds zero verifiable artifacts (e.g. an FCOS pattern-fallback pin).
 // It touches only verified/verify_err; size/in_window/pinned are unchanged.
+// No-op if the row is absent.
 func (s *Store) SetCacheVerified(targetVersionID int64, verified *bool, verifyErr string) error {
 	var v any
 	if verified != nil {
