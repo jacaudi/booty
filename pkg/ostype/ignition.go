@@ -110,9 +110,11 @@ func (fedoraCoreOS) CompareVersions(a, b string) int {
 }
 
 // DiscoverVersions fetches the channel streams JSON and returns its metal build
-// release for the target's channel (params, flag fallback) and the arch flag.
+// release for the target's channel (params, flag fallback) and the arch flag. It
+// routes through the pass-scoped streams memo (D17), the SAME one Artifacts uses,
+// so discovery + artifact resolution for a channel cost one streams GET per pass.
 func (fedoraCoreOS) DiscoverVersions(ctx context.Context, params map[string]string) ([]string, error) {
-	body, err := fetchMetadata(ctx, coreosStreamsURL(params["channel"]))
+	body, err := fetchStreams(ctx, coreosStreamsURL(params["channel"]))
 	if err != nil {
 		return nil, err
 	}

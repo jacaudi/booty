@@ -220,6 +220,10 @@ func TestFedoraCoreOS_CompareVersions_LengthTiebreak(t *testing.T) {
 }
 
 func TestFedoraCoreOS_DiscoverHonorsStreamsURLOverride(t *testing.T) {
+	// DiscoverVersions now routes through the pass-scoped streams memo (D17), so
+	// reset it for a hermetic fetch.
+	ResetStreamsCache()
+	t.Cleanup(ResetStreamsCache)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// streams JSON with one metal release for the configured arch.
 		_, _ = w.Write([]byte(`{"architectures":{"x86_64":{"artifacts":{"metal":{"release":"40.20240101.3.0"}}}}}`))
@@ -243,6 +247,10 @@ func TestFedoraCoreOS_DiscoverHonorsStreamsURLOverride(t *testing.T) {
 }
 
 func TestFedoraCoreOS_DiscoverVersions_PerChannelParams(t *testing.T) {
+	// DiscoverVersions now routes through the pass-scoped streams memo (D17), so
+	// reset it for a hermetic per-channel fetch.
+	ResetStreamsCache()
+	t.Cleanup(ResetStreamsCache)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/next.json") {
 			_, _ = w.Write([]byte(`{"architectures":{"x86_64":{"artifacts":{"metal":{"release":"45.20260601.1.0"}}}}}`))
@@ -409,6 +417,54 @@ func TestFedoraCoreOS_Artifacts_CurrentVersionFromStreams(t *testing.T) {
 	ResetStreamsCache()
 	if _, err := o.Artifacts(t.Context(), "44.20260607.3.1", "x86_64", map[string]string{"channel": "stable"}); err != nil {
 		t.Fatal(err)
+	}
+	if hits != 2 {
+		t.Fatalf("post-reset fetch count = %d, want 2 (ResetStreamsCache must force a refetch)", hits)
+	}
+}
+
+// TestFedoraCoreOS_DiscoverAndArtifactsShareStreamsMemo pins D17 across the WHOLE
+// reconcile pass: discovery and artifact resolution both route through the
+// pass-scoped streams memo, so one channel costs exactly ONE streams GET per pass
+// (was two — DiscoverVersions fetched the doc independently of Artifacts). A
+// ResetStreamsCache at the next pass top forces a refetch.
+func TestFedoraCoreOS_DiscoverAndArtifactsShareStreamsMemo(t *testing.T) {
+	ResetStreamsCache()
+	t.Cleanup(ResetStreamsCache)
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(fcosStreamJSON)) // release 44.20260607.3.1 with pxe sha256
+	}))
+	t.Cleanup(srv.Close)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+
+	o, _ := Lookup("fedora-coreos")
+	params := map[string]string{"channel": "stable"}
+
+	// One reconcile pass: discovery THEN artifacts for the discovered version.
+	vers, err := o.DiscoverVersions(t.Context(), params)
+	if err != nil {
+		t.Fatalf("DiscoverVersions: %v", err)
+	}
+	if len(vers) != 1 || vers[0] != "44.20260607.3.1" {
+		t.Fatalf("DiscoverVersions = %v, want [44.20260607.3.1]", vers)
+	}
+	if _, err := o.Artifacts(t.Context(), vers[0], "x86_64", params); err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("streams JSON fetched %d times in one pass, want 1 (discovery + artifacts share the D17 memo)", hits)
+	}
+
+	// D17: ResetStreamsCache at the next pass top must force a refetch.
+	ResetStreamsCache()
+	if _, err := o.DiscoverVersions(t.Context(), params); err != nil {
+		t.Fatalf("DiscoverVersions after reset: %v", err)
 	}
 	if hits != 2 {
 		t.Fatalf("post-reset fetch count = %d, want 2 (ResetStreamsCache must force a refetch)", hits)
