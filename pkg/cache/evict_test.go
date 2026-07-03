@@ -146,6 +146,14 @@ func TestEvictNeverTouchesPinned(t *testing.T) {
 // versions on disk and a byte budget below their total, eviction reclaims the
 // OLDER one but must leave the NEWEST cached version — the bytes NewestCached
 // serves — even though it is archived, so the boot fallback never 404s.
+//
+// Discriminating fixture: the NEWEST version (100.1.0) is seeded FIRST, so it
+// gets the lower id / earlier fetched_at and sorts to candidates[0] under
+// ListArchivedUnpinned's ORDER BY fetched_at ASC, id ASC. Unguarded code would
+// therefore evict candidates[0] — the newest version — which is exactly the
+// bug D13 exists to prevent. Seeding oldest-first (as an earlier version of
+// this test did) never exercises the guard's skip branch, since the older
+// version already sorts first and unguarded code evicts it "by accident".
 func TestEvictNeverRemovesNewestCachedVersion(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
@@ -172,16 +180,26 @@ func TestEvictNeverRemovesNewestCachedVersion(t *testing.T) {
 		}
 		return tvID
 	}
-	seed("100.0.0")
-	seed("100.1.0") // newest by CompareVersions
+	seed("100.1.0") // newest by CompareVersions — seeded FIRST so it sorts to candidates[0]
+	seed("100.0.0") // older — seeded SECOND
 
 	if err := evictOverBudget(store, 1500); err != nil { // budget below 2000 total
 		t.Fatalf("evict: %v", err)
 	}
-	if cacheDirExists("flatcar", "stable", "amd64", "100.0.0") {
-		t.Error("older archived version should have been evicted")
-	}
 	if !cacheDirExists("flatcar", "stable", "amd64", "100.1.0") {
 		t.Error("newest cached version must NEVER be evicted (D13) — boot fallback would 404")
+	}
+	rows, _ := store.ListCacheEntries(db.CacheFilter{})
+	rowSurvived := false
+	for _, r := range rows {
+		if r.Version == "100.1.0" {
+			rowSurvived = true
+		}
+	}
+	if !rowSurvived {
+		t.Error("newest cached version's row must NEVER be evicted (D13)")
+	}
+	if cacheDirExists("flatcar", "stable", "amd64", "100.0.0") {
+		t.Error("older archived version should have been evicted")
 	}
 }

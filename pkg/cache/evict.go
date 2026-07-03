@@ -14,8 +14,11 @@ import (
 // coordinator goroutine.
 //
 // The no-progress guard: eviction trusts the DB `size` column; a size=0 row
-// would free nothing yet keep the loop deleting. So each pass re-checks
-// SumCacheBytes and stops if a deletion makes no measurable progress.
+// would free nothing yet keep the loop deleting. D14 (ListArchivedUnpinned's
+// size>0 filter) is the primary defense — it excludes zero-byte rows from
+// candidacy entirely. This guard is the backstop: each pass still re-checks
+// SumCacheBytes and stops if a deletion makes no measurable progress, in case
+// the size column is wrong in some other way.
 func evictOverBudget(store *db.Store, maxBytes int64) error {
 	if maxBytes <= 0 {
 		return nil
