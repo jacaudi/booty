@@ -269,6 +269,21 @@ func TestFedoraCoreOS_DiscoverVersions_PerChannelParams(t *testing.T) {
 }
 
 func TestFedoraCoreOS_Artifacts(t *testing.T) {
+	// Post-D17: Artifacts always consults the streams doc first to decide
+	// current-vs-pinned. This test's version is deliberately NOT the streams
+	// "current" release, so it exercises the pattern-fallback branch (same
+	// behavior this test asserted before P3b's streams-JSON rewrite).
+	ResetStreamsCache()
+	t.Cleanup(ResetStreamsCache)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"architectures":{"x86_64":{"artifacts":{"metal":{"release":"99.0.0.0"}}}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+
 	o, _ := Lookup("fedora-coreos")
 	got, err := o.Artifacts(t.Context(), "39.20231101.3.0", "x86_64", nil)
 	if err != nil {
@@ -285,8 +300,20 @@ func TestFedoraCoreOS_Artifacts(t *testing.T) {
 }
 
 func TestFedoraCoreOS_Artifacts_DotKernelAndChannel(t *testing.T) {
+	// Post-D17: same pattern-fallback rationale as TestFedoraCoreOS_Artifacts
+	// above — the tested version is pinned/older relative to the injected
+	// streams "current" release, so the dot-form pattern-built URL path (this
+	// test's actual subject) still fires.
+	ResetStreamsCache()
+	t.Cleanup(ResetStreamsCache)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"architectures":{"x86_64":{"artifacts":{"metal":{"release":"99.0.0.0"}}}}}`))
+	}))
+	t.Cleanup(srv.Close)
 	viper.Reset()
 	t.Cleanup(viper.Reset)
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
 	viper.Set(config.CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
 	viper.Set(config.CoreOSChannel, "stable")
 
@@ -311,5 +338,128 @@ func TestFedoraCoreOS_Artifacts_DotKernelAndChannel(t *testing.T) {
 		if strings.Contains(a.URL, "live-kernel-x86_64") {
 			t.Errorf("artifact URL %q still uses the dash kernel form", a.URL)
 		}
+	}
+}
+
+const fcosStreamJSON = `{
+  "architectures": { "x86_64": { "artifacts": { "metal": {
+    "release": "44.20260607.3.1",
+    "formats": { "pxe": {
+      "kernel":    { "location": "https://ex/44/kernel",    "sha256": "aaa" },
+      "initramfs": { "location": "https://ex/44/initramfs", "sha256": "bbb" },
+      "rootfs":    { "location": "https://ex/44/rootfs",    "sha256": "ccc" }
+    } } } } } }
+}`
+
+func TestFedoraCoreOS_Artifacts_CurrentVersionFromStreams(t *testing.T) {
+	ResetStreamsCache()
+	t.Cleanup(ResetStreamsCache)
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(fcosStreamJSON))
+	}))
+	t.Cleanup(srv.Close)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+
+	o, _ := Lookup("fedora-coreos")
+	arts, err := o.Artifacts(t.Context(), "44.20260607.3.1", "x86_64", map[string]string{"channel": "stable"})
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	if len(arts) != 3 {
+		t.Fatalf("want 3 artifacts, got %d", len(arts))
+	}
+	// Assert URL + sha256 PER artifact against the expected maps (keyed by the
+	// streams basename, which is Artifact.Filename = path.Base(location)).
+	wantURL := map[string]string{"kernel": "https://ex/44/kernel", "initramfs": "https://ex/44/initramfs", "rootfs": "https://ex/44/rootfs"}
+	wantSHA := map[string]string{"kernel": "aaa", "initramfs": "bbb", "rootfs": "ccc"}
+	for _, a := range arts {
+		wu, ok := wantURL[a.Filename]
+		if !ok {
+			t.Errorf("unexpected artifact %q", a.Filename)
+			continue
+		}
+		if a.URL != wu {
+			t.Errorf("%s URL = %q, want %q", a.Filename, a.URL, wu)
+		}
+		if a.SHA256 != wantSHA[a.Filename] {
+			t.Errorf("%s SHA256 = %q, want %q", a.Filename, a.SHA256, wantSHA[a.Filename])
+		}
+	}
+	// Ordering is deterministic (kernel, initramfs, rootfs).
+	if arts[0].URL != "https://ex/44/kernel" || arts[0].SHA256 != "aaa" {
+		t.Errorf("kernel = {%q,%q}, want {kernel,aaa}", arts[0].URL, arts[0].SHA256)
+	}
+
+	// D17: a second Artifacts call for the same channel (same pass) must NOT
+	// re-fetch the streams doc.
+	if _, err := o.Artifacts(t.Context(), "44.20260607.3.1", "x86_64", map[string]string{"channel": "stable"}); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Fatalf("streams JSON fetched %d times, want 1 (pass-scoped memoization)", hits)
+	}
+}
+
+func TestFedoraCoreOS_Artifacts_OlderVersionPatternFallbackNoSHA(t *testing.T) {
+	ResetStreamsCache()
+	t.Cleanup(ResetStreamsCache)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(fcosStreamJSON)) // current release is 44.*
+	}))
+	t.Cleanup(srv.Close)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSURL, "https://builds.example/prod/streams/%s/builds/%s/%s")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+
+	o, _ := Lookup("fedora-coreos")
+	arts, err := o.Artifacts(t.Context(), "39.20231101.3.0", "x86_64", map[string]string{"channel": "stable"})
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	if len(arts) != 3 {
+		t.Fatalf("want 3, got %d", len(arts))
+	}
+	for _, a := range arts {
+		if a.SHA256 != "" {
+			t.Errorf("pinned older version must fall back to pattern URLs with NO sha256 (NULL verified): %+v", a)
+		}
+	}
+	if arts[0].Filename != "fedora-coreos-39.20231101.3.0-live-kernel.x86_64" {
+		t.Errorf("fallback kernel filename = %q, want dot-form", arts[0].Filename)
+	}
+}
+
+// TestFedoraCoreOS_Artifacts_MissingArchIsError is the design §10-mandated case:
+// a streams doc that parses but LACKS the configured architecture key must make
+// Artifacts return a non-nil error (fail-closed), not silently yield zero/empty
+// artifacts. The real code hits this at jsonparser.GetString on the metal
+// `release` path (architectures.<arch>.artifacts.metal.release), which errors
+// when <arch> is absent.
+func TestFedoraCoreOS_Artifacts_MissingArchIsError(t *testing.T) {
+	ResetStreamsCache()
+	t.Cleanup(ResetStreamsCache)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Well-formed JSON, but only aarch64 is present; x86_64 (configured) is absent.
+		_, _ = w.Write([]byte(`{"architectures":{"aarch64":{"artifacts":{"metal":{"release":"44.0.0","formats":{"pxe":{}}}}}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.CoreOSArchitecture, "x86_64") // configured arch is missing from the doc
+
+	o, _ := Lookup("fedora-coreos")
+	if _, err := o.Artifacts(t.Context(), "44.0.0", "x86_64", map[string]string{"channel": "stable"}); err == nil {
+		t.Fatal("streams JSON missing the configured architecture must return a non-nil error (fail-closed)")
 	}
 }

@@ -29,6 +29,10 @@ import (
 // sequentially, so a per-version cap is functionally identical to a global cap
 // at booty's ~3 upstreams.
 func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db.Target) error {
+	// D17: fetch the FCOS channel streams doc at most once per pass; reset the
+	// memo at pass entry so a later pass resolves new builds against a fresh doc.
+	ostype.ResetStreamsCache()
+
 	o, ok := ostype.Lookup(t.OS) // t.OS is the canonical taxonomy name
 	if !ok {
 		return fmt.Errorf("cache: unknown OS %q for target %d", t.OS, t.ID)
