@@ -404,6 +404,15 @@ func TestFedoraCoreOS_Artifacts_CurrentVersionFromStreams(t *testing.T) {
 	if hits != 1 {
 		t.Fatalf("streams JSON fetched %d times, want 1 (pass-scoped memoization)", hits)
 	}
+
+	// D17: ResetStreamsCache must force the next pass to refetch the streams JSON.
+	ResetStreamsCache()
+	if _, err := o.Artifacts(t.Context(), "44.20260607.3.1", "x86_64", map[string]string{"channel": "stable"}); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 2 {
+		t.Fatalf("post-reset fetch count = %d, want 2 (ResetStreamsCache must force a refetch)", hits)
+	}
 }
 
 func TestFedoraCoreOS_Artifacts_OlderVersionPatternFallbackNoSHA(t *testing.T) {
