@@ -165,11 +165,13 @@ func (s *Store) SumCacheBytes() (int64, error) {
 	return n, nil
 }
 
-// ListArchivedUnpinned returns archived (in_window=0), unpinned rows, oldest
-// fetched_at first — the eviction candidate order.
+// ListArchivedUnpinned returns archived (in_window=0), unpinned, NON-EMPTY
+// (size>0) rows, oldest fetched_at first — the eviction candidate order. size=0
+// failure-visibility rows are excluded (D14): they free no bytes, so evicting
+// them would stall the no-progress guard while real archived bytes go unreclaimed.
 func (s *Store) ListArchivedUnpinned() ([]CacheEntryRow, error) {
 	return s.queryCacheRows(cacheEntryJoin +
-		" WHERE ce.in_window = 0 AND ce.pinned = 0 ORDER BY ce.fetched_at ASC, ce.id ASC")
+		" WHERE ce.in_window = 0 AND ce.pinned = 0 AND ce.size > 0 ORDER BY ce.fetched_at ASC, ce.id ASC")
 }
 
 func (s *Store) queryCacheRows(q string, args ...any) ([]CacheEntryRow, error) {

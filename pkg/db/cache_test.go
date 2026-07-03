@@ -164,6 +164,29 @@ func TestUpsertCacheEntryArchivedWritesFailureRow(t *testing.T) {
 	}
 }
 
+func TestListArchivedUnpinnedExcludesZeroByteRows(t *testing.T) {
+	s := newTestStore(t)
+	_, tvID := seedCacheRow(t, s)
+	if err := s.SetCacheInWindow(tvID, false); err != nil { // archive the real (size>0) row
+		t.Fatal(err)
+	}
+	// A zero-byte failure row on a second version.
+	if err := s.UpsertTargetVersion(TargetVersion{TargetID: 1, Version: "99.0.0", Source: "discovered"}); err != nil {
+		t.Fatal(err)
+	}
+	tv2, _ := s.TargetVersionID(1, "99.0.0")
+	if err := s.UpsertCacheEntryArchived(tv2, "signature mismatch"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListArchivedUnpinned()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Version != "100.0.0" {
+		t.Fatalf("size=0 failure row must be excluded from eviction candidates, got %+v", got)
+	}
+}
+
 func TestUpsertCacheEntryArchivedFreshInsert(t *testing.T) {
 	s := newTestStore(t)
 	targetID, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
