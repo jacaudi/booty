@@ -2,6 +2,8 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -130,6 +132,57 @@ func DownloadFile(ctx context.Context, destDir, rawURL string) error {
 
 	slog.Info("download complete", "url", rawURL, "bytes", n)
 	return nil
+}
+
+// DownloadStaged streams the body at rawURL into <destDir>/<base>.partial (base
+// is rawURL's trailing path segment, query stripped), computing the SHA-256 hex
+// digest WHILE streaming (io.TeeReader — no second disk read). It returns the
+// partial path and the digest. On transport error, non-2xx status, or a write
+// failure the .partial is removed and an error returned — nothing lands at the
+// final name. The caller (cache.landArtifact) owns verification + the rename.
+func DownloadStaged(ctx context.Context, destDir, rawURL string) (string, string, error) {
+	slog.Info("downloading (staged)", "url", rawURL)
+
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", "", fmt.Errorf("config: parse url %q: %w", rawURL, err)
+	}
+	base := path.Base(u.Path)
+	if base == "." || base == ".." || base == "/" {
+		return "", "", fmt.Errorf("config: url %q yields unsafe filename %q", rawURL, base)
+	}
+	partialPath := filepath.Join(destDir, base+".partial")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("config: build request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("config: get %s: %w", rawURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return "", "", fmt.Errorf("config: get %s: status %s", rawURL, resp.Status)
+	}
+
+	f, err := os.Create(partialPath)
+	if err != nil {
+		return "", "", fmt.Errorf("config: create %s: %w", partialPath, err)
+	}
+	hasher := sha256.New()
+	n, err := io.Copy(f, io.TeeReader(resp.Body, hasher))
+	closeErr := f.Close()
+	if err != nil {
+		_ = os.Remove(partialPath)
+		return "", "", fmt.Errorf("config: write %s: %w", partialPath, err)
+	}
+	if closeErr != nil {
+		_ = os.Remove(partialPath)
+		return "", "", fmt.Errorf("config: close %s: %w", partialPath, closeErr)
+	}
+	slog.Info("staged download complete", "url", rawURL, "bytes", n)
+	return partialPath, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 // DatabasePathValue resolves the SQLite database path: the explicit

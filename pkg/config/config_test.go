@@ -2,6 +2,8 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -120,6 +122,49 @@ func TestLoadConfig_CacheDefaults(t *testing.T) {
 	}
 	if got := viper.GetString(CoreOSStreamsURL); got != "https://builds.coreos.fedoraproject.org/streams/%s.json" {
 		t.Errorf("CoreOSStreamsURL = %q, want the Fedora streams URL", got)
+	}
+}
+
+func TestDownloadStagedHashesToPartial(t *testing.T) {
+	body := []byte("artifact-bytes")
+	sum := sha256.Sum256(body)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	partial, gotSHA, err := DownloadStaged(t.Context(), dir, srv.URL+"/flatcar_production_pxe.vmlinuz")
+	if err != nil {
+		t.Fatalf("DownloadStaged: %v", err)
+	}
+	if want := filepath.Join(dir, "flatcar_production_pxe.vmlinuz.partial"); partial != want {
+		t.Errorf("partialPath = %q, want %q", partial, want)
+	}
+	if _, err := os.Stat(partial); err != nil {
+		t.Errorf(".partial must exist after staging: %v", err)
+	}
+	// The FINAL name must NOT exist yet (caller owns the rename).
+	if _, err := os.Stat(filepath.Join(dir, "flatcar_production_pxe.vmlinuz")); !os.IsNotExist(err) {
+		t.Error("final-named file must not exist after staging")
+	}
+	if gotSHA != hex.EncodeToString(sum[:]) {
+		t.Errorf("sha256 = %q, want %q", gotSHA, hex.EncodeToString(sum[:]))
+	}
+}
+
+func TestDownloadStagedRejects404AndLeavesNoPartial(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	if _, _, err := DownloadStaged(t.Context(), dir, srv.URL+"/missing.img"); err == nil {
+		t.Fatal("a 404 must return an error")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "missing.img.partial")); !os.IsNotExist(err) {
+		t.Error("a rejected download must leave no .partial behind")
 	}
 }
 
