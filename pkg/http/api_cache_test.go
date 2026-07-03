@@ -147,6 +147,78 @@ func TestReverifyRecomputesVerdict(t *testing.T) {
 	_ = cache.VerifyVersion // referenced so the intent is explicit
 }
 
+// TestReverifyRecordsFailureVerdict closes the gap left by
+// TestReverifyRecomputesVerdict: it drives reverify's headline recourse — a
+// version whose on-disk bytes FAIL verification — through the actual HTTP
+// endpoint, not just VerifyVersion/aggregateVerdicts directly. Mirrors the
+// passing-verdict test's setup exactly; the only difference is the on-disk
+// bytes do NOT match the streams-declared sha256, so VerifyVersion's hashFile
+// comparison mismatches (classCorruption) and the version must land as
+// verified=false with a non-empty verify_err.
+func TestReverifyRecordsFailureVerdict(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+
+	body := []byte("rootfs-bytes")
+	sum := hexSHAHTTP(body)
+	srv := httptest.NewServer(fcosStreamsHandler(t, sum))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	dataDir := t.TempDir()
+	viper.Set(config.DataDir, dataDir)
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+	viper.Set(config.CoreOSChannel, "stable")
+
+	tid, err := deps.Store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	if err := deps.Store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "44.20260607.3.1", Source: "discovered", Cached: true}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	tvID, err := deps.Store.TargetVersionID(tid, "44.20260607.3.1")
+	if err != nil {
+		t.Fatalf("TargetVersionID: %v", err)
+	}
+	if err := deps.Store.UpsertCacheEntry(tvID, 100); err != nil {
+		t.Fatalf("UpsertCacheEntry: %v", err)
+	}
+	dir := filepath.Join(dataDir, "cache", "coreos", "stable", "x86_64", "44.20260607.3.1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Deliberately does NOT match sum: proves the failure path, not the pass path.
+	onDisk := []byte("tampered-bytes-not-matching-sum")
+	for _, name := range []string{"kernel", "initramfs", "rootfs"} { // match streams basenames
+		if err := os.WriteFile(filepath.Join(dir, name), onDisk, 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	rows, err := deps.Store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
+	}
+	id := rows[0].ID
+
+	resp := api.Post("/api/v1/cache/"+itoa(id)+"/reverify", struct{}{})
+	if resp.Code != 200 {
+		t.Fatalf("reverify = %d: %s", resp.Code, resp.Body.String())
+	}
+	after, err := deps.Store.ListCacheEntries(db.CacheFilter{})
+	if err != nil {
+		t.Fatalf("ListCacheEntries after: %v", err)
+	}
+	if after[0].Verified == nil || *after[0].Verified {
+		t.Fatalf("mismatching sha256 must set verified=false (tri-state false, not null/true), got %+v", after[0])
+	}
+	if after[0].VerifyErr == "" {
+		t.Fatalf("a failing verdict must record a non-empty verify_err, got %+v", after[0])
+	}
+}
+
 func TestReverifyMissingEntryIs404(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)
