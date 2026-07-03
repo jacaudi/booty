@@ -39,4 +39,25 @@ describe('BootConfigsView', () => {
     expect(configsApi.rollbackConfig).toHaveBeenCalledWith(5, 1)
     await waitFor(() => expect(configsApi.listConfigs).toHaveBeenCalledTimes(2))
   })
+
+  it('prefills the Edit modal with the config current source', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 7, name: 'edit-me', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    ])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(configsApi.getConfig).mockResolvedValue({
+      id: 7,
+      name: 'edit-me',
+      kind: 'butane',
+      activeRevision: 1,
+      revisionCount: 1,
+      updatedAt: '',
+      source: 'EXISTING SOURCE CONTENT',
+    })
+    render(<BootConfigsView />)
+    await waitFor(() => screen.getByText('edit-me'))
+    await userEvent.click(screen.getByRole('button', { name: /edit/i }))
+    expect(await screen.findByDisplayValue('EXISTING SOURCE CONTENT')).toBeInTheDocument()
+    expect(configsApi.getConfig).toHaveBeenCalledWith(7)
+  })
 })
