@@ -188,6 +188,7 @@ Cache inventory: the set of on-disk boot artifacts tracked in `cache_entries`. A
 | `POST` | `/api/v1/cache/{id}/pin` | Pin a cached version (exempt from eviction). **OPEN.** | cache entry JSON / `404` |
 | `POST` | `/api/v1/cache/{id}/unpin` | Unpin a cached version (eligible for eviction again). **OPEN.** | cache entry JSON / `404` |
 | `POST` | `/api/v1/cache/scan` | Reconcile the cache inventory to disk: recomputes sizes, repairs missing `cache_entries` rows, and counts on-disk version dirs with no matching `target_version`. **OPEN.** | `{"scanned":N,"updated":N,"orphans":N}` |
+| `POST` | `/api/v1/cache/{id}/reverify` | Re-run artifact verification for a cached version and re-record `verified`/`verify_err`. Recomputes the verdict from the on-disk final files (SHA256 re-hashed, `.sig` re-fetched and re-checked) — **non-destructive**: never evicts, moves, or deletes bytes regardless of outcome. Ignores `--signaturePolicy off` (an explicit operator ask always verifies). **OPEN.** | cache entry JSON / `404` |
 | `DELETE` | `/api/v1/cache/{id}` | **403 until auth (P10).** | `403` |
 
 **Cache entry JSON** (`CacheEntryDTO`):
@@ -204,6 +205,8 @@ Cache inventory: the set of on-disk boot artifacts tracked in `cache_entries`. A
 | `pinned` | bool | Whether this version is operator-pinned. |
 | `inWindow` | bool | Whether this version is currently in the reconciler's retention window. |
 | `fetchedAt` | string | ISO-8601 timestamp of the last successful cache or scan update. |
+| `verified` | bool *(omitted when no verdict)* | Tri-state artifact-integrity verdict (P3b): `true` = all verifiable artifacts passed; `false` = at least one failed; **omitted** (`omitempty`) when there is no verdict (no verification mechanism, or `--signaturePolicy off`). Maps to `cache_entries.verified` (see [DATABASE.md](DATABASE.md)). |
+| `verifyErr` | string *(omitempty)* | Present only when `verified=false`: the `errors.Join` of every failing artifact's message across the version, each carrying its failure-class text (`checksum mismatch` / `signature mismatch` / `unknown or expired signing key`). |
 
 **Filter notes.** The `state` query parameter maps to `in_window`: `state=in-cycle` returns all rows with `in_window=1` (both `in-cycle` and `in-cycle-pinned`); `state=archived` returns rows with `in_window=0`. To narrow to pinned-only or unpinned-only, combine with `pinned=true` or `pinned=false`. An unrecognised `state` value is silently ignored (no filter applied).
 
@@ -211,7 +214,9 @@ Cache inventory: the set of on-disk boot artifacts tracked in `cache_entries`. A
 
 > The management UI consumes these endpoints:
 > `GET /api/v1/cache`, `POST /api/v1/cache/{id}/pin`, `POST /api/v1/cache/{id}/unpin`,
-> `POST /api/v1/cache/scan`. `DELETE /api/v1/cache/{id}` is wired but returns 403 until auth (P10).
+> `POST /api/v1/cache/scan`, `POST /api/v1/cache/{id}/reverify` (the Cache view's per-row
+> Reverify action + the three-state Verified column). `DELETE /api/v1/cache/{id}` is wired
+> but returns 403 until auth (P10).
 
 ### Boot dispatch (P1c)
 

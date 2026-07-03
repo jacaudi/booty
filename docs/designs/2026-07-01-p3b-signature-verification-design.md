@@ -264,6 +264,13 @@ So `strict` refuses **both** classes; `warn` refuses **only** the signature-mism
 booting forged Flatcar bytes (§2 goal #4, §6, §11). The alternative — uniform `warn`
 that lands every failure plus a prominent CONFIGURATION.md warning — is on file (D15).
 
+**Policy is admission-time, never retroactive.** A policy verdict is applied when a
+version is admitted; tightening the policy (e.g. `warn` → `strict`) does **not**
+retroactively re-verify or evict a version the reconciler has already settled — the
+idempotency skip guard leaves settled (`cached=1`, files-present) versions in place.
+The operator's recourse is `POST /cache/{id}/reverify` (§7), which re-checks under the
+current policy and re-records `verified=0`; removal stays a manual decision.
+
 Non-verifiable artifacts (talos, debian, FCOS pattern-fallback versions — i.e.
 artifacts whose verification fields are *empty at eval time*, per §4's fail-closed
 rule): always rename (atomicity still applies); `verified` stays NULL = "no verdict".

@@ -74,6 +74,28 @@ cache/talos/376567988ad3…b4ba/amd64/v1.10.1/
 > under its channel segment on next reconcile, and the old `debian/-` directory is reported as
 > orphans by `POST /api/v1/cache/scan` like any other stale dir.
 
+### Staged downloads (`.partial`) — P3b
+
+Every artifact download (all OSes) is **staged** before it becomes a cached file. The body streams
+to `<artifact>.partial` in the version directory (SHA-256 computed while streaming), then the
+verification verdict decides its fate:
+
+- **Land:** on a pass (or a `warn` corruption failure that lands), the `.partial` is `os.Rename`d
+  onto the final `<artifact>` name. The rename is atomic because source and destination share the
+  same filesystem — a boot never sees a half-written file at the final name.
+- **Reject:** on a refused failure, the `.partial` is removed and the whole version directory is
+  wiped (version-level atomicity), so `NewestCached` falls back to the prior cached version.
+
+`.partial` files are never part of the boot/menu/TFTP path (which references only exact artifact
+filenames), are **swept at the start of every reconcile pass** (a crash mid-download self-heals),
+are **excluded from `POST /cache/scan` size sums**, and are **404'd by the `/data/` file server**
+(case-insensitive) so a direct browse can't fetch an in-flight file.
+
+**Failure-visibility on disk.** A version rejected by verification leaves **no bytes on disk** (its
+directory is removed) but keeps a `cache_entries` row with `size=0`, `in_window=0`, `verified=0`,
+and `verify_err` set — visible in the Cache view, invisible to the byte budget and eviction sweep.
+See [DATABASE.md](DATABASE.md) and [CONFIGURATION.md](../CONFIGURATION.md).
+
 ## How the cache is populated and pruned
 
 - A single **cache reconciler** (`--cacheInterval`, default every 5 minutes; bounded by

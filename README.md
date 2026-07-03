@@ -22,6 +22,11 @@ It does one job: get your machines netbooted into the right OS.
 - **Caches boot artifacts on disk.** Kernel and initramfs (and rootfs, for CoreOS) are downloaded
   once and served locally from `<dataDir>/cache/...`, so boots don't depend on upstream
   availability or speed.
+- **Verifies artifact integrity.** Downloads are staged and checked before they land — Fedora CoreOS
+  by SHA-256, Flatcar by detached GPG signature against an embedded key. The default policy (`warn`)
+  refuses tampered (forged-signature) artifacts while logging other verification failures;
+  `--signaturePolicy strict` refuses all of them (see
+  [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
 - **Serves per-host boot configs.** Each registered host (keyed by MAC) is mapped to an OS and an
   optional config template. booty renders and serves the right Ignition JSON (Flatcar / CoreOS) or
   Talos machine config (Talos) at boot time.
