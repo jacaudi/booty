@@ -96,7 +96,7 @@ func registerHosts(api huma.API, deps APIDeps) {
 		Summary: "Approve a host", Tags: []string{"hosts"},
 	}, func(ctx context.Context, in *struct {
 		MAC  string `path:"mac"`
-		Body struct {
+		Body *struct {
 			ConfigID *int64   `json:"configId,omitempty"`
 			RoleIDs  *[]int64 `json:"roleIds,omitempty"`
 		}
@@ -127,7 +127,7 @@ func registerHosts(api huma.API, deps APIDeps) {
 				return nil, huma.Error500InternalServerError("assign", err)
 			}
 		}
-		if in.Body.ConfigID != nil || in.Body.RoleIDs != nil {
+		if in.Body != nil && (in.Body.ConfigID != nil || in.Body.RoleIDs != nil) {
 			if err := bindHostConfigRoles(deps.Store, h, in.Body.ConfigID, in.Body.RoleIDs); err != nil {
 				return nil, err
 			}
@@ -146,7 +146,7 @@ func registerHosts(api huma.API, deps APIDeps) {
 		Summary: "Bind config/roles to an approved host", Tags: []string{"hosts"},
 	}, func(ctx context.Context, in *struct {
 		MAC  string `path:"mac"`
-		Body struct {
+		Body *struct {
 			ConfigID *int64   `json:"configId,omitempty"`
 			RoleIDs  *[]int64 `json:"roleIds,omitempty"`
 		}
@@ -158,8 +158,10 @@ func registerHosts(api huma.API, deps APIDeps) {
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
 		}
-		if err := bindHostConfigRoles(deps.Store, h, in.Body.ConfigID, in.Body.RoleIDs); err != nil {
-			return nil, err
+		if in.Body != nil {
+			if err := bindHostConfigRoles(deps.Store, h, in.Body.ConfigID, in.Body.RoleIDs); err != nil {
+				return nil, err
+			}
 		}
 		updated, err := hardware.GetMacAddress(in.MAC)
 		if err != nil {

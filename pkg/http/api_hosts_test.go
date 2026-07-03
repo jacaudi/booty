@@ -98,8 +98,12 @@ func hostsTestDeps(t *testing.T) APIDeps {
 func TestApproveEmptyBodyBackwardCompatible(t *testing.T) {
 	deps := hostsTestDeps(t)
 	api := newTestAPI(t, deps)
-	// Empty body must behave exactly like today's approve (approve + assign).
-	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve", map[string]any{})
+	// A genuinely OMITTED body (no second arg to api.Post — a zero-byte request,
+	// exactly what the frontend sends) must behave exactly like today's approve
+	// (approve + assign). This is the case a huma non-pointer Body field would
+	// reject with 400 "request body is required" before the handler even runs;
+	// passing map[string]any{} here would marshal to "{}" and mask that bug.
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve")
 	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"approved":true`) {
 		t.Fatalf("approve empty = %d: %s", resp.Code, resp.Body.String())
 	}
@@ -169,5 +173,45 @@ func TestBindRebindsApprovedHost(t *testing.T) {
 	}
 	if h.ConfigID == nil || *h.ConfigID != cid {
 		t.Fatalf("rebind failed: %v", h.ConfigID)
+	}
+}
+
+// TestBindEmptyBodyIsNoOp proves the pointer-Body fix works both directions:
+// a genuinely omitted body on /bind is accepted (no 400 "request body is
+// required") and leaves the host's config/roles untouched, since
+// bindHostConfigRoles is skipped entirely when in.Body == nil.
+func TestBindEmptyBodyIsNoOp(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve")
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/bind")
+	if resp.Code != 200 {
+		t.Fatalf("bind empty body = %d: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID != nil {
+		t.Fatalf("empty-body bind must not bind a config, got: %v", h.ConfigID)
+	}
+}
+
+// TestBindUnknownOSFamilyIs422 exercises bindHostConfigRoles' osFamily
+// lookup-miss branch: a host whose OS is unrecognized (empty string) has no
+// family, so any config bind must 422 rather than panic or silently succeed.
+func TestBindUnknownOSFamilyIs422(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:41", hardware.Host{MAC: "aa:bb:cc:dd:ee:41", OS: ""}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cid, err := deps.Store.CreateConfig("cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:41/bind", map[string]any{"configId": cid})
+	if resp.Code != 422 {
+		t.Fatalf("unknown OS family bind = %d, want 422: %s", resp.Code, resp.Body.String())
 	}
 }
