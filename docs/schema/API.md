@@ -225,7 +225,7 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/api/v1/hosts` | List known hosts. Optional `?approved=true\|false` filter. | `{"hosts":[…]}` |
-| `POST` | `/api/v1/hosts/{mac}/approve` | Approve a host. If the host has a non-empty `os` field, also sets `boot_mode='assigned'` and `assigned_os=os` (plus `schematic` param for Talos), making the host immediately boot-ready once its target's versions are cached. **P4:** the body is now optional and extended to `{"configId"?, "roleIds"?[]}` — an empty/omitted body is byte-identical to pre-P4 approve; a present `configId`/`roleIds` atomically binds them in the same call (see the family-match rule below). **OPEN.** | host JSON / `404` |
+| `POST` | `/api/v1/hosts/{mac}/approve` | Approve a host. If the host has a non-empty `os` field, also sets `boot_mode='assigned'` and `assigned_os=os` (plus `schematic` param for Talos), making the host immediately boot-ready once its target's versions are cached. **P4:** the body is now optional and extended to `{"configId"?, "roleIds"?[]}` — an empty/omitted body is byte-identical to pre-P4 approve; a present `configId`/`roleIds` is validated and bound in the same call (see the family-match rule below). **OPEN.** | host JSON / `404` / `422` |
 | `POST` | `/api/v1/hosts/{mac}/bind` | **P4.** Rebind `{"configId"?, "roleIds"?[]}` on an already-approved host without changing its approval state. Same validation as `approve`'s binding. **OPEN.** | host JSON / `404` / `422` |
 | `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). **OPEN.** | `204` |
 | `POST` | `/api/v1/hosts/{mac}/menu` | Approve (if needed) and put the host into interactive boot-menu mode (`boot_mode='menu'`). Does **not** route through `SetAssignment`; `approved_os` is unchanged. **OPEN.** `404` if MAC is unknown. | host JSON / `404` |
@@ -235,10 +235,14 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 > **Family-match validation (P4).** Both `approve` and `bind` validate a present `configId` against
 > the host's OS family before writing it: the config's `kind` must equal
 > `configKindForFamily(family.ConfigKind)` for the host's `os` (e.g. a `flatcar` host requires a
-> `butane`-kind config). A mismatch — or an unresolvable OS family — returns `422` and binds
-> nothing (roles, if also present in the body, are not bound either; the call fails atomically).
-> Each `roleIds` entry must reference an existing role or the call fails the same way. See
-> [DATABASE.md](DATABASE.md#configs) for the `kind` enum and its relationship to `ConfigKind`.
+> `butane`-kind config). A mismatch — or an unresolvable OS family — returns `422`. Each `roleIds`
+> entry must reference an existing role or the call fails the same way. **All validation (config
+> family-match, every `roleIds` entry) runs before either binding is written**, so a validation
+> failure binds nothing — including the config half, even if it was individually valid — because
+> the config and role writes only happen after both checks pass. This guarantee covers validation
+> failures; it is not transactional atomicity against an infrastructure error striking between the
+> two writes (out of scope for the current trust window). See [DATABASE.md](DATABASE.md#configs)
+> for the `kind` enum and its relationship to `ConfigKind`.
 
 > The management UI (`web/`, served at `/ui/`) consumes these hosts endpoints:
 > `GET /api/v1/hosts`, `POST /api/v1/hosts/{mac}/approve`,

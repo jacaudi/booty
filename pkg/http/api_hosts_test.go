@@ -215,3 +215,38 @@ func TestBindUnknownOSFamilyIs422(t *testing.T) {
 		t.Fatalf("unknown OS family bind = %d, want 422: %s", resp.Code, resp.Body.String())
 	}
 }
+
+// TestBindValidConfigInvalidRoleBindsNothing pins the validate-all-then-write
+// fix in bindHostConfigRoles: a request with a VALID config but a
+// nonexistent role must fail the whole bind — including the config half —
+// not persist the config and then 422 on the role. Before the fix,
+// bindHostConfigRoles wrote the config binding before validating roles, so
+// this exact request left the host partially bound despite the 422.
+func TestBindValidConfigInvalidRoleBindsNothing(t *testing.T) {
+	deps := hostsTestDeps(t) // host OS = flatcar (ignition family → butane)
+	api := newTestAPI(t, deps)
+	cid, err := deps.Store.CreateConfig("cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/bind", map[string]any{
+		"configId": cid, "roleIds": []int64{99999},
+	})
+	if resp.Code != 422 {
+		t.Fatalf("valid config + invalid role bind = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID != nil {
+		t.Fatalf("validation failure must bind nothing, but config was persisted: %v", *h.ConfigID)
+	}
+	roles, err := deps.Store.ListHostRoles("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("list host roles: %v", err)
+	}
+	if len(roles) != 0 {
+		t.Fatalf("validation failure must bind nothing, but roles were persisted: %+v", roles)
+	}
+}

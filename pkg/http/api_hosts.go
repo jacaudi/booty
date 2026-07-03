@@ -22,6 +22,11 @@ type listHostsOutput struct {
 // host, mutating host state ONLY through pkg/hardware wrappers. configID nil =
 // leave config binding unchanged; roleIDs nil = leave roles unchanged. A present
 // configID must exist and satisfy the family-match guard for the host's OS.
+//
+// All validation runs before any write: if configID and/or roleIDs are present,
+// every one of them is checked first, and only once ALL checks pass do we write
+// either binding. This makes a validation failure (bad/family-mismatched config,
+// or a missing role) bind nothing — neither half is left partially persisted.
 func bindHostConfigRoles(store *db.Store, host *hardware.Host, configID *int64, roleIDs *[]int64) error {
 	if configID != nil {
 		cfg, err := store.GetConfig(*configID)
@@ -35,9 +40,6 @@ func bindHostConfigRoles(store *db.Store, host *hardware.Host, configID *int64, 
 		if !ok || cfg.Kind != configKindForFamily(fam.ConfigKind) {
 			return huma.Error422UnprocessableEntity("config kind does not match host OS family")
 		}
-		if err := hardware.SetHostConfig(host.MAC, configID); err != nil {
-			return huma.Error500InternalServerError("bind config", err)
-		}
 	}
 	if roleIDs != nil {
 		for _, rid := range *roleIDs {
@@ -47,6 +49,13 @@ func bindHostConfigRoles(store *db.Store, host *hardware.Host, configID *int64, 
 				return huma.Error500InternalServerError("get role", err)
 			}
 		}
+	}
+	if configID != nil {
+		if err := hardware.SetHostConfig(host.MAC, configID); err != nil {
+			return huma.Error500InternalServerError("bind config", err)
+		}
+	}
+	if roleIDs != nil {
 		if err := hardware.SetHostRoles(host.MAC, *roleIDs); err != nil {
 			return huma.Error500InternalServerError("bind roles", err)
 		}
