@@ -23,6 +23,16 @@ export function approveHost(mac: string): Promise<unknown> {
   return request(`/hosts/${mac}/approve`, { method: 'POST' })
 }
 
+// approveHostWith is the atomic attach+allow used by the "Allow" modal (Task 12):
+// it lets the operator bind a config/roles to a host in the same request that approves it.
+export function approveHostWith(mac: string, body?: { configId?: number; roleIds?: number[] }): Promise<unknown> {
+  return request(`/hosts/${mac}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+}
+
+export function bindHost(mac: string, body: { configId?: number; roleIds?: number[] }): Promise<unknown> {
+  return request(`/hosts/${mac}/bind`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+}
+
 export function revokeHost(mac: string): Promise<unknown> {
   return request(`/hosts/${mac}/revoke`, { method: 'POST' })
 }
