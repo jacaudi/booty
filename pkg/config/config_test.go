@@ -185,6 +185,16 @@ func TestDownloadFile_RejectsErrorStatus(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_SignaturePolicyDefault(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(DataDir, t.TempDir())
+	LoadConfig(&cobra.Command{})
+	if got := viper.GetString(SignaturePolicy); got != "warn" {
+		t.Errorf("SignaturePolicy default = %q, want %q", got, "warn")
+	}
+}
+
 func TestValidateSignaturePolicy(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	for _, ok := range []string{"strict", "warn", "off"} {

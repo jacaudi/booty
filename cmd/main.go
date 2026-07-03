@@ -100,7 +100,7 @@ func init() {
 		&args.signaturePolicy,
 		"signaturePolicy",
 		"warn",
-		"Artifact verification policy: strict (refuse any failure) | warn (refuse forgeries, land corruption) | off (never verify)",
+		"Signature policy: strict (reject unverified), warn (block tampering, allow+log other verify failures), off (no verification)",
 	)
 
 	flags.StringVar(
