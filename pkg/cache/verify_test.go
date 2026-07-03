@@ -134,6 +134,41 @@ func TestVerifyArtifact_FailClosedOnUnobtainable(t *testing.T) {
 	}
 }
 
+// TestVerifyArtifact_FailClosedOnSig404 exercises the fail-closed guarantee on a
+// DECLARED-but-unfetchable sidecar: a VALID keyring (so ReadArmoredKeyRing
+// succeeds and control reaches the .sig fetch) plus a matching SHA256 (so the
+// checksum arm passes) plus a SigURL that 404s. This forces the fetchBytes
+// status>=400 → corruption branch, which must FAIL closed (classCorruption,
+// non-nil err) — NEVER classNotVerifiable.
+func TestVerifyArtifact_FailClosedOnSig404(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte("declared-but-unfetchable")
+	p := writeFile(t, dir, "vmlinuz", body)
+
+	// Reuse gpgFixture's generated public keyring so keyring parse succeeds; we
+	// only need a valid keyring here, not its (working) sig endpoint.
+	keyring, _, closeFn := gpgFixture(t, body)
+	t.Cleanup(closeFn)
+
+	// A distinct sidecar endpoint that 404s. Matching SHA256 lets the checksum
+	// arm pass so control reaches the .sig fetch rather than short-circuiting.
+	sigSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(sigSrv.Close)
+
+	a := ostype.Artifact{
+		Filename: "vmlinuz",
+		URL:      "https://ex/vmlinuz",
+		SHA256:   hexSHA(body),
+		SigURL:   sigSrv.URL + "/vmlinuz.sig",
+		GPGKey:   keyring,
+	}
+	if v := verifyArtifact(t.Context(), p, "", a); v.class != classCorruption || v.err == nil {
+		t.Errorf("declared .sig that 404s must FAIL closed (corruption, non-nil err), got class=%d err=%v", v.class, v.err)
+	}
+}
+
 func TestAggregateVerdicts(t *testing.T) {
 	// none verifiable → NULL
 	if verified, _ := aggregateVerdicts([]artifactVerdict{{class: classNotVerifiable}, {class: classNotVerifiable}}); verified != nil {
@@ -153,6 +188,11 @@ func TestAggregateVerdicts(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(msg), []byte("checksum mismatch: kernel")) || !bytes.Contains([]byte(msg), []byte("signature mismatch: rootfs")) {
 		t.Errorf("verify_err must join ALL failing messages, got %q", msg)
+	}
+	// Failure is driven by the verdict CLASS, not by err != nil: a forgery class
+	// with a nil err must still land as false, never silently counted as a pass.
+	if verified, _ := aggregateVerdicts([]artifactVerdict{{class: classForgery}}); verified == nil || *verified {
+		t.Errorf("forgery class with nil err must aggregate to false")
 	}
 }
 

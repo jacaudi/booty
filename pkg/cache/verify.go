@@ -108,7 +108,12 @@ func verifyDetachedGPG(ctx context.Context, filePath string, a ostype.Artifact) 
 	switch {
 	case err == nil:
 		return artifactVerdict{class: classPass}
-	case errors.Is(err, pgperrors.ErrUnknownIssuer), errors.Is(err, pgperrors.ErrKeyExpired):
+	case errors.Is(err, pgperrors.ErrUnknownIssuer), errors.Is(err, pgperrors.ErrKeyExpired), errors.Is(err, pgperrors.ErrSignatureExpired):
+		// ErrSignatureExpired (a signature-packet expiry, distinct from key
+		// expiry) joins the same benign arm as ErrKeyExpired — matching the
+		// design's "expiry is a benign availability trade-off" classification
+		// (§5). Inert for Flatcar's current non-expiring SHA-256 sigs; folding it
+		// here prevents a future warn-brick were an expiring signature adopted.
 		return artifactVerdict{class: classCorruption, err: fmt.Errorf("%s: unknown or expired signing key", a.Filename)}
 	default:
 		return artifactVerdict{class: classForgery, err: fmt.Errorf("%s: signature mismatch: %w", a.Filename, err)}
@@ -138,20 +143,36 @@ func fetchBytes(ctx context.Context, url string) ([]byte, error) {
 // re-review #12) — this exact definition also appears in DATABASE.md/API.md.
 func aggregateVerdicts(vs []artifactVerdict) (*bool, string) {
 	verifiable := 0
+	failed := false
 	var errs []error
 	for _, v := range vs {
-		if v.class == classNotVerifiable {
+		// Disposition is driven by the verdict CLASS, not by err != nil: a
+		// pass/not-verifiable lands, a corruption/forgery fails. Keying failure
+		// on class (not the err field) means a future failure verdict that ever
+		// carries a nil err still fails closed instead of being silently counted
+		// as a pass. err is retained only to carry the failure message.
+		switch v.class {
+		case classNotVerifiable:
 			continue
-		}
-		verifiable++
-		if v.err != nil {
-			errs = append(errs, v.err)
+		case classPass:
+			verifiable++
+		case classCorruption, classForgery:
+			verifiable++
+			failed = true
+			if v.err != nil {
+				errs = append(errs, v.err)
+			} else {
+				// Failure class with no message (should not happen for current
+				// producers, which always attach err) — synthesize one so the
+				// verdict still fails closed with a non-empty verify_err.
+				errs = append(errs, fmt.Errorf("verification failed (class %d)", v.class))
+			}
 		}
 	}
 	if verifiable == 0 {
 		return nil, ""
 	}
-	if len(errs) > 0 {
+	if failed {
 		no := false
 		return &no, errors.Join(errs...).Error()
 	}
