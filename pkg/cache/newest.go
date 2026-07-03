@@ -15,7 +15,7 @@ import (
 // pkg/versions.NewestCachedTalos did for Talos only. Returning "" reproduces
 // the pre-first-sync 404 failure mode (boot BASEURL points at a missing dir).
 func NewestCached(cacheName, arch string, params map[string]string) string {
-	o, ok := ostype.Lookup(cacheNameToCanonical(cacheName))
+	o, ok := ostype.Lookup(CacheNameToCanonical(cacheName))
 	if !ok {
 		return ""
 	}

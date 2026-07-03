@@ -90,9 +90,13 @@ func canonicalToCacheName(canonical string) string {
 	return canonical
 }
 
-// cacheNameToCanonical maps an on-disk segment back to the canonical name so the
-// boot path (which speaks cache names) can pick the ostype for version ordering.
-func cacheNameToCanonical(name string) string {
+// CacheNameToCanonical maps booty's short/boot-vocabulary OS name (flatcar,
+// coreos, talos — as stored in hosts.os and used on-disk/in cache URLs) back
+// to the ostype canonical taxonomy name (fedora-coreos being the one
+// divergence; every other OS is identity). Exported so pkg/http can bridge
+// host.OS into ostype.Lookup the same way pkg/cache does internally (list.go,
+// newest.go) — the single source of this mapping, not a second copy.
+func CacheNameToCanonical(name string) string {
 	for canon, cn := range cacheNameByCanonical {
 		if cn == name {
 			return canon

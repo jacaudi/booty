@@ -95,6 +95,35 @@ func hostsTestDeps(t *testing.T) APIDeps {
 	return deps
 }
 
+// TestBindCoreOSHostSucceeds pins the fix for the CoreOS binding bug: a host
+// whose OS is "coreos" (booty's short/boot vocabulary) must bind a valid
+// butane config (its ignition-family kind, once bridged to the ostype
+// taxonomy's "fedora-coreos") with 200, not the pre-fix 422 "config kind does
+// not match host OS family" caused by osFamily's raw ostype.Lookup("coreos")
+// miss.
+func TestBindCoreOSHostSucceeds(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:42", hardware.Host{MAC: "aa:bb:cc:dd:ee:42", OS: "coreos"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cid, err := deps.Store.CreateConfig("coreos-cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:42/bind", map[string]any{"configId": cid})
+	if resp.Code != 200 {
+		t.Fatalf("coreos bind = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:42")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID == nil || *h.ConfigID != cid {
+		t.Fatalf("config not bound: %v", h.ConfigID)
+	}
+}
+
 func TestApproveEmptyBodyBackwardCompatible(t *testing.T) {
 	deps := hostsTestDeps(t)
 	api := newTestAPI(t, deps)

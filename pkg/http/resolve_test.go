@@ -150,6 +150,20 @@ func TestResolveConfigRoleDefaultMismatchSkipsToNextRole(t *testing.T) {
 	}
 }
 
+// TestResolveConfigCoreOSHostMapsToFedoraCoreOSFamily pins the fix for the
+// CoreOS binding bug: host.OS uses booty's short/boot vocabulary ("coreos"),
+// but the ostype registry key is "fedora-coreos". osFamily must bridge the
+// two (via cache.CacheNameToCanonical) so a coreos host's family lookup hits
+// and a bound butane config resolves — not fall through to ok=false.
+func TestResolveConfigCoreOSHostMapsToFedoraCoreOSFamily(t *testing.T) {
+	s := resolveStore(t)
+	cid := mkConfig(t, s, "coreos-cfg", "butane", "variant: fcos")
+	src, kind, ok := resolveConfig(s, &hardware.Host{MAC: "aa:bb:cc:dd:ee:28", OS: "coreos", ConfigID: &cid})
+	if !ok || kind != "butane" || string(src) != "variant: fcos" {
+		t.Fatalf("coreos host resolve = (%q,%q,%v), want (variant: fcos, butane, true)", src, kind, ok)
+	}
+}
+
 func TestResolveConfigUnknownOSFallsThrough(t *testing.T) {
 	s := resolveStore(t)
 	cid := mkConfig(t, s, "c", "butane", "x")

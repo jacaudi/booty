@@ -123,7 +123,7 @@ P1c; remaining columns keep their defaults):
 | `ip` | TEXT | Last-known IP. |
 | `booted` | TEXT | Last boot marker. |
 | `ignition_file` | TEXT | Optional per-host Ignition template override. |
-| `os` | TEXT | `flatcar` \| `coreos` \| `talos`. |
+| `os` | TEXT | `flatcar` \| `coreos` \| `talos`. For config-kind family matching (P4), `coreos` maps to the ostype canonical family `fedora-coreos`; `flatcar`/`talos` are identity — see `cache.CacheNameToCanonical`. |
 | `do_install` | INTEGER | One-shot install flag. |
 | `schematic` | TEXT | Talos per-host schematic ID. |
 | `approved` | INTEGER | **Active (P1c).** `1` = approved to boot; `0` = holding pattern. |

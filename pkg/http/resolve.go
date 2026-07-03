@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/jeefy/booty/pkg/ostype"
@@ -77,8 +78,16 @@ func resolveConfig(store *db.Store, host *hardware.Host) (source []byte, kind st
 
 // osFamily returns the OS family for a host OS name, or ok=false on a lookup miss
 // (unidentified / empty OS) — no family constraint can then be evaluated.
+//
+// host.OS speaks booty's short/boot vocabulary (flatcar|coreos|talos — see
+// pkg/tftp's PXE config keys and menu labels), while ostype's registry keys
+// are the canonical taxonomy (flatcar|fedora-coreos|talos|debian). The two
+// diverge only on CoreOS ("coreos" vs "fedora-coreos"); cache.CacheNameToCanonical
+// is the single source of that bridge (pkg/cache already uses it internally
+// to resolve an ostype from a cache-vocabulary name), so we reuse it here
+// rather than duplicating the mapping.
 func osFamily(osName string) (ostype.Family, bool) {
-	o, ok := ostype.Lookup(osName)
+	o, ok := ostype.Lookup(cache.CacheNameToCanonical(osName))
 	if !ok {
 		return ostype.Family{}, false
 	}
