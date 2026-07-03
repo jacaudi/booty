@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -33,7 +34,14 @@ func StartHTTP(deps APIDeps) *http.Server {
 	myHandler.HandleFunc("/unregister", handleUnregistrationRequest)
 	myHandler.HandleFunc("/booty.json", handleDataRequest)
 	myHandler.HandleFunc("/info", handleInfoRequest)
-	myHandler.Handle("/data/", http.StripPrefix("/data/", http.FileServer(http.Dir(viper.GetString(config.DataDir)))))
+	dataFS := http.FileServer(http.Dir(viper.GetString(config.DataDir)))
+	myHandler.Handle("/data/", http.StripPrefix("/data/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPartialPath(r.URL.Path) {
+			http.NotFound(w, r)
+			return
+		}
+		dataFS.ServeHTTP(w, r)
+	})))
 	uiFS, err := web.DistFS()
 	if err != nil {
 		slog.Error("ui embed", "err", err)
@@ -62,6 +70,11 @@ func StartHTTP(deps APIDeps) *http.Server {
 
 	return s
 }
+
+// isPartialPath reports whether a request path targets an in-flight staged
+// download. Such files must never be served (they are incomplete/unverified);
+// the boot path never references them, this guards direct /data/ browsing.
+func isPartialPath(p string) bool { return strings.HasSuffix(p, ".partial") }
 
 func logRequest(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

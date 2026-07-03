@@ -92,6 +92,9 @@ func (r *Reconciler) loop(ctx context.Context) {
 // per-version errgroup capped at r.concurrency). A per-target error is logged
 // and the loop continues (one bad target never blocks others).
 func (r *Reconciler) reconcileAll(ctx context.Context) {
+	if err := SweepPartials(cacheRoot()); err != nil {
+		slog.Warn("cache: sweep partials failed", "err", err)
+	}
 	if err := seedTargets(r.store); err != nil {
 		slog.Warn("cache: seed targets failed", "err", err)
 	}

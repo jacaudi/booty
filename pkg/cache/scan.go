@@ -3,6 +3,7 @@ package cache
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jeefy/booty/pkg/db"
 )
@@ -47,6 +48,9 @@ func Scan(store *db.Store) (ScanResult, error) {
 			var size int64
 			entries, _ := os.ReadDir(dir)
 			for _, e := range entries {
+				if strings.HasSuffix(e.Name(), ".partial") {
+					continue // in-flight download, not a cached artifact
+				}
 				if fi, err := e.Info(); err == nil {
 					size += fi.Size()
 				}
