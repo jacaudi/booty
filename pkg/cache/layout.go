@@ -4,10 +4,8 @@
 package cache
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"os"
 	"path"
@@ -43,33 +41,15 @@ func CacheURLBase(server, osName, schematic, arch, version string) string {
 }
 
 // artifactPath returns the on-disk path an artifact URL resolves to inside dir,
-// using the SAME trailing-path-segment derivation ensureArtifact/DownloadFile
-// use. It is the single source for "where did this URL's bytes land".
+// using the SAME trailing-path-segment derivation config.DownloadStaged uses
+// (path.Base of the URL, query stripped). It is the single source for "where
+// did this URL's bytes land" and is used for size accounting after landing.
 func artifactPath(dir, srcURL string) (string, error) {
 	u, err := url.Parse(srcURL)
 	if err != nil {
 		return "", fmt.Errorf("cache: parse url %q: %w", srcURL, err)
 	}
 	return filepath.Join(dir, path.Base(u.Path)), nil
-}
-
-// ensureArtifact downloads srcURL into dir if not already present (idempotent).
-// The on-disk filename is the URL's trailing path segment (query stripped) —
-// the SAME derivation config.DownloadFile uses — so the existence check and the
-// written file always agree.
-func ensureArtifact(ctx context.Context, dir, srcURL string) error {
-	dst, err := artifactPath(dir, srcURL)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(dst); err == nil {
-		slog.Debug("artifact already cached", "file", dst)
-		return nil
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	return config.DownloadFile(ctx, dir, srcURL)
 }
 
 // removeVersionDir removes a single version-scoped directory and its contents.

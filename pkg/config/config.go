@@ -50,7 +50,7 @@ const (
 	SignaturePolicy        = "signaturePolicy"
 )
 
-// httpClient is the package-level HTTP client used for DownloadFile.
+// httpClient is the package-level HTTP client used for DownloadStaged.
 // The 5-minute Timeout is a hard ceiling covering the entire request
 // lifecycle (connect + headers + body); ctx-driven cancellation
 // composes on top, so whichever fires first wins.
@@ -84,56 +84,6 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(HardwareMap, "hardware.json")
 
 	viper.BindEnv(DatabasePath, "DATABASE_PATH")
-}
-
-// DownloadFile streams the body at rawURL into <destDir>/<filename>, where
-// filename is the trailing path segment of rawURL (query strings stripped).
-// The request honors ctx cancellation and httpClient.Timeout (5 minutes);
-// whichever fires first wins. A >=400 status is rejected before any file is
-// created. Callers are responsible for ensuring destDir exists.
-func DownloadFile(ctx context.Context, destDir, rawURL string) error {
-	slog.Info("downloading", "url", rawURL)
-
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("config: parse url %q: %w", rawURL, err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return fmt.Errorf("config: build request: %w", err)
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("config: get %s: %w", rawURL, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("config: get %s: status %s", rawURL, resp.Status)
-	}
-
-	base := path.Base(u.Path)
-	if base == "." || base == ".." || base == "/" {
-		return fmt.Errorf("config: url %q yields unsafe filename %q", rawURL, base)
-	}
-	filename := filepath.Join(destDir, base)
-	slog.Info("creating file", "file", filename)
-
-	f, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("config: create %s: %w", filename, err)
-	}
-	defer f.Close()
-
-	n, err := io.Copy(f, resp.Body)
-	if err != nil {
-		return fmt.Errorf("config: write %s: %w", filename, err)
-	}
-
-	slog.Info("download complete", "url", rawURL, "bytes", n)
-	return nil
 }
 
 // DownloadStaged streams the body at rawURL into <destDir>/<base>.partial (base

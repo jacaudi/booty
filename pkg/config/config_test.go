@@ -1,10 +1,8 @@
 package config
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,77 +31,6 @@ func TestLoadConfig_ProxyDHCPDefaults(t *testing.T) {
 	}
 	if got := viper.GetString(ProxyDHCPBootfileARM64); got != "ipxe-arm64.efi" {
 		t.Errorf("ProxyDHCPBootfileARM64 = %q, want %q", got, "ipxe-arm64.efi")
-	}
-}
-
-func TestDownloadFile_TimesOut(t *testing.T) {
-	viper.Reset()
-	dir := t.TempDir()
-	viper.Set(DataDir, dir)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(500 * time.Millisecond)
-		_, _ = w.Write([]byte("late"))
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	err := DownloadFile(ctx, dir, srv.URL+"/foo.bin")
-	if err == nil {
-		t.Fatalf("DownloadFile: err = nil, want timeout")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("DownloadFile: err = %v, want wrap of context.DeadlineExceeded", err)
-	}
-}
-
-func TestDownloadFile_StripsQueryStringFromFilename(t *testing.T) {
-	viper.Reset()
-	dir := t.TempDir()
-	viper.Set(DataDir, dir)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("x"))
-	}))
-	defer srv.Close()
-
-	if err := DownloadFile(context.Background(), dir, srv.URL+"/foo.bin?token=secret"); err != nil {
-		t.Fatalf("DownloadFile: %v", err)
-	}
-
-	want := filepath.Join(dir, "foo.bin")
-	if _, err := os.Stat(want); err != nil {
-		t.Errorf("expected file at %s, stat err: %v", want, err)
-	}
-
-	bad := filepath.Join(dir, "foo.bin?token=secret")
-	if _, err := os.Stat(bad); err == nil {
-		t.Errorf("query-tainted filename %s should not exist", bad)
-	}
-}
-
-func TestDownloadFile_SuccessRoundTrip(t *testing.T) {
-	viper.Reset()
-	dir := t.TempDir()
-	viper.Set(DataDir, dir)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("hello"))
-	}))
-	defer srv.Close()
-
-	if err := DownloadFile(context.Background(), dir, srv.URL+"/greeting.txt"); err != nil {
-		t.Fatalf("DownloadFile: %v", err)
-	}
-
-	got, err := os.ReadFile(filepath.Join(dir, "greeting.txt"))
-	if err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	if string(got) != "hello" {
-		t.Errorf("body = %q, want %q", string(got), "hello")
 	}
 }
 
@@ -165,23 +92,6 @@ func TestDownloadStagedRejects404AndLeavesNoPartial(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "missing.img.partial")); !os.IsNotExist(err) {
 		t.Error("a rejected download must leave no .partial behind")
-	}
-}
-
-func TestDownloadFile_RejectsErrorStatus(t *testing.T) {
-	viper.Reset()
-	dir := t.TempDir()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	if err := DownloadFile(context.Background(), dir, srv.URL+"/boom.bin"); err == nil {
-		t.Fatalf("DownloadFile: err = nil, want error for 500 status")
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, "boom.bin")); statErr == nil {
-		t.Errorf("rejected download must not create %s", filepath.Join(dir, "boom.bin"))
 	}
 }
 

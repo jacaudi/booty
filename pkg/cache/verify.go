@@ -10,10 +10,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	pgperrors "github.com/ProtonMail/go-crypto/openpgp/errors"
+	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/ostype"
 )
@@ -68,6 +70,57 @@ func verifyArtifact(ctx context.Context, filePath, streamedSHA256 string, a osty
 		}
 	}
 	return artifactVerdict{class: classPass}
+}
+
+// landArtifact stages one artifact to <dir>/<file>.partial, verifies it per
+// policy + failure class (D15), then renames it into place (land) or deletes it
+// (reject). Returns whether bytes now sit at the final path and the verdict for
+// version-level aggregation + recording. err != nil is a transport/IO failure
+// (nothing landed; retry next tick). Under `off`, verification does not run and
+// the verdict is not-verifiable (verified stays NULL). This is the download-side
+// twin of VerifyVersion: it shares verifyArtifact + aggregateVerdicts, using the
+// hash DownloadStaged computed while streaming (no second read on the hot path).
+func landArtifact(ctx context.Context, dir string, a ostype.Artifact, policy string) (bool, artifactVerdict, error) {
+	// DownloadStaged only os.Creates the .partial; it does not create the
+	// version dir. The retired ensureArtifact used to MkdirAll before every
+	// fetch, so replicate that here (idempotent, safe under concurrent calls).
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, artifactVerdict{}, fmt.Errorf("cache: mkdir %s: %w", dir, err)
+	}
+	partial, streamedSHA, err := config.DownloadStaged(ctx, dir, a.URL)
+	if err != nil {
+		return false, artifactVerdict{}, err
+	}
+	final := strings.TrimSuffix(partial, ".partial")
+
+	land := func(v artifactVerdict) (bool, artifactVerdict, error) {
+		if err := os.Rename(partial, final); err != nil {
+			return false, artifactVerdict{}, fmt.Errorf("cache: land %s: %w", final, err)
+		}
+		return true, v, nil
+	}
+	reject := func(v artifactVerdict) (bool, artifactVerdict, error) {
+		_ = os.Remove(partial)
+		return false, v, nil
+	}
+
+	if policy == "off" {
+		return land(artifactVerdict{class: classNotVerifiable})
+	}
+	v := verifyArtifact(ctx, partial, streamedSHA, a)
+	switch v.class {
+	case classPass, classNotVerifiable:
+		return land(v)
+	case classForgery:
+		return reject(v) // never boots — refused under warn AND strict
+	case classCorruption:
+		if policy == "warn" {
+			return land(v) // availability trade-off warn exists for
+		}
+		return reject(v) // strict
+	default:
+		return reject(v)
+	}
 }
 
 func hashFile(filePath string) (string, error) {

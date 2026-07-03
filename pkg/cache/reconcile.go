@@ -7,8 +7,10 @@ import (
 	"os"
 	"slices"
 
+	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/ostype"
+	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -106,49 +108,66 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 			slog.Warn("cache: artifacts unavailable; skipping version this tick", "os", t.OS, "version", version, "err", aerr)
 			continue
 		}
+		policy := viper.GetString(config.SignaturePolicy)
+		verdicts := make([]artifactVerdict, len(arts))
+		landedFlags := make([]bool, len(arts))
 		vg := new(errgroup.Group)
 		vg.SetLimit(max(concurrency, 1))
-		for _, a := range arts {
+		for i, a := range arts {
 			vg.Go(func() error {
-				if err := ensureArtifact(ctx, dir, a.URL); err != nil {
+				landed, v, err := landArtifact(ctx, dir, a, policy)
+				if err != nil {
 					slog.Warn("cache: artifact fetch failed", "os", t.OS, "version", version, "file", a.Filename, "err", err)
 					return err
 				}
+				verdicts[i], landedFlags[i] = v, landed
 				return nil
 			})
 		}
-		// A fresh group per version scopes errgroup's sticky error to THIS
-		// version: one bad artifact never blocks caching later versions/targets.
-		// cached=1 only when all of this version's artifacts are present.
-		//
-		// ponytail: `cached` is a COARSE boolean, re-derived from scratch every
-		// reconcile — the boot path reads the disk (NewestCached), not this flag,
-		// so it never needs precise per-artifact state. P3's cache_entries table
-		// owns size/verification/per-artifact detail; don't build that here.
-		if vg.Wait() == nil {
-			if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: t.ID, Version: version, Source: source, Cached: true}); err != nil {
-				return fmt.Errorf("cache: mark cached %d/%s: %w", t.ID, version, err)
+		if vg.Wait() != nil {
+			continue // transport error → whole version retried next tick (nothing recorded)
+		}
+
+		tvID, verr := store.TargetVersionID(t.ID, version)
+		if verr != nil {
+			return fmt.Errorf("cache: resolve tv id %d/%s: %w", t.ID, version, verr)
+		}
+		verified, verifyErr := aggregateVerdicts(verdicts)
+
+		if slices.Contains(landedFlags, false) {
+			// Version REJECTED (a failure the policy refuses to land). Version-level
+			// atomicity: wipe the partial-or-landed dir so NewestCached falls back
+			// to the prior cached version (§6), and record a failure-visibility row.
+			if err := removeVersionDir(cacheName, segment, t.Arch, version); err != nil {
+				slog.Warn("cache: remove rejected version dir failed", "os", t.OS, "version", version, "err", err)
 			}
-			// P3a: write the authoritative cache_entries detail (size, in_window=1)
-			// adjacent to the coarse `cached` boolean, on this same coordinator
-			// goroutine. Sum artifact bytes via the same on-disk derivation
-			// ensureArtifact uses (artifactPath), so disk and DB agree.
-			var size int64
-			for _, a := range arts {
-				p, perr := artifactPath(dir, a.URL)
-				if perr != nil {
-					continue
-				}
-				if fi, serr := os.Stat(p); serr == nil {
-					size += fi.Size()
-				}
+			if err := store.UpsertCacheEntryArchived(tvID, verifyErr); err != nil {
+				return fmt.Errorf("cache: record rejected %d/%s: %w", t.ID, version, err)
 			}
-			tvID, verr := store.TargetVersionID(t.ID, version)
-			if verr != nil {
-				return fmt.Errorf("cache: resolve tv id %d/%s: %w", t.ID, version, verr)
+			slog.Error("cache: version rejected by verification", "os", t.OS, "version", version, "policy", policy, "err", verifyErr)
+			continue
+		}
+
+		// All artifacts landed → mark cached, record size + verdict.
+		if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: t.ID, Version: version, Source: source, Cached: true}); err != nil {
+			return fmt.Errorf("cache: mark cached %d/%s: %w", t.ID, version, err)
+		}
+		var size int64
+		for _, a := range arts {
+			p, perr := artifactPath(dir, a.URL)
+			if perr != nil {
+				continue
 			}
-			if err := store.UpsertCacheEntry(tvID, size); err != nil {
-				return fmt.Errorf("cache: upsert cache_entry %d/%s: %w", t.ID, version, err)
+			if fi, serr := os.Stat(p); serr == nil {
+				size += fi.Size()
+			}
+		}
+		if err := store.UpsertCacheEntry(tvID, size); err != nil {
+			return fmt.Errorf("cache: upsert cache_entry %d/%s: %w", t.ID, version, err)
+		}
+		if verified != nil { // NULL (off / not-verifiable) leaves the P3a column untouched
+			if err := store.SetCacheVerified(tvID, verified, verifyErr); err != nil {
+				return fmt.Errorf("cache: record verdict %d/%s: %w", t.ID, version, err)
 			}
 		}
 	}
