@@ -54,6 +54,8 @@ var args struct {
 	talosConfigFile   string
 	talosFactoryURL   string
 
+	preseedFile string
+
 	signaturePolicy string
 }
 
@@ -211,6 +213,13 @@ func init() {
 		"talosFactoryURL",
 		"https://factory.talos.dev",
 		"Talos Image Factory base URL (private-factory override)",
+	)
+
+	flags.StringVar(
+		&args.preseedFile,
+		"preseedFile",
+		"config/preseed.cfg",
+		"Debian preseed template served at /preseed (relative to dataDir)",
 	)
 
 	Cmd.AddCommand(newVersionCmd())

@@ -25,8 +25,9 @@ func StartHTTP(deps APIDeps) *http.Server {
 
 	// All URLs will be handled by this function
 	myHandler.HandleFunc("/", handleRequest)
-	myHandler.HandleFunc("/ignition.json", handleIgnitionRequest)
-	myHandler.HandleFunc("/machineconfig", handleMachineConfigRequest)
+	myHandler.HandleFunc("/ignition.json", handleIgnitionRequest(deps.Store))
+	myHandler.HandleFunc("/machineconfig", handleMachineConfigRequest(deps.Store))
+	myHandler.HandleFunc("/preseed", handlePreseedRequest(deps.Store))
 	myHandler.HandleFunc("/version.txt", handleVersionRequest)
 	myHandler.HandleFunc("/version.json", handleVersionRequest)
 	myHandler.HandleFunc("/hosts", handleHostsRequest)

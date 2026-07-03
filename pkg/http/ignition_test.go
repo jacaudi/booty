@@ -11,9 +11,22 @@ import (
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/spf13/viper"
 )
+
+// ignitionTestStore opens a bare empty store so resolveConfig returns
+// ok=false and the handler takes the existing file path (rungs 3–4) verbatim.
+func ignitionTestStore(t *testing.T) *db.Store {
+	t.Helper()
+	store, err := db.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
 
 // TestHandleIgnitionRequest_EmptyMACServesRebootConfigQuietly verifies that an
 // unidentified-host boot (no ?mac= and ARP yields nothing) is treated as the
@@ -42,7 +55,8 @@ func TestHandleIgnitionRequest_EmptyMACServesRebootConfigQuietly(t *testing.T) {
 	req.RemoteAddr = "192.0.2.1:12345" // TEST-NET-1; ARP will not resolve
 	rec := httptest.NewRecorder()
 
-	handleIgnitionRequest(rec, req)
+	store := ignitionTestStore(t)
+	handleIgnitionRequest(store)(rec, req)
 
 	if strings.Contains(logBuf.String(), "error looking up host") {
 		t.Errorf("unidentified-host boot logged a host-lookup error; want it quiet.\nlogs:\n%s", logBuf.String())
@@ -79,7 +93,8 @@ func TestHandleIgnitionRequest_BadTemplateReturns500(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/ignition.json?mac=aa:bb:cc:dd:ee:ff", nil)
 	rec := httptest.NewRecorder()
-	handleIgnitionRequest(rec, req)
+	store := ignitionTestStore(t)
+	handleIgnitionRequest(store)(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 for a genuine ignition failure", rec.Code)
