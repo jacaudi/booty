@@ -26,15 +26,20 @@ type Host struct {
 	AssignedParams string
 	UUID           string
 	Serial         string
+	ConfigID       *int64 // hosts.config_id (P4 per-host config override); nil = unbound
 }
 
 const hostCols = `mac, hostname, ip, booted, ignition_file, os, do_install, schematic, ` +
-	`approved, boot_mode, assigned_os, assigned_arch, assigned_params, uuid, serial`
+	`approved, boot_mode, assigned_os, assigned_arch, assigned_params, uuid, serial, config_id`
 
 func scanHost(scan func(...any) error) (Host, error) {
 	var h Host
+	var configID sql.NullInt64
 	err := scan(&h.MAC, &h.Hostname, &h.IP, &h.Booted, &h.IgnitionFile, &h.OS, &h.DoInstall, &h.Schematic,
-		&h.Approved, &h.BootMode, &h.AssignedOS, &h.AssignedArch, &h.AssignedParams, &h.UUID, &h.Serial)
+		&h.Approved, &h.BootMode, &h.AssignedOS, &h.AssignedArch, &h.AssignedParams, &h.UUID, &h.Serial, &configID)
+	if configID.Valid {
+		h.ConfigID = &configID.Int64
+	}
 	return h, err
 }
 
