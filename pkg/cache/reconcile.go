@@ -97,9 +97,14 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 			return fmt.Errorf("cache: upsert %d/%s: %w", t.ID, version, err)
 		}
 		dir := cacheDir(cacheName, segment, t.Arch, version)
+		arts, aerr := o.Artifacts(ctx, version, t.Arch, params)
+		if aerr != nil {
+			slog.Warn("cache: artifacts unavailable; skipping version this tick", "os", t.OS, "version", version, "err", aerr)
+			continue
+		}
 		vg := new(errgroup.Group)
 		vg.SetLimit(max(concurrency, 1))
-		for _, a := range o.Artifacts(version, t.Arch, params) {
+		for _, a := range arts {
 			vg.Go(func() error {
 				if err := ensureArtifact(ctx, dir, a.URL); err != nil {
 					slog.Warn("cache: artifact fetch failed", "os", t.OS, "version", version, "file", a.Filename, "err", err)
@@ -125,7 +130,7 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 			// goroutine. Sum artifact bytes via the same on-disk derivation
 			// ensureArtifact uses (artifactPath), so disk and DB agree.
 			var size int64
-			for _, a := range o.Artifacts(version, t.Arch, params) {
+			for _, a := range arts {
 				p, perr := artifactPath(dir, a.URL)
 				if perr != nil {
 					continue

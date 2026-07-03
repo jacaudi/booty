@@ -10,6 +10,50 @@ import (
 	"github.com/spf13/viper"
 )
 
+func TestFlatcar_Artifacts_CarriesSigAndKey(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
+	viper.Set(config.FlatcarChannel, "stable")
+	viper.Set(config.FlatcarArchitecture, "amd64")
+
+	o, _ := Lookup("flatcar")
+	arts, err := o.Artifacts(t.Context(), "4230.2.2", "amd64", map[string]string{"channel": "stable"})
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	if len(arts) != 2 {
+		t.Fatalf("flatcar artifacts = %d, want 2", len(arts))
+	}
+	for _, a := range arts {
+		if a.SigURL != a.URL+".sig" {
+			t.Errorf("SigURL = %q, want %q", a.SigURL, a.URL+".sig")
+		}
+		if len(a.GPGKey) == 0 {
+			t.Errorf("flatcar artifact %s must carry the embedded GPG keyring", a.Filename)
+		}
+		if a.SHA256 != "" {
+			t.Errorf("flatcar uses GPG only, not SHA256; got %q", a.SHA256)
+		}
+	}
+}
+
+func TestTalos_Artifacts_NoVerificationFields(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.TalosFactoryURL, "https://factory.talos.dev")
+	o, _ := Lookup("talos")
+	arts, err := o.Artifacts(t.Context(), "v1.10.5", "amd64", map[string]string{"schematic": "abc"})
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	for _, a := range arts {
+		if a.SHA256 != "" || a.SigURL != "" || a.GPGKey != nil {
+			t.Errorf("talos must be pass-through (no verify fields): %+v", a)
+		}
+	}
+}
+
 func TestFlatcar_CompareVersions(t *testing.T) {
 	o, _ := Lookup("flatcar")
 	if o.CompareVersions("3815.2.0", "3602.2.3") <= 0 {
@@ -32,7 +76,10 @@ func TestFlatcar_ValidateVersion(t *testing.T) {
 
 func TestFlatcar_Artifacts(t *testing.T) {
 	o, _ := Lookup("flatcar")
-	got := o.Artifacts("3815.2.0", "amd64", nil)
+	got, err := o.Artifacts(t.Context(), "3815.2.0", "amd64", nil)
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
 	wantFiles := map[string]bool{
 		"flatcar_production_pxe.vmlinuz":       false,
 		"flatcar_production_pxe_image.cpio.gz": false,
@@ -118,14 +165,22 @@ func TestFlatcar_Artifacts_ChannelInURL(t *testing.T) {
 	viper.Set(config.FlatcarArchitecture, "amd64")
 
 	o, _ := Lookup("flatcar")
-	for _, a := range o.Artifacts("4230.2.2", "amd64", map[string]string{"channel": "beta"}) {
+	gotBeta, err := o.Artifacts(t.Context(), "4230.2.2", "amd64", map[string]string{"channel": "beta"})
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	for _, a := range gotBeta {
 		if !strings.Contains(a.URL, "https://beta.release.flatcar-linux.net/") {
 			t.Errorf("artifact URL %q must use the params channel (beta)", a.URL)
 		}
 	}
 	// Empty channel: defensive fallback to the flag (a pre-migration row must
 	// not build a %!s(MISSING) URL).
-	for _, a := range o.Artifacts("4230.2.2", "amd64", nil) {
+	gotNil, err := o.Artifacts(t.Context(), "4230.2.2", "amd64", nil)
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	for _, a := range gotNil {
 		if !strings.Contains(a.URL, "https://stable.release.flatcar-linux.net/") {
 			t.Errorf("nil-params artifact URL %q must fall back to the flag channel", a.URL)
 		}
@@ -215,7 +270,10 @@ func TestFedoraCoreOS_DiscoverVersions_PerChannelParams(t *testing.T) {
 
 func TestFedoraCoreOS_Artifacts(t *testing.T) {
 	o, _ := Lookup("fedora-coreos")
-	got := o.Artifacts("39.20231101.3.0", "x86_64", nil)
+	got, err := o.Artifacts(t.Context(), "39.20231101.3.0", "x86_64", nil)
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
 	if len(got) != 3 {
 		t.Fatalf("fcos artifacts = %d, want 3 (kernel, initramfs, rootfs)", len(got))
 	}
@@ -233,7 +291,10 @@ func TestFedoraCoreOS_Artifacts_DotKernelAndChannel(t *testing.T) {
 	viper.Set(config.CoreOSChannel, "stable")
 
 	o, _ := Lookup("fedora-coreos")
-	got := o.Artifacts("44.20260607.3.1", "x86_64", map[string]string{"channel": "testing"})
+	got, err := o.Artifacts(t.Context(), "44.20260607.3.1", "x86_64", map[string]string{"channel": "testing"})
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
 	if len(got) != 3 {
 		t.Fatalf("fcos artifacts = %d, want 3", len(got))
 	}

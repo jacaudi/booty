@@ -35,7 +35,10 @@ func TestTalos_Artifacts(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set(config.TalosFactoryURL, "https://factory.example")
 	o, _ := Lookup("talos")
-	got := o.Artifacts("v1.10.5", "amd64", map[string]string{"schematic": "abc"})
+	got, err := o.Artifacts(t.Context(), "v1.10.5", "amd64", map[string]string{"schematic": "abc"})
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
 	if len(got) != 2 {
 		t.Fatalf("talos artifacts = %d, want 2", len(got))
 	}

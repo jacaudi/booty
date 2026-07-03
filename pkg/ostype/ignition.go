@@ -69,14 +69,15 @@ func (flatcar) DiscoverVersions(ctx context.Context, params map[string]string) (
 // serves. Harmless in practice because ensureArtifact only downloads when
 // the on-disk file is absent — already-cached older versions are never
 // overwritten. P3b replaces this hand-built derivation with streams JSON.
-func (flatcar) Artifacts(version, arch string, params map[string]string) []Artifact {
+func (flatcar) Artifacts(ctx context.Context, version, arch string, params map[string]string) ([]Artifact, error) {
 	base := flatcarBaseURL(params["channel"])
 	files := []string{"flatcar_production_pxe.vmlinuz", "flatcar_production_pxe_image.cpio.gz"}
 	out := make([]Artifact, 0, len(files))
 	for _, f := range files {
-		out = append(out, Artifact{Filename: f, URL: base + "/" + f})
+		u := base + "/" + f
+		out = append(out, Artifact{Filename: f, URL: u, SigURL: u + ".sig", GPGKey: flatcarKeyring})
 	}
-	return out
+	return out, nil
 }
 
 // ---- fedora-coreos ----
@@ -121,7 +122,7 @@ func (fedoraCoreOS) DiscoverVersions(ctx context.Context, params map[string]stri
 	return []string{rel}, nil
 }
 
-func (fedoraCoreOS) Artifacts(version, arch string, params map[string]string) []Artifact {
+func (fedoraCoreOS) Artifacts(ctx context.Context, version, arch string, params map[string]string) ([]Artifact, error) {
 	base := coreosBuildBaseURL(params["channel"], version, arch)
 	files := []string{
 		// Dot-form kernel: FCOS renamed live-kernel-<arch> → live-kernel.<arch>
@@ -136,7 +137,7 @@ func (fedoraCoreOS) Artifacts(version, arch string, params map[string]string) []
 	for _, f := range files {
 		out = append(out, Artifact{Filename: f, URL: base + "/" + f})
 	}
-	return out
+	return out, nil
 }
 
 // compareDottedNumeric compares two dotted-numeric strings field by field.

@@ -45,7 +45,7 @@ var debianCodenames = map[string]string{
 	"oldstable": "bullseye",
 }
 
-func (debian) Artifacts(version, arch string, params map[string]string) []Artifact {
+func (debian) Artifacts(ctx context.Context, version, arch string, params map[string]string) ([]Artifact, error) {
 	codename := debianCodenames[params["channel"]]
 	if codename == "" {
 		codename = debianCodenames["stable"]
@@ -56,5 +56,5 @@ func (debian) Artifacts(version, arch string, params map[string]string) []Artifa
 	return []Artifact{
 		{Filename: "linux", URL: base + "/linux"},
 		{Filename: "initrd.gz", URL: base + "/initrd.gz"},
-	}
+	}, nil
 }

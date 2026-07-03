@@ -41,13 +41,13 @@ func (talos) DiscoverVersions(ctx context.Context, _ map[string]string) ([]strin
 	return tags, nil
 }
 
-func (talos) Artifacts(version, arch string, params map[string]string) []Artifact {
+func (talos) Artifacts(ctx context.Context, version, arch string, params map[string]string) ([]Artifact, error) {
 	schematic := params["schematic"]
 	base := talosFactoryURL() + "/image/" + schematic + "/" + version + "/"
 	return []Artifact{
 		{Filename: "kernel-" + arch, URL: base + "kernel-" + arch},
 		{Filename: "initramfs-" + arch + ".xz", URL: base + "initramfs-" + arch + ".xz"},
-	}
+	}, nil
 }
 
 func talosFactoryURL() string { return viper.GetString(config.TalosFactoryURL) }
