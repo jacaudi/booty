@@ -30,6 +30,8 @@ values used when neither a flag nor an env var is set.
 | `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | Pass-1 BIOS iPXE binary name (staged in `--dataDir`). |
 | `--proxyDHCPBootfileUEFI` | `ipxe.efi` | Pass-1 UEFI (x86-64) iPXE binary name. |
 | `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | Pass-1 ARM64 iPXE binary name. |
+| `--preseedFile` | `config/preseed.cfg` | Debian preseed template, relative to `--dataDir` — the rung-4 server-default fallback for hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
+| `--configRevisionsKeep` | `10` | Number of newest config revisions to retain per config, applied after every `PUT /configs/{id}`. The currently-active revision is always kept, even if it falls outside the newest-N window. |
 
 > **First-boot defaults (#48).** `--flatcarChannel`, `--coreOSChannel`, `--talosSchematic`, and
 > `--talosRetainMinors` seed the **predefined** cache targets (Flatcar, Fedora CoreOS, Talos) only
@@ -63,6 +65,34 @@ three upstream releases to reach three cached versions, not one. It does **not b
 versions upstream no longer advertises; there is no way to retroactively populate history that was
 never seen while the reconciler was running. Versions that age out of the window are archived, not
 deleted (see [schema/STORAGE.md](schema/STORAGE.md)).
+
+## Boot config precedence (P4)
+
+Each boot-facing handler (`/ignition.json`, `/machineconfig`, `/preseed`) resolves a host's config
+in a fixed 4-rung precedence, falling through to the next rung on any miss:
+
+1. **Host `config_id`** — an explicit per-host binding (`POST /hosts/{mac}/approve` or `/bind`, see
+   [schema/API.md](schema/API.md)). A bound config whose `kind` mismatches the host's OS family (or
+   whose family can't be resolved) is treated as an operator error and does **not** fall through to
+   a role default — it skips straight to rung 3/4.
+2. **Role default by name** — the host's roles (`host_roles`), tried alphabetically; the first role
+   with a non-null `default_config_id` whose kind matches the family wins.
+3. **Legacy `hosts.ignition_file`** — a per-host Ignition template override (ignition family only;
+   predates P4). Debian and Talos have no per-host file column, so this rung does not apply to them.
+4. **Server-default file** — `--ignitionFile` (env `IGNITION_FILE`, default `config/ignition.yaml`)
+   for the ignition family (Flatcar/CoreOS), `--talosConfigFile` (default
+   `config/machineconfig.yaml`) for Talos, `--preseedFile` (default `config/preseed.cfg`) for
+   Debian.
+
+Rungs 1–2 are DB-resolved (`pkg/http/resolve.go`); rungs 3–4 are the pre-P4 file-based path,
+unchanged. A host with no DB binding and no legacy override boots byte-identically to before P4 —
+see [schema/STORAGE.md](schema/STORAGE.md).
+
+A config's `kind` (`butane` \| `machineconfig` \| `preseed` — the dialect an operator authors) must
+match the host's OS family via `configKindForFamily`; only the ignition family differs (`ignition`
+family → `butane` kind, since Ignition is Butane's compiled wire format). See
+[schema/DATABASE.md](schema/DATABASE.md#configs) for the enum and its relationship to family
+`ConfigKind`.
 
 ## Signature verification (`--signaturePolicy`)
 

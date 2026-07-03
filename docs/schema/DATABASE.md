@@ -58,7 +58,9 @@ Talos); see [STORAGE.md](STORAGE.md).
 ## SQLite schema (`booty.db`)
 
 Migrations are embedded (`pkg/db/migrations/`) and applied up-only under
-`PRAGMA user_version`. P1a introduces four tables; P3a adds a fifth (`cache_entries`).
+`PRAGMA user_version`. P1a introduces four tables; P3a adds a fifth (`cache_entries`); P4 adds four
+more (`configs`, `config_revisions`, `roles`, `host_roles`) plus a `hosts.config_id` column, all in
+one additive migration — re-running it is a no-op.
 
 ### `targets`
 `id`, `os`, `arch`, `params` (JSON TEXT), `mode` (`discovery`|`manual`),
@@ -129,6 +131,7 @@ P1c; remaining columns keep their defaults):
 | `assigned_os`/`assigned_arch`/`assigned_params` | TEXT | **Active (P1c).** Target (OS, arch, params) the host boots when `boot_mode='assigned'`. |
 | `uuid`/`serial` | TEXT | Scanned on every host read; not yet populated by booty (hardware identity, reserved for a future slice). |
 | `first_seen`/`last_seen` | TEXT | Reserved: timestamps (not yet surfaced). |
+| `config_id` | INTEGER (nullable) | **P4.** Explicit per-host config binding — precedence rung 1 (see [CONFIGURATION.md](../CONFIGURATION.md)). `NULL` = no explicit binding. Plain nullable column, not a DB-level foreign key (SQLite's `ALTER TABLE ADD COLUMN` can't portably carry one); referential cleanup lands with P10 — `DELETE /configs` is `403` until then, so no dangling `config_id` can be created. Set via `POST /hosts/{mac}/approve` or `/bind`. |
 
 > **As of P1c:** `approved`, `boot_mode`, `assigned_os`, `assigned_arch`, and `assigned_params`
 > are the columns booty now actively reads and writes. Migration `0001` (P1a) created all of these;
@@ -144,6 +147,77 @@ P1c; remaining columns keep their defaults):
 > be approved via `POST /api/v1/hosts/{mac}/approve` before they will boot again. Once the
 > backfill runs, `host_boot_preserved` is set to `"1"` in the `meta` table and the backfill is
 > skipped on all subsequent restarts.
+
+### `configs`
+
+Boot-config identities (P4). The live source lives in the revision pointed at by
+`active_revision_id`; the row itself never carries source bytes.
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `id` | INTEGER PK AUTOINCREMENT | Stable row ID used by the API (`/configs/{id}`). |
+| `name` | TEXT NOT NULL UNIQUE | Operator-chosen config name. |
+| `kind` | TEXT NOT NULL CHECK (`butane`\|`machineconfig`\|`preseed`) | The config source dialect the operator authors. See "`kind` vs family `ConfigKind`" below. |
+| `active_revision_id` | INTEGER → `config_revisions(id)` | The currently-live revision. `NULL` until the first revision is added. |
+| `created_at`/`updated_at` | TEXT | Timestamps; `updated_at` bumps on every active-pointer move (create, edit, or rollback). |
+
+### `config_revisions`
+
+Immutable, append-only full copies of a config's source (P4). `PUT /configs/{id}` never mutates a
+row — it inserts a new one (`revision` = max+1 for the config) and repoints
+`configs.active_revision_id`.
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `id` | INTEGER PK AUTOINCREMENT | Row ID; referenced by `configs.active_revision_id`. |
+| `config_id` | INTEGER NOT NULL → `configs(id)` **ON DELETE CASCADE** | Owning config. |
+| `revision` | INTEGER NOT NULL | Per-config sequence number (1, 2, 3, …); `UNIQUE(config_id, revision)`. |
+| `source_b64` | TEXT NOT NULL | Base64-encoded config source (opaque to the DB; decoded and rendered by the HTTP layer). |
+| `source_sha256` | TEXT NOT NULL | Hex SHA-256 of the raw source, computed at write time. |
+| `created_at` | TEXT | Revision creation timestamp. |
+
+**Rollback** (`POST /configs/{id}/rollback`) repoints `active_revision_id` at an existing older
+revision — a pointer move, not a copy; no new revision is created. **Prune** (applied after every
+`PUT`, bounded by `--configRevisionsKeep`) deletes revisions outside the newest-N **union** the
+currently-active revision: the active row is never deleted even when it falls outside the newest-N
+window (e.g. after a rollback to an old revision followed by edits to a *different* config leaves
+this one's old active revision untouched). See [CONFIGURATION.md](../CONFIGURATION.md).
+
+### `roles`
+
+Fleet-wide groupings that carry an optional default config (P4).
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `id` | INTEGER PK AUTOINCREMENT | Stable row ID used by the API (`/roles/{id}`). |
+| `name` | TEXT NOT NULL UNIQUE | Operator-chosen role name; also the tie-break order for precedence rung 2 — a host's roles are tried alphabetically, first match with a non-null default wins. |
+| `default_config_id` | INTEGER → `configs(id)` **ON DELETE SET NULL** | Config served to hosts with this role when they have no explicit `hosts.config_id`. `NULL` = no default. |
+| `created_at`/`updated_at` | TEXT | Timestamps. |
+
+### `host_roles`
+
+Many-to-many join between hosts and roles (P4).
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `host_mac` | TEXT → `hosts(mac)` **ON DELETE CASCADE** | Part of the composite PK. |
+| `role_id` | INTEGER → `roles(id)` **ON DELETE CASCADE** | Part of the composite PK. |
+
+`PRIMARY KEY (host_mac, role_id)`. Written wholesale by `SetHostRoles` (delete-then-insert,
+transactional) — a host's role set is always replaced atomically, never partially updated.
+
+**`kind` vs family `ConfigKind` (§3.1).** `configs.kind` is the dialect an operator *authors*
+(`butane`, `machineconfig`, `preseed`); each OS family separately declares a `ConfigKind` — the
+boot-config-URL *mechanism* served at `/ignition.json`, `/machineconfig`, `/preseed`
+(`ignition`, `machineconfig`, `preseed`). `configKindForFamily` (`pkg/http/render.go`) is the single
+source of the relationship, and only the ignition family differs: the `ignition` family's
+`ConfigKind` maps to the `butane` config kind (Ignition is Butane's compiled wire format — operators
+author Butane YAML; booty translates it to Ignition JSON at render time), while `machineconfig` and
+`preseed` map to themselves. A config bound to a host — explicitly or via a role default — must
+satisfy `config.kind == configKindForFamily(hostFamily.ConfigKind)`, enforced both at bind time
+(`POST /hosts/{mac}/approve` / `/bind`, `422` on mismatch) and again at resolve time
+(`pkg/http/resolve.go`, which falls through to the file path on mismatch rather than erroring the
+boot).
 
 Pragmas on every connection: `journal_mode=WAL`, `foreign_keys=ON`,
 `busy_timeout=5000`.
