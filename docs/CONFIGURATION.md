@@ -15,7 +15,7 @@ values used when neither a flag nor an env var is set.
 | `--signaturePolicy` | `warn` | Artifact verification policy: `strict` \| `warn` \| `off` (see [below](#signature-verification---signaturepolicy)). An unknown value fails startup. |
 | `--dataDir` | `/data` | Directory for all stateful data (cache, templates, host DB). |
 | `--serverIP` | `127.0.0.1` | LAN-reachable IP that clients use to reach booty. **Set this.** |
-| `--serverHttpPort` | `80` | HTTP port advertised to clients (when it differs from `--httpPort`). |
+| `--serverHttpPort` | `0` (falls back to `--httpPort`) | Client-facing HTTP port advertised in boot-config URLs. Unset (`0`) advertises whatever `--httpPort` listens on — the correct default for a single-process, no-proxy deploy. Set explicitly only when a proxy/LB fronts booty and the client-facing port differs from the listen port (e.g. `--serverHttpPort=80` with `--httpPort=8080`). |
 | `--joinString` | `""` | Optional `kubeadm join` string injected into rendered Ignition. |
 | `--flatcarArchitecture` | `amd64` | Architecture for Flatcar downloads. |
 | `--flatcarChannel` | `stable` | Flatcar release channel — **first-boot default only** (see below). |

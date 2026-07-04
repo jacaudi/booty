@@ -55,3 +55,27 @@ func restoreViper(t *testing.T, key string) {
 	prev := viper.Get(key)
 	t.Cleanup(func() { viper.Set(key, prev) })
 }
+
+// TestResolveServerHTTPPort proves the fallback rule: an unset (zero)
+// serverHTTPPort advertises the listen port (httpPort), while a non-zero
+// explicit value always wins (proxy-fronted deploys set it explicitly).
+func TestResolveServerHTTPPort(t *testing.T) {
+	cases := []struct {
+		name           string
+		serverHTTPPort int
+		httpPort       int
+		want           int
+	}{
+		{name: "unset falls back to listen port", serverHTTPPort: 0, httpPort: 8080, want: 8080},
+		{name: "explicit proxy port wins", serverHTTPPort: 80, httpPort: 8080, want: 80},
+		{name: "explicit non-standard port wins", serverHTTPPort: 9090, httpPort: 8080, want: 9090},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveServerHTTPPort(tc.serverHTTPPort, tc.httpPort); got != tc.want {
+				t.Errorf("resolveServerHTTPPort(%d, %d) = %d, want %d", tc.serverHTTPPort, tc.httpPort, got, tc.want)
+			}
+		})
+	}
+}
