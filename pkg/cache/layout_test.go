@@ -27,12 +27,12 @@ func TestNameBridge_FedoraCoreOS(t *testing.T) {
 	if got := canonicalToCacheName("fedora-coreos"); got != "coreos" {
 		t.Errorf("canonicalToCacheName(fedora-coreos) = %q, want coreos", got)
 	}
-	if got := cacheNameToCanonical("coreos"); got != "fedora-coreos" {
-		t.Errorf("cacheNameToCanonical(coreos) = %q, want fedora-coreos", got)
+	if got := CacheNameToCanonical("coreos"); got != "fedora-coreos" {
+		t.Errorf("CacheNameToCanonical(coreos) = %q, want fedora-coreos", got)
 	}
 	// flatcar and talos are identity in both directions.
 	for _, n := range []string{"flatcar", "talos"} {
-		if canonicalToCacheName(n) != n || cacheNameToCanonical(n) != n {
+		if canonicalToCacheName(n) != n || CacheNameToCanonical(n) != n {
 			t.Errorf("bridge should be identity for %q", n)
 		}
 	}

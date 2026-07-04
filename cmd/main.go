@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -53,6 +54,10 @@ var args struct {
 	talosRetainMinors int
 	talosConfigFile   string
 	talosFactoryURL   string
+
+	preseedFile string
+
+	configRevisionsKeep int
 
 	signaturePolicy string
 }
@@ -146,8 +151,8 @@ func init() {
 	flags.IntVar(
 		&args.serverHttpPort,
 		"serverHttpPort",
-		80,
-		"Alternative HTTP port to use for clients",
+		0,
+		"Client-facing HTTP port advertised in boot-config URLs; defaults to --httpPort when unset",
 	)
 
 	flags.StringVar(
@@ -213,6 +218,20 @@ func init() {
 		"Talos Image Factory base URL (private-factory override)",
 	)
 
+	flags.StringVar(
+		&args.preseedFile,
+		"preseedFile",
+		"config/preseed.cfg",
+		"Debian preseed template served at /preseed (relative to dataDir)",
+	)
+
+	flags.IntVar(
+		&args.configRevisionsKeep,
+		"configRevisionsKeep",
+		10,
+		"Number of newest config revisions to retain per config (the active revision is always kept)",
+	)
+
 	Cmd.AddCommand(newVersionCmd())
 
 	viper.BindPFlags(flags)
@@ -236,6 +255,16 @@ func main() {
 	os.Exit(0)
 }
 
+// resolveServerHTTPPort returns the client-facing port to advertise in
+// boot-config URLs. serverHTTPPort=0 means "unset": advertise the listen
+// port (httpPort) so a single-process, no-proxy deploy advertises the same
+// port it listens on. A non-zero serverHTTPPort is an explicit operator
+// choice (proxy/LB-fronted deploys where the client-facing port differs from
+// the listen port) and always wins.
+func resolveServerHTTPPort(serverHTTPPort, httpPort int) int {
+	return cmp.Or(serverHTTPPort, httpPort)
+}
+
 func run(cmd *cobra.Command, argv []string) error {
 	setupLogging(viper.GetBool(config.Debug))
 	slog.Info("Starting Booty!")
@@ -244,6 +273,13 @@ func run(cmd *cobra.Command, argv []string) error {
 	if err := config.ValidateSignaturePolicy(); err != nil {
 		return err
 	}
+
+	// Resolve the client-facing port before anything reads ServerHttpPort
+	// (TFTP boot-config URLs, HTTP ignition/machineconfig/preseed templates).
+	// viper.Set takes precedence over the bound flag default, so every
+	// downstream viper.Get*(config.ServerHttpPort) read sees the resolved
+	// value unchanged.
+	viper.Set(config.ServerHttpPort, resolveServerHTTPPort(viper.GetInt(config.ServerHttpPort), viper.GetInt(config.HttpPort)))
 
 	// Open the authoritative SQLite store (fail-fast: pragmas + migrations run
 	// here) and share it with the host store before Load runs its one-time

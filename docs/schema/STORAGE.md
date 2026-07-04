@@ -13,7 +13,8 @@ keep cache and registration across restarts.
 ├── <channel>.json                # CoreOS: streams metadata (e.g. stable.json)
 ├── config/
 │   ├── ignition.yaml             # Butane template for Flatcar/CoreOS (IGNITION_FILE)
-│   └── machineconfig.yaml        # Talos machine-config template (--talosConfigFile)
+│   ├── machineconfig.yaml        # Talos machine-config template (--talosConfigFile)
+│   └── preseed.cfg               # Debian preseed template (--preseedFile)
 ├── undionly.kpxe                 # proxyDHCP pass-1 BIOS iPXE binary (if proxyDHCP enabled)
 ├── ipxe.efi                      # proxyDHCP pass-1 UEFI iPXE binary
 ├── ipxe-arm64.efi               # proxyDHCP pass-1 ARM64 iPXE binary
@@ -28,6 +29,24 @@ keep cache and registration across restarts.
 > `hardware.json` is imported and renamed `hardware.json.migrated` (kept as a
 > recovery artifact); the import runs exactly once. The database path defaults to
 > `<dataDir>/booty.db` and is overridable with `DATABASE_PATH`.
+
+## Boot config storage (P4)
+
+Boot-config **source is DB-authoritative** as of P4: `POST`/`PUT /configs` writes are stored as
+immutable revisions in `config_revisions.source_b64` (see [DATABASE.md](DATABASE.md)), not as
+files under `--dataDir`. The `config/` templates on disk (`ignition.yaml`, `machineconfig.yaml`,
+`preseed.cfg`) remain the **terminal fallback** — precedence rung 4, see
+[CONFIGURATION.md](../CONFIGURATION.md) — served only when a host has no DB-resolved config (no
+explicit `config_id`, and no role default whose kind matches the host's OS family).
+
+- **No file→row migration.** P4 ships with an empty `configs` table; nothing on disk is read into
+  the DB automatically. Operators create configs explicitly via the API — a host with no explicit
+  binding and no matching role default just keeps using the file fallback indefinitely.
+- **Unbound hosts are byte-unchanged.** A host with no `config_id` and no matching role default
+  renders from the same on-disk template, through the same file-read + `text/template` path, as
+  before P4. The DB-resolve attempt (precedence rungs 1–2) is tried first and short-circuits only
+  on a hit; any miss or family/kind mismatch falls straight into the pre-P4 file-serving code,
+  verbatim.
 
 ## Artifact cache layout
 

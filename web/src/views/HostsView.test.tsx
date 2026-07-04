@@ -4,8 +4,12 @@ import userEvent from '@testing-library/user-event'
 import type { Host } from '../api/types'
 import HostsView from './HostsView'
 import * as client from '../api/client'
+import * as configsApi from '../api/configs'
+import * as rolesApi from '../api/roles'
 
 vi.mock('../api/client')
+vi.mock('../api/configs')
+vi.mock('../api/roles')
 
 const host = (over: Partial<Host>): Host => ({
   mac: 'aa',
@@ -29,13 +33,16 @@ describe('HostsView', () => {
     expect(screen.getByText('talos')).toBeInTheDocument()
   })
 
-  it('approve calls approveHost then reloads', async () => {
-    vi.mocked(client.listHosts).mockResolvedValue([host({ mac: 'p1', approved: false })])
-    vi.mocked(client.approveHost).mockResolvedValue(undefined)
+  it('Allow submits the extended approve', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([{ mac: 'aa:bb', hostname: '', ip: '', os: 'flatcar', booted: '', approved: false } as Host])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(client.approveHostWith).mockResolvedValue(undefined)
     render(<HostsView />)
-    await waitFor(() => screen.getByText('p1'))
-    await userEvent.click(screen.getByRole('button', { name: 'Approve' }))
-    expect(client.approveHost).toHaveBeenCalledWith('p1')
+    await waitFor(() => screen.getByText('aa:bb'))
+    await userEvent.click(screen.getByRole('button', { name: /allow/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /^ok$|allow/i }))
+    expect(client.approveHostWith).toHaveBeenCalledWith('aa:bb', expect.any(Object))
     await waitFor(() => expect(client.listHosts).toHaveBeenCalledTimes(2))
   })
 

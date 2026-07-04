@@ -82,3 +82,230 @@ func TestMenuHostUnknownMAC404(t *testing.T) {
 		t.Fatalf("want 'host not found' in 404 body, got: %s", resp.Body.String())
 	}
 }
+
+// hostsTestDeps mirrors hostsTestSetup (reusing its store/hardware wiring) and
+// additionally seeds a single approved-candidate flatcar host used by the P4
+// bind/approve-with-body tests below.
+func hostsTestDeps(t *testing.T) APIDeps {
+	t.Helper()
+	deps := hostsTestSetup(t)
+	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:40", hardware.Host{MAC: "aa:bb:cc:dd:ee:40", OS: "flatcar"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	return deps
+}
+
+// TestBindCoreOSHostSucceeds pins the fix for the CoreOS binding bug: a host
+// whose OS is "coreos" (booty's short/boot vocabulary) must bind a valid
+// butane config (its ignition-family kind, once bridged to the ostype
+// taxonomy's "fedora-coreos") with 200, not the pre-fix 422 "config kind does
+// not match host OS family" caused by osFamily's raw ostype.Lookup("coreos")
+// miss.
+func TestBindCoreOSHostSucceeds(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:42", hardware.Host{MAC: "aa:bb:cc:dd:ee:42", OS: "coreos"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cid, err := deps.Store.CreateConfig("coreos-cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:42/bind", map[string]any{"configId": cid})
+	if resp.Code != 200 {
+		t.Fatalf("coreos bind = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:42")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID == nil || *h.ConfigID != cid {
+		t.Fatalf("config not bound: %v", h.ConfigID)
+	}
+}
+
+func TestApproveEmptyBodyBackwardCompatible(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	// A genuinely OMITTED body (no second arg to api.Post — a zero-byte request,
+	// exactly what the frontend sends) must behave exactly like today's approve
+	// (approve + assign). This is the case a huma non-pointer Body field would
+	// reject with 400 "request body is required" before the handler even runs;
+	// passing map[string]any{} here would marshal to "{}" and mask that bug.
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve")
+	if resp.Code != 200 || !strings.Contains(resp.Body.String(), `"approved":true`) {
+		t.Fatalf("approve empty = %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestApproveWithConfigAndRolesAtomic(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	cid, err := deps.Store.CreateConfig("cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	rid, err := deps.Store.CreateRole("cp", nil)
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve", map[string]any{
+		"configId": cid, "roleIds": []int64{rid},
+	})
+	if resp.Code != 200 {
+		t.Fatalf("approve+attach = %d: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID == nil || *h.ConfigID != cid {
+		t.Fatalf("config not bound: %v", h.ConfigID)
+	}
+	roles, err := deps.Store.ListHostRoles("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("list host roles: %v", err)
+	}
+	if len(roles) != 1 || roles[0].ID != rid {
+		t.Fatalf("roles not bound: %+v", roles)
+	}
+}
+
+func TestBindFamilyMismatchIs422(t *testing.T) {
+	deps := hostsTestDeps(t) // host OS = flatcar (ignition family → butane)
+	api := newTestAPI(t, deps)
+	cid, err := deps.Store.CreateConfig("talos-cfg", "machineconfig") // wrong kind for flatcar
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/bind", map[string]any{"configId": cid})
+	if resp.Code != 422 {
+		t.Fatalf("family mismatch bind = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestBindRebindsApprovedHost(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve", map[string]any{})
+	cid, err := deps.Store.CreateConfig("cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/bind", map[string]any{"configId": cid})
+	if resp.Code != 200 {
+		t.Fatalf("bind = %d: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID == nil || *h.ConfigID != cid {
+		t.Fatalf("rebind failed: %v", h.ConfigID)
+	}
+}
+
+// TestBindEmptyBodyIsNoOp proves the pointer-Body fix works both directions:
+// a genuinely omitted body on /bind is accepted (no 400 "request body is
+// required") and leaves the host's config/roles untouched, since
+// bindHostConfigRoles is skipped entirely when in.Body == nil.
+func TestBindEmptyBodyIsNoOp(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve")
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/bind")
+	if resp.Code != 200 {
+		t.Fatalf("bind empty body = %d: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID != nil {
+		t.Fatalf("empty-body bind must not bind a config, got: %v", h.ConfigID)
+	}
+}
+
+// TestBindUnknownOSFamilyIs422 exercises bindHostConfigRoles' osFamily
+// lookup-miss branch: a host whose OS is unrecognized (empty string) has no
+// family, so any config bind must 422 rather than panic or silently succeed.
+func TestBindUnknownOSFamilyIs422(t *testing.T) {
+	deps := hostsTestDeps(t)
+	api := newTestAPI(t, deps)
+	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:41", hardware.Host{MAC: "aa:bb:cc:dd:ee:41", OS: ""}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cid, err := deps.Store.CreateConfig("cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:41/bind", map[string]any{"configId": cid})
+	if resp.Code != 422 {
+		t.Fatalf("unknown OS family bind = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestApproveInvalidBindingLeavesHostUnapproved pins the validate-before-approve
+// fix in the approve handler: a family-mismatched config (or any other
+// validation failure) must be caught BEFORE hardware.Approve/SetAssignment run,
+// so the host stays pending/unapproved and unbound. Before the fix, approve
+// wrote Approve+SetAssignment first and only then validated the binding via
+// bindHostConfigRoles, so this exact request left the host approved (and
+// booting the server-default config) despite the 422.
+func TestApproveInvalidBindingLeavesHostUnapproved(t *testing.T) {
+	deps := hostsTestDeps(t) // host OS = flatcar (ignition family → butane)
+	api := newTestAPI(t, deps)
+	cid, err := deps.Store.CreateConfig("talos-cfg", "machineconfig") // wrong kind for flatcar
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/approve", map[string]any{"configId": cid})
+	if resp.Code != 422 {
+		t.Fatalf("approve with mismatched config = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.Approved {
+		t.Fatalf("validation failure must leave host unapproved, but Approved=true")
+	}
+	if h.ConfigID != nil {
+		t.Fatalf("validation failure must bind nothing, but config was persisted: %v", *h.ConfigID)
+	}
+}
+
+// TestBindValidConfigInvalidRoleBindsNothing pins the validate-all-then-write
+// fix in bindHostConfigRoles: a request with a VALID config but a
+// nonexistent role must fail the whole bind — including the config half —
+// not persist the config and then 422 on the role. Before the fix,
+// bindHostConfigRoles wrote the config binding before validating roles, so
+// this exact request left the host partially bound despite the 422.
+func TestBindValidConfigInvalidRoleBindsNothing(t *testing.T) {
+	deps := hostsTestDeps(t) // host OS = flatcar (ignition family → butane)
+	api := newTestAPI(t, deps)
+	cid, err := deps.Store.CreateConfig("cfg", "butane")
+	if err != nil {
+		t.Fatalf("create config: %v", err)
+	}
+	resp := api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:40/bind", map[string]any{
+		"configId": cid, "roleIds": []int64{99999},
+	})
+	if resp.Code != 422 {
+		t.Fatalf("valid config + invalid role bind = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+	h, err := deps.Store.GetHost("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("get host: %v", err)
+	}
+	if h.ConfigID != nil {
+		t.Fatalf("validation failure must bind nothing, but config was persisted: %v", *h.ConfigID)
+	}
+	roles, err := deps.Store.ListHostRoles("aa:bb:cc:dd:ee:40")
+	if err != nil {
+		t.Fatalf("list host roles: %v", err)
+	}
+	if len(roles) != 0 {
+		t.Fatalf("validation failure must bind nothing, but roles were persisted: %+v", roles)
+	}
+}

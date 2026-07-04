@@ -35,6 +35,7 @@ type Host struct {
 	AssignedParams string `json:"assignedParams,omitzero"`
 	UUID           string `json:"uuid,omitzero"`
 	Serial         string `json:"serial,omitzero"`
+	ConfigID       *int64 `json:"configId,omitzero"` // hosts.config_id (P4); omitzero matches adjacent P1c fields
 }
 
 // BootyData is the JSON shape returned by GetData and consumed by the UI.
@@ -205,6 +206,7 @@ func toDBHost(h Host) db.Host {
 		IgnitionFile: h.IgnitionFile, OS: h.OS, DoInstall: h.DoInstall, Schematic: h.Schematic,
 		Approved: h.Approved, BootMode: h.BootMode, AssignedOS: h.AssignedOS,
 		AssignedArch: h.AssignedArch, AssignedParams: h.AssignedParams, UUID: h.UUID, Serial: h.Serial,
+		ConfigID: h.ConfigID,
 	}
 }
 
@@ -214,6 +216,7 @@ func fromDBHost(d db.Host) *Host {
 		IgnitionFile: d.IgnitionFile, OS: d.OS, DoInstall: d.DoInstall, Schematic: d.Schematic,
 		Approved: d.Approved, BootMode: d.BootMode, AssignedOS: d.AssignedOS,
 		AssignedArch: d.AssignedArch, AssignedParams: d.AssignedParams, UUID: d.UUID, Serial: d.Serial,
+		ConfigID: d.ConfigID,
 	}
 }
 
@@ -340,6 +343,37 @@ func SetAssignment(mac, os, arch, params string) error {
 	}
 	had, err := withRLockedStore(func(st *db.Store) error {
 		return st.SetAssignment(key, os, arch, params)
+	})
+	if !had {
+		return errors.New("hardware: store not initialized")
+	}
+	return err
+}
+
+// SetHostConfig sets (or clears, when configID is nil) the per-host config
+// binding for the canonicalized mac, through the store.
+func SetHostConfig(mac string, configID *int64) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		return st.SetHostConfig(key, configID)
+	})
+	if !had {
+		return errors.New("hardware: store not initialized")
+	}
+	return err
+}
+
+// SetHostRoles replaces the canonicalized mac's role set through the store.
+func SetHostRoles(mac string, roleIDs []int64) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		return st.SetHostRoles(key, roleIDs)
 	})
 	if !had {
 		return errors.New("hardware: store not initialized")

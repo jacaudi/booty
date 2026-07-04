@@ -9,9 +9,22 @@ import (
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/spf13/viper"
 )
+
+// machineConfigTestStore opens a bare empty store so resolveConfig returns
+// ok=false and the handler takes the existing file path (rungs 3–4) verbatim.
+func machineConfigTestStore(t *testing.T) *db.Store {
+	t.Helper()
+	store, err := db.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
 
 func TestMachineConfig_RendersTemplate(t *testing.T) {
 	dir := t.TempDir()
@@ -30,8 +43,9 @@ func TestMachineConfig_RendersTemplate(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?serial=ABC123&mac=aa:bb:cc:dd:ee:ff", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
+	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(rec, req)
+	handleMachineConfigRequest(store)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
@@ -53,8 +67,9 @@ func TestMachineConfig_MissingTemplateIs500(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
+	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(rec, req)
+	handleMachineConfigRequest(store)(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
@@ -94,8 +109,9 @@ func TestMachineConfig_RendersHostFields(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
+	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(rec, req)
+	handleMachineConfigRequest(store)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
@@ -136,8 +152,9 @@ func TestMachineConfig_UnidentifiedHostRendersDefault(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
+	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(rec, req)
+	handleMachineConfigRequest(store)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
@@ -169,8 +186,9 @@ func TestMachineConfig_UnidentifiedHostUsesHostnameQuery(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?hostname=node-x", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
+	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(rec, req)
+	handleMachineConfigRequest(store)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
@@ -213,8 +231,9 @@ func TestMachineConfig_RegisteredBlankHostnameUsesHostnameQuery(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff&hostname=node-x", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
+	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(rec, req)
+	handleMachineConfigRequest(store)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
@@ -242,8 +261,9 @@ func TestMachineConfig_ExecuteFailureIs500(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
+	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(rec, req)
+	handleMachineConfigRequest(store)(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)

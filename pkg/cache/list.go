@@ -39,7 +39,7 @@ func ListCached() []CacheEntry {
 		if !cn.IsDir() {
 			continue
 		}
-		o, ok := ostype.Lookup(cacheNameToCanonical(cn.Name()))
+		o, ok := ostype.Lookup(CacheNameToCanonical(cn.Name()))
 		if !ok {
 			continue
 		}
@@ -84,7 +84,7 @@ func ListCached() []CacheEntry {
 		if c := cmp.Compare(a.Segment, b.Segment); c != 0 {
 			return c
 		}
-		o, _ := ostype.Lookup(cacheNameToCanonical(a.CacheName)) // ok guaranteed: walk filter above accepted this cacheName
+		o, _ := ostype.Lookup(CacheNameToCanonical(a.CacheName)) // ok guaranteed: walk filter above accepted this cacheName
 		return -o.CompareVersions(a.Version, b.Version) // newest first
 	})
 	return out
@@ -114,7 +114,7 @@ func ValidCachedSelection(cacheName, segment, arch, version string) bool {
 	if containsTraversal(segment) || containsTraversal(arch) {
 		return false
 	}
-	o, ok := ostype.Lookup(cacheNameToCanonical(cacheName))
+	o, ok := ostype.Lookup(CacheNameToCanonical(cacheName))
 	if !ok {
 		return false
 	}
