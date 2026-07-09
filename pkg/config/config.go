@@ -52,6 +52,13 @@ const (
 	ConfigRevisionsKeep    = "configRevisionsKeep"
 )
 
+// DefaultTalosSchematic is the Image Factory's "vanilla" (no-extensions)
+// schematic ID. Schematics are content-addressed, so this is a stable,
+// documented constant (P5 design §11). It is both the --talosSchematic flag
+// default and the ID the startup registry seed records for the "vanilla"
+// schematic config — one literal, one knowledge site.
+const DefaultTalosSchematic = "376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba"
+
 // httpClient is the package-level HTTP client used for DownloadStaged.
 // The 5-minute Timeout is a hard ceiling covering the entire request
 // lifecycle (connect + headers + body); ctx-driven cancellation
@@ -65,7 +72,7 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(ProxyDHCPBootfileUEFI, "ipxe.efi")
 	viper.SetDefault(ProxyDHCPBootfileARM64, "ipxe-arm64.efi")
 	viper.SetDefault(TalosArchitecture, "amd64")
-	viper.SetDefault(TalosSchematic, "376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba")
+	viper.SetDefault(TalosSchematic, DefaultTalosSchematic)
 	viper.SetDefault(TalosRetainMinors, 3)
 	viper.SetDefault(TalosConfigFile, "config/machineconfig.yaml")
 	viper.SetDefault(PreseedFile, "config/preseed.cfg")

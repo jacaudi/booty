@@ -310,6 +310,12 @@ func run(cmd *cobra.Command, argv []string) error {
 		return fmt.Errorf("cache migrate: %w", err)
 	}
 
+	// P5: the registry always shows the Factory's vanilla schematic. Seeded by
+	// its known constant ID — never a Factory call at startup (SGE I4).
+	if err := bootyHTTP.SeedVanillaSchematic(store); err != nil {
+		return fmt.Errorf("seed vanilla schematic: %w", err)
+	}
+
 	// Take ownership of the process lifecycle: a single signal context drives an
 	// ordered graceful shutdown of every subsystem started below.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jeefy/booty/pkg/config"
+	"github.com/spf13/viper"
 )
 
 func TestBuildSchematicSuccess(t *testing.T) {
@@ -68,6 +71,58 @@ func TestBuildSchematicRejectsUnusableID(t *testing.T) {
 				t.Fatal("want error for an unusable factory id")
 			}
 		})
+	}
+}
+
+func TestSeedVanillaSchematicIdempotentNoFactoryCall(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	// A live stub proves the seed NEVER calls the Factory (SGE I4): startup
+	// must not depend on Factory reachability (disposability / air-gap).
+	calls := factoryStub(t, 201, "must-never-be-built")
+
+	if err := SeedVanillaSchematic(deps.Store); err != nil {
+		t.Fatalf("first seed: %v", err)
+	}
+	if err := SeedVanillaSchematic(deps.Store); err != nil {
+		t.Fatalf("second seed (restart): %v", err)
+	}
+
+	list, err := deps.Store.ListConfigs()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("configs after two seeds = %d (err %v), want exactly 1", len(list), err)
+	}
+	v := list[0]
+	if v.Name != "vanilla" || v.Kind != "schematic" {
+		t.Fatalf("seeded config = %+v, want vanilla/schematic", v)
+	}
+	if v.DerivedSchematicID != config.DefaultTalosSchematic {
+		t.Fatalf("seeded id = %q, want the vanilla constant %q", v.DerivedSchematicID, config.DefaultTalosSchematic)
+	}
+	if n, _ := deps.Store.CountRevisions(v.ID); n != 1 {
+		t.Fatalf("revisions after two seeds = %d, want 1 (idempotent)", n)
+	}
+	if *calls != 0 {
+		t.Fatalf("startup seed called the Factory %d times, want 0 (SGE I4)", *calls)
+	}
+}
+
+func TestSeedVanillaSchematicRespectsOperatorName(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	// An operator-created config already named "vanilla" (any kind) makes the
+	// seed a no-op — create-if-absent is keyed on the UNIQUE name.
+	if _, err := deps.Store.CreateConfig("vanilla", "butane"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedVanillaSchematic(deps.Store); err != nil {
+		t.Fatalf("seed with existing name: %v", err)
+	}
+	list, _ := deps.Store.ListConfigs()
+	if len(list) != 1 || list[0].Kind != "butane" {
+		t.Fatalf("seed must not touch an operator-owned name: %+v", list)
 	}
 }
 

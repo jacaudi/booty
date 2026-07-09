@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/jeefy/booty/pkg/cache"
+	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
 )
 
 // factoryBuildTimeout bounds the Image Factory schematic-build POST (SGE M1):
@@ -73,4 +77,46 @@ func buildSchematic(ctx context.Context, factoryURL string, source []byte) (stri
 		return "", fmt.Errorf("http: factory returned unusable schematic id: %w", err)
 	}
 	return out.ID, nil
+}
+
+// vanillaSchematicSource is the customization that produces the Factory's
+// vanilla (no-extensions) schematic. Because schematics are content-addressed,
+// this source's ID is the known constant config.DefaultTalosSchematic — no
+// build is needed to record it.
+const vanillaSchematicSource = "customization: {}\n"
+
+// SeedVanillaSchematic inserts the baseline "vanilla" schematic config at
+// startup, create-if-absent by name (design D7), so the UI catalog always
+// shows the Factory's vanilla image. It seeds the KNOWN constant ID directly
+// and NEVER POSTs to the Factory (SGE I4): building at startup would couple
+// boot to Factory reachability — a disposability regression and an air-gap
+// hazard (a private/self-hosted Factory may be down at boot). Idempotent:
+// any existing config named "vanilla" makes it a no-op. Its cache target
+// needs no ensuring here — seedTargets already seeds the predefined Talos
+// target from the --talosSchematic default every reconcile tick.
+func SeedVanillaSchematic(store *db.Store) error {
+	list, err := store.ListConfigs()
+	if err != nil {
+		return fmt.Errorf("http: seed vanilla schematic: %w", err)
+	}
+	if slices.ContainsFunc(list, func(r db.ConfigListRow) bool { return r.Name == "vanilla" }) {
+		return nil // already seeded (or operator-owned name): no-op
+	}
+	id, err := store.CreateConfig("vanilla", "schematic")
+	if err != nil {
+		return fmt.Errorf("http: seed vanilla schematic: %w", err)
+	}
+	vanillaID := config.DefaultTalosSchematic
+	// Defense-in-depth: honor the plan-wide "ValidatePathParam applies to every
+	// ID before it is stored, seeded, or bound" invariant even for the
+	// compile-time-known trusted constant — a bad edit to DefaultTalosSchematic
+	// fails fast at startup rather than seeding an unusable cache segment.
+	if err := cache.ValidatePathParam(vanillaID); err != nil {
+		return fmt.Errorf("http: seed vanilla schematic: invalid constant id: %w", err)
+	}
+	if err := appendActiveRevision(store, id, vanillaSchematicSource, &vanillaID); err != nil {
+		return fmt.Errorf("http: seed vanilla schematic revision: %w", err)
+	}
+	slog.Info("seeded vanilla schematic config", "schematic", vanillaID)
+	return nil
 }
