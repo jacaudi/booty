@@ -32,11 +32,11 @@ func RegisterAPI(mux *http.ServeMux, deps APIDeps) huma.API {
 // registrar call here, siblings untouched (No-Wall).
 func registerOperations(api huma.API, deps APIDeps) {
 	grp := huma.NewGroup(api, "/api/v1")
-	registerCatalog(grp)       // Task 5
-	registerTargets(grp, deps) // Task 6
-	registerHosts(grp, deps)   // Task 7
-	registerCache(grp, deps)   // P3a
-	registerConfigs(grp, deps) // P4 T8
-	registerRoles(grp, deps)   // P4 T9
+	registerCatalog(grp)          // Task 5
+	registerTargets(grp, deps)    // Task 6
+	registerHosts(grp, deps)      // Task 7
+	registerCache(grp, deps)      // P3a
+	registerConfigs(grp, deps)    // P4 T8
+	registerRoles(grp, deps)      // P4 T9
+	registerSchematics(grp, deps) // P5 T8
 }
-
