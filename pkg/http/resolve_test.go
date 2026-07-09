@@ -26,7 +26,7 @@ func mkConfig(t *testing.T, s *db.Store, name, kind, source string) int64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rid, _, err := s.AddConfigRevision(id, base64.StdEncoding.EncodeToString([]byte(source)), "sha")
+	rid, _, err := s.AddConfigRevision(id, base64.StdEncoding.EncodeToString([]byte(source)), "sha", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

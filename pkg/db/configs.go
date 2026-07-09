@@ -19,23 +19,25 @@ type Config struct {
 
 // ConfigRevision is an immutable, append-only full copy of a config's source.
 type ConfigRevision struct {
-	ID        int64
-	ConfigID  int64
-	Revision  int
-	SourceB64 string
-	SHA256    string
-	CreatedAt string
+	ID                 int64
+	ConfigID           int64
+	Revision           int
+	SourceB64          string
+	SHA256             string
+	DerivedSchematicID *string // Factory-assigned sha256 (kind='schematic' only); nil otherwise
+	CreatedAt          string
 }
 
 // ConfigListRow is the list projection with the computed active-revision number
 // and revision count (one query, subquery-derived) for the API DTO.
 type ConfigListRow struct {
-	ID             int64
-	Name           string
-	Kind           string
-	ActiveRevision int // 0 when no active revision
-	RevisionCount  int
-	UpdatedAt      string
+	ID                 int64
+	Name               string
+	Kind               string
+	ActiveRevision     int // 0 when no active revision
+	RevisionCount      int
+	DerivedSchematicID string // active revision's derived ID; "" for non-schematic kinds / no active
+	UpdatedAt          string
 }
 
 // CreateConfig inserts a config identity (no revision yet) and returns its id.
@@ -75,6 +77,7 @@ func (s *Store) ListConfigs() ([]ConfigListRow, error) {
 		`SELECT c.id, c.name, c.kind,
 		        COALESCE(ar.revision, 0),
 		        (SELECT COUNT(*) FROM config_revisions r WHERE r.config_id = c.id),
+		        COALESCE(ar.derived_schematic_id, ''),
 		        c.updated_at
 		   FROM configs c
 		   LEFT JOIN config_revisions ar ON ar.id = c.active_revision_id
@@ -86,7 +89,7 @@ func (s *Store) ListConfigs() ([]ConfigListRow, error) {
 	var out []ConfigListRow
 	for rows.Next() {
 		var r ConfigListRow
-		if err := rows.Scan(&r.ID, &r.Name, &r.Kind, &r.ActiveRevision, &r.RevisionCount, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Kind, &r.ActiveRevision, &r.RevisionCount, &r.DerivedSchematicID, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("db: scan config: %w", err)
 		}
 		out = append(out, r)
@@ -96,8 +99,11 @@ func (s *Store) ListConfigs() ([]ConfigListRow, error) {
 
 // AddConfigRevision appends an immutable revision (revision = max+1) and returns
 // its row id and revision number. It does NOT change the active pointer; the
-// caller advances active via SetActiveRevision.
-func (s *Store) AddConfigRevision(configID int64, sourceB64, sha256 string) (int64, int, error) {
+// caller advances active via SetActiveRevision. derivedSchematicID is the
+// Factory-assigned content-addressed ID for kind='schematic' sources (nil for
+// renderable kinds) — part of the INSERT because revisions are immutable:
+// there is no post-insert setter.
+func (s *Store) AddConfigRevision(configID int64, sourceB64, sha256 string, derivedSchematicID *string) (int64, int, error) {
 	var next int
 	if err := s.db.QueryRow(
 		`SELECT COALESCE(MAX(revision), 0) + 1 FROM config_revisions WHERE config_id = ?`,
@@ -105,8 +111,8 @@ func (s *Store) AddConfigRevision(configID int64, sourceB64, sha256 string) (int
 		return 0, 0, fmt.Errorf("db: next revision for %d: %w", configID, err)
 	}
 	res, err := s.db.Exec(
-		`INSERT INTO config_revisions (config_id, revision, source_b64, source_sha256)
-		 VALUES (?, ?, ?, ?)`, configID, next, sourceB64, sha256)
+		`INSERT INTO config_revisions (config_id, revision, source_b64, source_sha256, derived_schematic_id)
+		 VALUES (?, ?, ?, ?, ?)`, configID, next, sourceB64, sha256, derivedSchematicID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("db: add revision %d: %w", configID, err)
 	}
@@ -133,17 +139,21 @@ func (s *Store) SetActiveRevision(configID, revisionID int64) error {
 // config has no active revision (or does not exist).
 func (s *Store) GetActiveRevision(configID int64) (*ConfigRevision, error) {
 	var r ConfigRevision
+	var derived sql.NullString
 	err := s.db.QueryRow(
-		`SELECT r.id, r.config_id, r.revision, r.source_b64, r.source_sha256, r.created_at
+		`SELECT r.id, r.config_id, r.revision, r.source_b64, r.source_sha256, r.derived_schematic_id, r.created_at
 		   FROM config_revisions r
 		   JOIN configs c ON c.active_revision_id = r.id
 		  WHERE c.id = ?`, configID,
-	).Scan(&r.ID, &r.ConfigID, &r.Revision, &r.SourceB64, &r.SHA256, &r.CreatedAt)
+	).Scan(&r.ID, &r.ConfigID, &r.Revision, &r.SourceB64, &r.SHA256, &derived, &r.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("db: active revision %d: %w", configID, err)
+	}
+	if derived.Valid {
+		r.DerivedSchematicID = &derived.String
 	}
 	return &r, nil
 }
@@ -151,15 +161,19 @@ func (s *Store) GetActiveRevision(configID int64) (*ConfigRevision, error) {
 // GetRevision returns a config's revision by its per-config number, or ErrNotFound.
 func (s *Store) GetRevision(configID int64, revision int) (*ConfigRevision, error) {
 	var r ConfigRevision
+	var derived sql.NullString
 	err := s.db.QueryRow(
-		`SELECT id, config_id, revision, source_b64, source_sha256, created_at
+		`SELECT id, config_id, revision, source_b64, source_sha256, derived_schematic_id, created_at
 		   FROM config_revisions WHERE config_id = ? AND revision = ?`, configID, revision,
-	).Scan(&r.ID, &r.ConfigID, &r.Revision, &r.SourceB64, &r.SHA256, &r.CreatedAt)
+	).Scan(&r.ID, &r.ConfigID, &r.Revision, &r.SourceB64, &r.SHA256, &derived, &r.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("db: revision %d/%d: %w", configID, revision, err)
+	}
+	if derived.Valid {
+		r.DerivedSchematicID = &derived.String
 	}
 	return &r, nil
 }
@@ -167,7 +181,7 @@ func (s *Store) GetRevision(configID int64, revision int) (*ConfigRevision, erro
 // ListRevisions returns a config's revisions, newest first.
 func (s *Store) ListRevisions(configID int64) ([]ConfigRevision, error) {
 	rows, err := s.db.Query(
-		`SELECT id, config_id, revision, source_b64, source_sha256, created_at
+		`SELECT id, config_id, revision, source_b64, source_sha256, derived_schematic_id, created_at
 		   FROM config_revisions WHERE config_id = ? ORDER BY revision DESC`, configID)
 	if err != nil {
 		return nil, fmt.Errorf("db: list revisions %d: %w", configID, err)
@@ -176,8 +190,12 @@ func (s *Store) ListRevisions(configID int64) ([]ConfigRevision, error) {
 	var out []ConfigRevision
 	for rows.Next() {
 		var r ConfigRevision
-		if err := rows.Scan(&r.ID, &r.ConfigID, &r.Revision, &r.SourceB64, &r.SHA256, &r.CreatedAt); err != nil {
+		var derived sql.NullString
+		if err := rows.Scan(&r.ID, &r.ConfigID, &r.Revision, &r.SourceB64, &r.SHA256, &derived, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("db: scan revision: %w", err)
+		}
+		if derived.Valid {
+			r.DerivedSchematicID = &derived.String
 		}
 		out = append(out, r)
 	}

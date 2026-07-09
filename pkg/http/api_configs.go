@@ -84,7 +84,7 @@ func registerConfigs(api huma.API, deps APIDeps) {
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("create config (duplicate name?)", err)
 		}
-		if err := appendActiveRevision(deps.Store, id, in.Body.Source); err != nil {
+		if err := appendActiveRevision(deps.Store, id, in.Body.Source, nil); err != nil {
 			return nil, huma.Error500InternalServerError("add revision", err)
 		}
 		return configDTOResp(deps.Store, id)
@@ -147,7 +147,7 @@ func registerConfigs(api huma.API, deps APIDeps) {
 		if _, _, report, verr := renderConfig(c.Kind, []byte(in.Body.Source), stubVars()); verr != nil {
 			return nil, huma.Error422UnprocessableEntity("config validation failed: "+report, verr)
 		}
-		if err := appendActiveRevision(deps.Store, in.ID, in.Body.Source); err != nil {
+		if err := appendActiveRevision(deps.Store, in.ID, in.Body.Source, nil); err != nil {
 			return nil, huma.Error500InternalServerError("add revision", err)
 		}
 		if err := deps.Store.PruneRevisions(in.ID, viper.GetInt(config.ConfigRevisionsKeep)); err != nil {
@@ -282,10 +282,11 @@ func registerConfigs(api huma.API, deps APIDeps) {
 }
 
 // appendActiveRevision base64-encodes source, records its sha256, appends the
-// revision, and advances the config's active pointer.
-func appendActiveRevision(store *db.Store, configID int64, source string) error {
+// revision (with its Factory-derived schematic ID, when kind='schematic'), and
+// advances the config's active pointer.
+func appendActiveRevision(store *db.Store, configID int64, source string, derivedSchematicID *string) error {
 	sum := sha256.Sum256([]byte(source))
-	revID, _, err := store.AddConfigRevision(configID, base64.StdEncoding.EncodeToString([]byte(source)), hex.EncodeToString(sum[:]))
+	revID, _, err := store.AddConfigRevision(configID, base64.StdEncoding.EncodeToString([]byte(source)), hex.EncodeToString(sum[:]), derivedSchematicID)
 	if err != nil {
 		return err
 	}

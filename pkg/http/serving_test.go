@@ -82,7 +82,7 @@ func TestIgnitionBoundConfigServed(t *testing.T) {
 	}
 	cid, _ := s.CreateConfig("bound", "butane")
 	rid, _, _ := s.AddConfigRevision(cid,
-		base64.StdEncoding.EncodeToString([]byte("variant: fcos\nversion: 1.5.0\nstorage:\n  files:\n    - path: /etc/bound\n      contents:\n        source: http://{{ .ServerIP }}/bound\n")), "sha")
+		base64.StdEncoding.EncodeToString([]byte("variant: fcos\nversion: 1.5.0\nstorage:\n  files:\n    - path: /etc/bound\n      contents:\n        source: http://{{ .ServerIP }}/bound\n")), "sha", nil)
 	s.SetActiveRevision(cid, rid)
 	if err := hardware.SetHostConfig(mac, &cid); err != nil {
 		t.Fatal(err)

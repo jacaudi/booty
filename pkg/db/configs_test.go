@@ -11,7 +11,7 @@ func TestCreateConfigAndFirstRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConfig: %v", err)
 	}
-	revID, rev, err := s.AddConfigRevision(id, "c291cmNl", "abc123")
+	revID, rev, err := s.AddConfigRevision(id, "c291cmNl", "abc123", nil)
 	if err != nil {
 		t.Fatalf("AddConfigRevision: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestAddConfigRevisionMonotonic(t *testing.T) {
 	s := newTestStore(t)
 	id, _ := s.CreateConfig("c", "butane")
 	for want := 1; want <= 3; want++ {
-		_, rev, err := s.AddConfigRevision(id, "eA==", "h")
+		_, rev, err := s.AddConfigRevision(id, "eA==", "h", nil)
 		if err != nil {
 			t.Fatalf("AddConfigRevision: %v", err)
 		}
@@ -57,8 +57,8 @@ func TestAddConfigRevisionMonotonic(t *testing.T) {
 func TestRollbackIsPointerMoveNoNewRevision(t *testing.T) {
 	s := newTestStore(t)
 	id, _ := s.CreateConfig("c", "butane")
-	r1, _, _ := s.AddConfigRevision(id, "djE=", "h1")
-	r2, _, _ := s.AddConfigRevision(id, "djI=", "h2")
+	r1, _, _ := s.AddConfigRevision(id, "djE=", "h1", nil)
+	r2, _, _ := s.AddConfigRevision(id, "djI=", "h2", nil)
 	if err := s.SetActiveRevision(id, r2); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestRollbackIsPointerMoveNoNewRevision(t *testing.T) {
 		t.Fatalf("active = %d, want %d (rolled back)", c.ActiveRevisionID.Int64, r1)
 	}
 	// A subsequent edit branches forward as max+1 (=3), not 2.
-	_, rev, _ := s.AddConfigRevision(id, "djM=", "h3")
+	_, rev, _ := s.AddConfigRevision(id, "djM=", "h3", nil)
 	if rev != 3 {
 		t.Fatalf("edit-after-rollback revision = %d, want 3", rev)
 	}
@@ -83,7 +83,7 @@ func TestRollbackIsPointerMoveNoNewRevision(t *testing.T) {
 func TestGetRevisionByNumber(t *testing.T) {
 	s := newTestStore(t)
 	id, _ := s.CreateConfig("c", "butane")
-	s.AddConfigRevision(id, "djE=", "h1")
+	s.AddConfigRevision(id, "djE=", "h1", nil)
 	got, err := s.GetRevision(id, 1)
 	if err != nil {
 		t.Fatalf("GetRevision: %v", err)
@@ -101,7 +101,7 @@ func TestPruneKeepsNewestNUnionActive(t *testing.T) {
 	id, _ := s.CreateConfig("c", "butane")
 	var revIDs []int64
 	for range 5 {
-		rid, _, _ := s.AddConfigRevision(id, "eA==", "h")
+		rid, _, _ := s.AddConfigRevision(id, "eA==", "h", nil)
 		revIDs = append(revIDs, rid)
 	}
 	// Roll active back to the OLDEST (revision 1), then prune keep=2. The union
@@ -130,7 +130,7 @@ func TestPruneKeepsNewestNUnionActive(t *testing.T) {
 func TestDeleteConfigCascadesRevisions(t *testing.T) {
 	s := newTestStore(t)
 	id, _ := s.CreateConfig("c", "butane")
-	s.AddConfigRevision(id, "eA==", "h")
+	s.AddConfigRevision(id, "eA==", "h", nil)
 	if _, err := s.db.Exec(`DELETE FROM configs WHERE id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
@@ -138,5 +138,77 @@ func TestDeleteConfigCascadesRevisions(t *testing.T) {
 	s.db.QueryRow(`SELECT COUNT(*) FROM config_revisions WHERE config_id = ?`, id).Scan(&n)
 	if n != 0 {
 		t.Fatalf("config_revisions after config delete = %d, want 0 (cascade)", n)
+	}
+}
+
+func TestAddConfigRevisionDerivedSchematicID(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.CreateConfig("iscsi", "schematic")
+	if err != nil {
+		t.Fatalf("CreateConfig(schematic): %v", err)
+	}
+	want := "a1b2c3d4"
+	revID, rev, err := s.AddConfigRevision(id, "Y3VzdG9taXphdGlvbjoge30K", "h1", &want)
+	if err != nil || rev != 1 {
+		t.Fatalf("AddConfigRevision = rev %d, err %v", rev, err)
+	}
+	if err := s.SetActiveRevision(id, revID); err != nil {
+		t.Fatal(err)
+	}
+	for name, get := range map[string]func() (*ConfigRevision, error){
+		"GetActiveRevision": func() (*ConfigRevision, error) { return s.GetActiveRevision(id) },
+		"GetRevision":       func() (*ConfigRevision, error) { return s.GetRevision(id, 1) },
+	} {
+		r, gerr := get()
+		if gerr != nil {
+			t.Fatalf("%s: %v", name, gerr)
+		}
+		if r.DerivedSchematicID == nil || *r.DerivedSchematicID != want {
+			t.Fatalf("%s DerivedSchematicID = %v, want %q", name, r.DerivedSchematicID, want)
+		}
+	}
+	revs, err := s.ListRevisions(id)
+	if err != nil || len(revs) != 1 || revs[0].DerivedSchematicID == nil || *revs[0].DerivedSchematicID != want {
+		t.Fatalf("ListRevisions = %+v, err %v", revs, err)
+	}
+}
+
+func TestAddConfigRevisionNilDerivedStaysNull(t *testing.T) {
+	s := newTestStore(t)
+	id, _ := s.CreateConfig("plain", "butane")
+	revID, _, err := s.AddConfigRevision(id, "eA==", "h", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetActiveRevision(id, revID)
+	r, err := s.GetActiveRevision(id)
+	if err != nil || r.DerivedSchematicID != nil {
+		t.Fatalf("non-schematic revision DerivedSchematicID = %v (err %v), want nil", r.DerivedSchematicID, err)
+	}
+}
+
+func TestListConfigsDerivedSchematicID(t *testing.T) {
+	s := newTestStore(t)
+	sid, _ := s.CreateConfig("sch", "schematic")
+	want := "a1b2c3d4"
+	rid, _, _ := s.AddConfigRevision(sid, "Y3VzdG9taXphdGlvbjoge30K", "h", &want)
+	s.SetActiveRevision(sid, rid)
+	s.CreateConfig("plain", "butane") // no active revision
+
+	rows, err := s.ListConfigs()
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("ListConfigs = %d rows, err %v", len(rows), err)
+	}
+	for _, r := range rows {
+		switch r.Name {
+		case "sch":
+			if r.DerivedSchematicID != want {
+				t.Errorf("sch DerivedSchematicID = %q, want %q", r.DerivedSchematicID, want)
+			}
+		case "plain":
+			if r.DerivedSchematicID != "" {
+				t.Errorf("plain DerivedSchematicID = %q, want empty", r.DerivedSchematicID)
+			}
+		}
 	}
 }
