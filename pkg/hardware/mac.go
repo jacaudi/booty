@@ -398,6 +398,25 @@ func SetBootMode(mac, mode string) error {
 	return err
 }
 
+// SetSchematic writes the canonicalized mac's Talos schematic ID through the
+// store (P5 bind). Binding only changes WHERE host.Schematic gets its value —
+// everything downstream (approve's params["schematic"], the cache segment,
+// the factory URL, tftp bootTokens) reads the field exactly as before
+// (design §5: boot path byte-identical).
+func SetSchematic(mac, schematic string) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		return st.SetHostSchematic(key, schematic)
+	})
+	if !had {
+		return errors.New("hardware: store not initialized")
+	}
+	return err
+}
+
 // ListHosts returns every registered host (fresh copies).
 func ListHosts() ([]*Host, error) {
 	var out []*Host

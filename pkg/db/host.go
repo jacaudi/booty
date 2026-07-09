@@ -142,6 +142,17 @@ func (s *Store) SetBootMode(mac, mode string) error {
 	return nil
 }
 
+// SetHostSchematic sets hosts.schematic for mac (the P5 bind seam). The
+// last_seen bump is intentional pattern-consistency with SetAssignment /
+// SetHostConfig (P4 F7): every host-touch accessor refreshes last_seen.
+func (s *Store) SetHostSchematic(mac, schematic string) error {
+	if _, err := s.db.Exec(
+		`UPDATE hosts SET schematic = ?, last_seen = datetime('now') WHERE mac = ?`, schematic, mac); err != nil {
+		return fmt.Errorf("db: set host schematic %s: %w", mac, err)
+	}
+	return nil
+}
+
 // PreserveExistingHostBoot is a one-time upgrade backfill: it marks every
 // already-registered host (os != '') approved + boot_mode='assigned' +
 // assigned_os=os, so hosts that booted under the pre-P1c (host.OS-driven) path
