@@ -71,14 +71,7 @@ func seedTargets(store *db.Store) error {
 			slog.Warn("cache: skipping host schematic (not path-safe)", "schematic", schematic, "err", err)
 			continue
 		}
-		params, err := encodeParams(map[string]string{"schematic": schematic})
-		if err != nil {
-			return fmt.Errorf("cache: encode params: %w", err)
-		}
-		if err := store.EnsureTarget(db.Target{
-			OS: "talos", Arch: talosArch, Params: params, Mode: "discovery",
-			RetainN: viper.GetInt(config.TalosRetainMinors), Predefined: false, Enabled: true,
-		}); err != nil {
+		if err := EnsureSchematicTarget(store, schematic); err != nil {
 			return fmt.Errorf("cache: seed host schematic %s: %w", schematic, err)
 		}
 	}
