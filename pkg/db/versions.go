@@ -28,6 +28,24 @@ func (s *Store) UpsertTargetVersion(tv TargetVersion) error {
 	return nil
 }
 
+// PinManualVersion upserts a manual version pin WITHOUT touching the cached
+// flag (unlike UpsertTargetVersion, which sets cached=excluded.cached). A new
+// row starts uncached; re-pinning an existing (already-cached) version only
+// flips its source to 'manual' and must NOT reset cached=0, which would force a
+// needless re-download of already-present artifacts on the next reconcile tick.
+func (s *Store) PinManualVersion(targetID int64, version string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO target_versions (target_id, version, source, cached)
+		 VALUES (?, ?, 'manual', 0)
+		 ON CONFLICT(target_id, version) DO UPDATE SET source = 'manual'`,
+		targetID, version,
+	)
+	if err != nil {
+		return fmt.Errorf("db: pin manual version %d/%s: %w", targetID, version, err)
+	}
+	return nil
+}
+
 // DeleteTargetVersion removes the (targetID, version) row. Idempotent: deleting
 // an absent row is a no-op returning nil. The caller is responsible for removing
 // the on-disk artifacts.

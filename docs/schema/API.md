@@ -348,15 +348,17 @@ split.
 **explicit re-bind**: `POST /clusters/{id}/members` called again naming a MAC that already belongs
 to *this* cluster. A per-host `patch` supplied on the original add-member **is persisted** on that
 member's frozen revision and **reused** automatically on a re-bind that omits it — the customization
-survives without being re-supplied.
+survives without being re-supplied. A re-bind may **not change** the member's `machineType`
+(controlplane↔worker) — that returns `422`; remove the member and add it again to change its role.
 
 **Version-bump skew.** After a `PUT` that bumps `talosVersion`, and before a member is re-bound: the
-member's netboot pin is **live** immediately (the `PUT` pre-caches the new version's boot assets and
-triggers a reconcile, so a rebooting member can still netboot), but the member's frozen machineconfig
-— and therefore its **install** image — does not change until the member is **explicitly re-bound**.
-In that window a member that reboots netboots the **new** pinned kernel but **installs the old**
-frozen image. This is a self-healing skew, not a bug: re-bind members promptly after a version bump
-to close the gap.
+member's netboot pin is **live** immediately, but the member's frozen machineconfig — and therefore
+its **install** image — does not change until the member is **explicitly re-bound**. In that window a
+member that reboots netboots the **new** pinned kernel but **installs the old** frozen image. This is
+a self-healing skew, not a bug: re-bind members promptly after a version bump to close the gap. The
+`PUT` pre-caches (and manually pins) the new version's boot assets and triggers a reconcile
+**before** it commits the bump, so if pre-caching fails the version — and the live pin that reads it
+— is **not** advanced and the operation is safely retryable.
 
 **Seam interactions with P5.** `POST /hosts/{mac}/schematic` (the raw schematic bind, see
 [Hosts](#hosts) above) returns `422` for a cluster member — a member's schematic moves only through

@@ -157,20 +157,23 @@ failure postures:
   validation gate. booty never starts in a state where a configured-but-broken key would silently
   disable cluster operations.
 
-### The retention pin (M3) and its limitation (D-F)
+### The retention pin (M3) and back-fetch (formerly D-F)
 
 Every distinct `(schematic, talos_version)` pair referenced by a live cluster's members is pinned:
 the cache reconciler's eviction sweep never evicts it, regardless of `--talosRetainMinors` or age. A
 memberless cluster still pins its `talos_version` under the default schematic (`--talosSchematic`).
 
-**Limitation — the pin does not back-fetch.** The pin only protects already-cached bytes from
-**eviction**; it does not retroactively **fetch** a version that has already aged below the
-discovery window at the moment its schematic's cache target is first created. If a cluster is
-created (or a member added) pinning a version older than what's currently in-window for that
-schematic, the version may never get cached automatically. **Workaround:** add a manual version row
-via `POST /api/v1/targets/{id}/versions` (see [schema/API.md](schema/API.md#targets)) to force it
-into the cache. Auto-creating that manual row at cluster-create / add-member time is a plausible
-future hardening, deliberately **not implemented** in this slice.
+**Back-fetch is guaranteed.** Adding a member (or bumping a cluster's `talos_version`) also writes a
+**manual** version row for the cluster's `talos_version` on the member's schematic target
+(`Source='manual'`), so the reconciler **fetches** those boot assets even when the version has
+already aged below the discovery window — and never prunes them. This closes the former "the pin
+does not back-fetch" limitation. Manual rows are additive to the eviction pin above (both protect a
+cluster version); a manual pin can also be created directly via
+`POST /api/v1/targets/{id}/versions` (see [schema/API.md](schema/API.md#targets)).
+
+Auto-created manual pins are **not** removed when a member is removed (the `DELETE` version endpoint
+is `403` until authentication lands, P10), so they accumulate — the same pre-P10 posture as
+superseded frozen node-config revisions; both are cleaned up when deletes are enabled.
 
 ### Deferred orchestration (D5)
 

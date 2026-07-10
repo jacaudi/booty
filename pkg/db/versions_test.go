@@ -29,6 +29,52 @@ func TestUpsertAndListTargetVersions(t *testing.T) {
 	}
 }
 
+func TestPinManualVersionPreservesCached(t *testing.T) {
+	s := newTestStore(t)
+	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A discovered, already-cached version.
+	if err := s.UpsertTargetVersion(TargetVersion{TargetID: tid, Version: "v1.11.0", Source: "discovered", Cached: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Manually pinning it must flip source to 'manual' WITHOUT resetting cached
+	// (which would force a needless re-download).
+	if err := s.PinManualVersion(tid, "v1.11.0"); err != nil {
+		t.Fatal(err)
+	}
+	vs, err := s.ListTargetVersions(tid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, v := range vs {
+		if v.Version == "v1.11.0" {
+			found = true
+			if v.Source != "manual" {
+				t.Errorf("source = %q, want manual", v.Source)
+			}
+			if !v.Cached {
+				t.Error("pinning reset cached to false (would force a needless re-download)")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("pinned version missing")
+	}
+	// A pin on a brand-new version starts uncached.
+	if err := s.PinManualVersion(tid, "v1.9.0"); err != nil {
+		t.Fatal(err)
+	}
+	vs, _ = s.ListTargetVersions(tid)
+	for _, v := range vs {
+		if v.Version == "v1.9.0" && (v.Source != "manual" || v.Cached) {
+			t.Fatalf("new manual pin = %+v, want source=manual cached=false", v)
+		}
+	}
+}
+
 func TestDeleteTargetVersion(t *testing.T) {
 	s := newTestStore(t)
 	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "discovery", Enabled: true})
