@@ -60,6 +60,8 @@ var args struct {
 	configRevisionsKeep int
 
 	signaturePolicy string
+
+	secretsKey string
 }
 
 var (
@@ -106,6 +108,13 @@ func init() {
 		"signaturePolicy",
 		"warn",
 		"Signature policy: strict (reject unverified), warn (block tampering, allow+log other verify failures), off (no verification)",
+	)
+
+	flags.StringVar(
+		&args.secretsKey,
+		"secretsKey",
+		"",
+		"Path to an age identity file (age-keygen output) encrypting Talos cluster secrets at rest; unset disables cluster create/import/generation (fail-closed)",
 	)
 
 	flags.StringVar(
@@ -271,6 +280,10 @@ func run(cmd *cobra.Command, argv []string) error {
 	config.LoadConfig(cmd)
 
 	if err := config.ValidateSignaturePolicy(); err != nil {
+		return err
+	}
+
+	if err := config.ValidateSecretsKey(); err != nil {
 		return err
 	}
 
