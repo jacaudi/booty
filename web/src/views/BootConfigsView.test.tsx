@@ -60,4 +60,75 @@ describe('BootConfigsView', () => {
     expect(await screen.findByDisplayValue('EXISTING SOURCE CONTENT')).toBeInTheDocument()
     expect(configsApi.getConfig).toHaveBeenCalledWith(7)
   })
+
+  it('lists schematics with short ID and extension tags in the Schematics tab', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      {
+        id: 3,
+        name: 'iscsi',
+        kind: 'schematic',
+        activeRevision: 1,
+        revisionCount: 1,
+        derivedSchematicId: 'a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8',
+        updatedAt: '',
+      },
+    ])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(configsApi.getConfig).mockResolvedValue({
+      id: 3,
+      name: 'iscsi',
+      kind: 'schematic',
+      activeRevision: 1,
+      revisionCount: 1,
+      updatedAt: '',
+      source:
+        'customization:\n  systemExtensions:\n    officialExtensions:\n      - siderolabs/iscsi-tools\n',
+    })
+    render(<BootConfigsView />)
+    await userEvent.click(screen.getByRole('tab', { name: /schematics/i }))
+    await waitFor(() => expect(screen.getByText('iscsi')).toBeInTheDocument())
+    expect(screen.getByText('a1b2c3…a7b8')).toBeInTheDocument()
+    expect(screen.getByText('siderolabs/iscsi-tools')).toBeInTheDocument()
+  })
+
+  it('Configs tab excludes schematic-kind entries', async () => {
+    // Separate test (no tab switch): antd keeps visited tab panels mounted but
+    // hidden, so a switch-back queryByText would false-fail on the hidden row.
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 1, name: 'prod', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+      { id: 3, name: 'iscsi', kind: 'schematic', activeRevision: 1, revisionCount: 1, derivedSchematicId: 'a1b2c3d4', updatedAt: '' },
+    ])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    render(<BootConfigsView />)
+    await waitFor(() => expect(screen.getByText('prod')).toBeInTheDocument())
+    expect(screen.queryByText('iscsi')).not.toBeInTheDocument()
+  })
+
+  it('creates a schematic from form fields, composing the customization YAML', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(configsApi.createConfig).mockResolvedValue({
+      id: 9,
+      name: 'gpu',
+      kind: 'schematic',
+      activeRevision: 1,
+      revisionCount: 1,
+      derivedSchematicId: 'e5f6a7b8',
+      updatedAt: '',
+    })
+    render(<BootConfigsView />)
+    await userEvent.click(screen.getByRole('tab', { name: /schematics/i }))
+    await userEvent.click(await screen.findByRole('button', { name: /create schematic/i }))
+    await userEvent.type(screen.getByLabelText('Name'), 'gpu') // exact: /name/i would also match "Overlay name"
+    await userEvent.type(screen.getByLabelText(/official extensions/i), 'siderolabs/nvidia-open-gpu-kernel-modules{enter}')
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() =>
+      expect(configsApi.createConfig).toHaveBeenCalledWith({
+        name: 'gpu',
+        kind: 'schematic',
+        source:
+          'customization:\n  systemExtensions:\n    officialExtensions:\n      - siderolabs/nvidia-open-gpu-kernel-modules\n',
+      }),
+    )
+  })
 })

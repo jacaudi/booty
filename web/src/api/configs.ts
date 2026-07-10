@@ -3,9 +3,10 @@ import { request } from './client'
 export interface Config {
   id: number
   name: string
-  kind: 'butane' | 'machineconfig' | 'preseed'
+  kind: 'butane' | 'machineconfig' | 'preseed' | 'schematic'
   activeRevision: number
   revisionCount: number
+  derivedSchematicId?: string
   updatedAt: string
 }
 
