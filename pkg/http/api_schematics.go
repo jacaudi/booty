@@ -53,31 +53,9 @@ func registerSchematics(api huma.API, deps APIDeps) {
 		if h.ClusterID != nil {
 			return nil, huma.Error422UnprocessableEntity("host is a cluster member; change its schematic via the cluster add-member path")
 		}
-		if (in.Body.ConfigID == nil) == (in.Body.Schematic == "") {
-			return nil, huma.Error422UnprocessableEntity("exactly one of configId or schematic is required")
-		}
-
-		id := in.Body.Schematic
-		if in.Body.ConfigID != nil {
-			cfg, err := deps.Store.GetConfig(*in.Body.ConfigID)
-			if errors.Is(err, db.ErrNotFound) {
-				return nil, huma.Error422UnprocessableEntity("config does not exist")
-			}
-			if err != nil {
-				return nil, huma.Error500InternalServerError("get config", err)
-			}
-			if cfg.Kind != "schematic" {
-				return nil, huma.Error422UnprocessableEntity("config is not a schematic")
-			}
-			rev, err := deps.Store.GetActiveRevision(*in.Body.ConfigID)
-			if err != nil || rev.DerivedSchematicID == nil {
-				return nil, huma.Error422UnprocessableEntity("schematic config has no built revision")
-			}
-			id = *rev.DerivedSchematicID
-		}
-		// The bound value becomes a cache path segment + factory URL segment.
-		if err := cache.ValidatePathParam(id); err != nil {
-			return nil, huma.Error422UnprocessableEntity("schematic id is not path-safe", err)
+		id, err := resolveSchematicID(deps.Store, in.Body.ConfigID, in.Body.Schematic)
+		if err != nil {
+			return nil, err
 		}
 		if err := hardware.SetSchematic(in.MAC, id); err != nil {
 			return nil, huma.Error500InternalServerError("bind schematic", err)
@@ -88,4 +66,38 @@ func registerSchematics(api huma.API, deps APIDeps) {
 		}
 		return &struct{ Body *hardware.Host }{Body: updated}, nil
 	})
+}
+
+// resolveSchematicID resolves a schematic binding to its content-addressed ID:
+// a configID names a schematic-kind config (its CURRENT active revision's
+// derived ID is bound), else raw is a free-entry ID. Exactly one must be
+// supplied. The result is path-validated (it becomes a cache + factory URL
+// segment). Extracted when the P6 add-member path became a second consumer
+// (DRY: single source for "schematic binding -> ID").
+func resolveSchematicID(store *db.Store, configID *int64, raw string) (string, error) {
+	if (configID == nil) == (raw == "") {
+		return "", huma.Error422UnprocessableEntity("exactly one of configId or schematic is required")
+	}
+	id := raw
+	if configID != nil {
+		cfg, err := store.GetConfig(*configID)
+		if errors.Is(err, db.ErrNotFound) {
+			return "", huma.Error422UnprocessableEntity("config does not exist")
+		}
+		if err != nil {
+			return "", huma.Error500InternalServerError("get config", err)
+		}
+		if cfg.Kind != "schematic" {
+			return "", huma.Error422UnprocessableEntity("config is not a schematic")
+		}
+		rev, err := store.GetActiveRevision(*configID)
+		if err != nil || rev.DerivedSchematicID == nil {
+			return "", huma.Error422UnprocessableEntity("schematic config has no built revision")
+		}
+		id = *rev.DerivedSchematicID
+	}
+	if err := cache.ValidatePathParam(id); err != nil {
+		return "", huma.Error422UnprocessableEntity("schematic id is not path-safe", err)
+	}
+	return id, nil
 }

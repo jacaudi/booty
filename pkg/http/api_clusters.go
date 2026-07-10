@@ -2,15 +2,21 @@ package http
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
+	"github.com/jeefy/booty/pkg/hardware"
 	talosconfig "github.com/siderolabs/talos/pkg/machinery/config"
+	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/spf13/viper"
 )
 
@@ -298,5 +304,311 @@ func ensureClusterMemberTargets(deps APIDeps, clusterID int64) error {
 	return nil
 }
 
-// registerClusterMembers is filled in by Task 14 (import + add/remove member).
-func registerClusterMembers(api huma.API, deps APIDeps) {}
+// clusterHostPatchLayers builds a member's ordered patch source list from the
+// cluster's bound taloscluster spec + the (effective) per-host patch, layered
+// cluster → role → host (§9). A cluster with no spec contributes no
+// cluster/role layers. The per-host patch is a DURABLE input, persisted on the
+// frozen revision and reused on re-bind (see effectiveHostPatch / freezeAndBind).
+func clusterHostPatchLayers(store *db.Store, cluster *db.Cluster, machineType, hostPatch string) ([]string, error) {
+	var spec clusterSpec
+	if cluster.SpecConfigID != nil {
+		if rev, err := store.GetActiveRevision(*cluster.SpecConfigID); err == nil {
+			src, derr := base64.StdEncoding.DecodeString(rev.SourceB64)
+			if derr != nil {
+				return nil, derr
+			}
+			spec, err = parseClusterSpec(src)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return patchSourcesFor(spec, machineType, hostPatch), nil
+}
+
+// addMember generates + freezes + binds one member (design §6.3): compose its
+// patch layers, generate its config (allowSched=true when this is a CP and the
+// cluster has no worker yet — D9/D-D), freeze it age-encrypted, pre-cache its
+// (schematic, version) assets, and write the host membership columns. Shared by
+// the add-member endpoint and the import path.
+func addMember(deps APIDeps, cluster *db.Cluster, mac, machineType, schematic, hostPatch string) error {
+	patches, err := clusterHostPatchLayers(deps.Store, cluster, machineType, hostPatch)
+	if err != nil {
+		return huma.Error422UnprocessableEntity("compose patches: "+err.Error(), err)
+	}
+	bundleRaw, err := decryptSecrets(cluster.SecretsEnc)
+	if err != nil {
+		if errors.Is(err, config.ErrNoSecretsKey) {
+			return huma.Error422UnprocessableEntity("cluster operations require --secretsKey (fail-closed)")
+		}
+		return huma.Error500InternalServerError("decrypt bundle", err)
+	}
+	bundle, err := unmarshalBundle(bundleRaw)
+	if err != nil {
+		return huma.Error500InternalServerError("load bundle", err)
+	}
+	singlePlane := machineType == "controlplane" && !clusterHasWorker(deps.Store, cluster.ID)
+	produced, err := generateNodeConfig(nodeGenInput{
+		Bundle: bundle, Name: cluster.Name, Endpoint: cluster.Endpoint,
+		TalosVersion: cluster.TalosVersion, K8sVersion: cluster.K8sVersion,
+		Schematic: schematic, MachineType: machineType,
+		SinglePlaneScheduling: singlePlane, PatchSources: patches,
+	})
+	if err != nil {
+		return huma.Error422UnprocessableEntity("generate node config: "+err.Error(), err)
+	}
+	// hostPatch is persisted on the frozen revision so a later re-bind that omits
+	// it can reuse it (Fold 3 / §1.1 durable inputs). Generated members store the
+	// effective patch; imported members store "" (their bytes are verbatim).
+	if err := freezeAndBind(deps, cluster.ID, mac, machineType, schematic, produced, "generated", hostPatch); err != nil {
+		return err
+	}
+	return nil
+}
+
+// effectiveHostPatch resolves the per-host patch for an add-member / re-bind:
+// the request patch when supplied; otherwise, on a re-bind (the host already
+// has an active frozen revision), the patch persisted on that revision — so the
+// customization survives a re-bind that omits it; otherwise "". This is what
+// makes the per-host patch a durable generation input (Fold 3).
+func effectiveHostPatch(deps APIDeps, host *hardware.Host, requestPatch string) string {
+	if strings.TrimSpace(requestPatch) != "" {
+		return requestPatch
+	}
+	if host.NodeConfigID != nil {
+		if nc, err := deps.Store.GetClusterNodeConfig(*host.NodeConfigID); err == nil {
+			return nc.HostPatch
+		}
+	}
+	return ""
+}
+
+// freezeAndBind age-encrypts the produced bytes, appends a frozen revision
+// (persisting hostPatch — the per-host patch that produced them, "" for
+// imported/patch-less), pre-caches the member's schematic assets, and writes
+// the host membership columns (schematic via P5's setter, cluster/type/
+// node-config via P6's). It is the shared tail of both generate and import.
+func freezeAndBind(deps APIDeps, clusterID int64, mac, machineType, schematic string, produced []byte, source, hostPatch string) error {
+	enc, err := encryptSecrets(produced)
+	if err != nil {
+		if errors.Is(err, config.ErrNoSecretsKey) {
+			return huma.Error422UnprocessableEntity("cluster operations require --secretsKey (fail-closed)")
+		}
+		return huma.Error500InternalServerError("encrypt node config", err)
+	}
+	sum := sha256.Sum256(produced)
+	ncID, _, err := deps.Store.AddClusterNodeConfig(mac, clusterID, enc, hex.EncodeToString(sum[:]), source, hostPatch)
+	if err != nil {
+		return huma.Error500InternalServerError("freeze node config", err)
+	}
+	// Pre-cache the member's boot assets (retention-pinned, §8) and kick a
+	// reconcile. Failure is non-fatal (self-heals next tick) — log via Trigger's
+	// own path; here a target error is surfaced only if EnsureSchematicTarget fails.
+	if schematic != "" {
+		if err := cache.EnsureSchematicTarget(deps.Store, schematic); err != nil {
+			return huma.Error422UnprocessableEntity("ensure schematic cache target: "+err.Error(), err)
+		}
+		deps.Trigger()
+	}
+	if schematic != "" {
+		if err := hardware.SetSchematic(mac, schematic); err != nil {
+			return huma.Error500InternalServerError("bind schematic", err)
+		}
+	}
+	if err := hardware.SetHostCluster(mac, &clusterID); err != nil {
+		return huma.Error500InternalServerError("bind cluster", err)
+	}
+	if err := hardware.SetHostMachineType(mac, machineType); err != nil {
+		return huma.Error500InternalServerError("bind machine type", err)
+	}
+	if err := hardware.SetHostNodeConfig(mac, &ncID); err != nil {
+		return huma.Error500InternalServerError("bind node config", err)
+	}
+	return nil
+}
+
+// clusterHasWorker reports whether the cluster already has a worker member (D9:
+// a control-plane generated while no worker exists gets allowSchedulingOn
+// ControlPlanes=true so a single-node cluster is usable).
+func clusterHasWorker(store *db.Store, clusterID int64) bool {
+	members, err := store.ListClusterMembers(clusterID)
+	if err != nil {
+		return true // conservative: on error, do NOT taint the CP as schedulable
+	}
+	for _, m := range members {
+		if m.MachineType == "worker" {
+			return true
+		}
+	}
+	return false
+}
+
+func registerClusterMembers(api huma.API, deps APIDeps) {
+	huma.Register(api, huma.Operation{
+		OperationID: "add-cluster-member", Method: http.MethodPost, Path: "/clusters/{id}/members",
+		Summary: "Add (or re-bind) a host to a cluster", Tags: []string{"clusters"},
+	}, func(ctx context.Context, in *struct {
+		ID   int64 `path:"id"`
+		Body struct {
+			MAC         string `json:"mac"`
+			MachineType string `json:"machineType"`
+			SchematicID *int64 `json:"schematicId,omitempty"`
+			Schematic   string `json:"schematic,omitempty"`
+			Patch       string `json:"patch,omitempty"`
+		}
+	}) (*struct{ Body ClusterDTO }, error) {
+		cluster, err := deps.Store.GetCluster(in.ID)
+		if errors.Is(err, db.ErrNotFound) {
+			return nil, huma.Error404NotFound("cluster not found")
+		}
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get cluster", err)
+		}
+		if in.Body.MachineType != "controlplane" && in.Body.MachineType != "worker" {
+			return nil, huma.Error422UnprocessableEntity("machineType must be controlplane or worker")
+		}
+		h, err := hardware.GetMacAddress(in.Body.MAC)
+		if errors.Is(err, hardware.ErrNotFound) {
+			return nil, huma.Error404NotFound("host not found")
+		}
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		}
+		if h.OS != "talos" {
+			return nil, huma.Error422UnprocessableEntity("cluster membership applies to Talos hosts only")
+		}
+		// A host is in <=1 cluster: reject a host already bound to ANOTHER cluster
+		// (re-binding to the SAME cluster is allowed — that is the regenerate path).
+		if h.ClusterID != nil && *h.ClusterID != in.ID {
+			return nil, huma.Error422UnprocessableEntity("host already belongs to another cluster")
+		}
+		// Resolve the member's schematic: explicit config/raw, else the host's
+		// current schematic, else the operator's configured --talosSchematic
+		// default (Minor: parity with the tftp non-member path and clusterPins'
+		// "" resolution — NOT the DefaultTalosSchematic constant, which would
+		// silently give a member vanilla instead of the configured default).
+		schematic := h.Schematic
+		if in.Body.SchematicID != nil || in.Body.Schematic != "" {
+			schematic, err = resolveSchematicID(deps.Store, in.Body.SchematicID, in.Body.Schematic)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if schematic == "" {
+			schematic = viper.GetString(config.TalosSchematic)
+		}
+		// Per-host patch: request patch, else (on re-bind) the persisted patch
+		// from the current frozen revision (Fold 3 — durable input, reused).
+		hostPatch := effectiveHostPatch(deps, h, in.Body.Patch)
+		if err := addMember(deps, cluster, h.MAC, in.Body.MachineType, schematic, hostPatch); err != nil {
+			return nil, err
+		}
+		return clusterDTOResp(deps.Store, in.ID)
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "remove-cluster-member", Method: http.MethodDelete, Path: "/clusters/{id}/members/{mac}",
+		Summary: "Remove a host from a cluster (stop provisioning)", Tags: []string{"clusters"},
+	}, func(ctx context.Context, in *struct {
+		ID  int64  `path:"id"`
+		MAC string `path:"mac"`
+	}) (*struct{ Body ClusterDTO }, error) {
+		if _, err := deps.Store.GetCluster(in.ID); errors.Is(err, db.ErrNotFound) {
+			return nil, huma.Error404NotFound("cluster not found")
+		}
+		h, err := hardware.GetMacAddress(in.MAC)
+		if errors.Is(err, hardware.ErrNotFound) {
+			return nil, huma.Error404NotFound("host not found")
+		}
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		}
+		if h.ClusterID == nil || *h.ClusterID != in.ID {
+			return nil, huma.Error422UnprocessableEntity("host is not a member of this cluster")
+		}
+		// Clear membership (revert to P4 precedence, §6.4) then prune frozen
+		// revisions. node_config_id first so no row references a deleted config.
+		if err := hardware.SetHostNodeConfig(in.MAC, nil); err != nil {
+			return nil, huma.Error500InternalServerError("clear node config", err)
+		}
+		if err := hardware.SetHostMachineType(in.MAC, ""); err != nil {
+			return nil, huma.Error500InternalServerError("clear machine type", err)
+		}
+		if err := hardware.SetHostCluster(in.MAC, nil); err != nil {
+			return nil, huma.Error500InternalServerError("clear cluster", err)
+		}
+		if err := deps.Store.DeleteClusterNodeConfigs(h.MAC, in.ID); err != nil {
+			return nil, huma.Error500InternalServerError("prune node configs", err)
+		}
+		return clusterDTOResp(deps.Store, in.ID)
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "import-cluster", Method: http.MethodPost, Path: "/clusters/import",
+		Summary: "Adopt an existing cluster from its controlplane.yaml", Tags: []string{"clusters"}, DefaultStatus: http.StatusCreated,
+	}, func(ctx context.Context, in *struct {
+		Body struct {
+			Name            string `json:"name"`
+			Controlplane    string `json:"controlplane"`
+			ControlplaneMAC string `json:"controlplaneMac"`
+		}
+	}) (*struct{ Body ClusterDTO }, error) {
+		if in.Body.Name == "" || in.Body.Controlplane == "" || in.Body.ControlplaneMAC == "" {
+			return nil, huma.Error422UnprocessableEntity("name, controlplane, and controlplaneMac are required")
+		}
+		prov, err := parseImportedConfig([]byte(in.Body.Controlplane))
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid controlplane config: "+err.Error(), err)
+		}
+		fields, err := extractClusterFields(prov)
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity(err.Error(), err) // worker-only rejected here
+		}
+		if fields.TalosVersion == "" {
+			return nil, huma.Error422UnprocessableEntity("could not determine Talos version from install image")
+		}
+		schematic := fields.Schematic
+		if schematic == "" {
+			schematic = viper.GetString(config.TalosSchematic)
+		}
+		// Reconstruct + persist the encrypted secrets bundle from the CP config.
+		// Reuse the already-parsed prov (Fold 5): secrets.NewBundleFromConfig takes
+		// the config.Config that config.Provider embeds — no second parse.
+		bundle := secrets.NewBundleFromConfig(secrets.NewFixedClock(fixedBundleClock), prov)
+		bundleRaw, err := marshalBundle(bundle)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("marshal bundle", err)
+		}
+		encBundle, err := encryptSecrets(bundleRaw)
+		if err != nil {
+			if errors.Is(err, config.ErrNoSecretsKey) {
+				return nil, huma.Error422UnprocessableEntity("import requires --secretsKey (fail-closed)")
+			}
+			return nil, huma.Error500InternalServerError("encrypt bundle", err)
+		}
+		cid, err := deps.Store.CreateCluster(in.Body.Name, fields.Endpoint, fields.TalosVersion, fields.K8sVersion, encBundle)
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity("create cluster (duplicate name?)", err)
+		}
+		cluster, err := deps.Store.GetCluster(cid)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("read cluster", err)
+		}
+		// Bind the CP host to the VERBATIM imported bytes (source='imported',
+		// byte-identical recreation, D8). Reuse freezeAndBind so the host is
+		// wired exactly like a generated member.
+		h, err := hardware.GetMacAddress(in.Body.ControlplaneMAC)
+		if errors.Is(err, hardware.ErrNotFound) {
+			return nil, huma.Error404NotFound("controlplane host not found")
+		}
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid controlplane MAC", err)
+		}
+		// Imported bytes are verbatim; there is no separate per-host patch, so
+		// host_patch is "" (Fold 3).
+		if err := freezeAndBind(deps, cluster.ID, h.MAC, "controlplane", schematic, []byte(in.Body.Controlplane), "imported", ""); err != nil {
+			return nil, err
+		}
+		return clusterDTOResp(deps.Store, cid)
+	})
+}
