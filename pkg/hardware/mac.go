@@ -425,6 +425,54 @@ func SetSchematic(mac, schematic string) error {
 	return err
 }
 
+// SetHostCluster writes (or clears, when clusterID is nil) the canonicalized
+// mac's cluster membership pointer through the store (P6 add/remove-member).
+func SetHostCluster(mac string, clusterID *int64) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		return st.SetHostCluster(key, clusterID)
+	})
+	if !had {
+		return errors.New("hardware: store not initialized")
+	}
+	return err
+}
+
+// SetHostMachineType writes the canonicalized mac's cluster machine type
+// ('controlplane' | 'worker'; "" clears) through the store.
+func SetHostMachineType(mac, machineType string) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		return st.SetHostMachineType(key, machineType)
+	})
+	if !had {
+		return errors.New("hardware: store not initialized")
+	}
+	return err
+}
+
+// SetHostNodeConfig writes (or clears, when nodeConfigID is nil) the
+// canonicalized mac's active frozen node-config pointer through the store.
+func SetHostNodeConfig(mac string, nodeConfigID *int64) error {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		return st.SetHostNodeConfig(key, nodeConfigID)
+	})
+	if !had {
+		return errors.New("hardware: store not initialized")
+	}
+	return err
+}
+
 // ListHosts returns every registered host (fresh copies).
 func ListHosts() ([]*Host, error) {
 	var out []*Host
