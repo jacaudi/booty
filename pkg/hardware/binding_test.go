@@ -67,3 +67,28 @@ func TestHardwareSetHostRoles(t *testing.T) {
 		t.Fatalf("host roles = %+v, want [alpha beta] (name asc)", got)
 	}
 }
+
+func TestHardwareSetSchematic(t *testing.T) {
+	bindingStore(t)
+	const mac = "aa:bb:cc:dd:ee:12"
+	if err := WriteMacAddress(mac, Host{OS: "talos"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSchematic(mac, "a1b2c3d4"); err != nil {
+		t.Fatalf("SetSchematic: %v", err)
+	}
+	h, err := GetMacAddress(mac)
+	if err != nil || h.Schematic != "a1b2c3d4" {
+		t.Fatalf("host schematic = %q (err %v), want a1b2c3d4", h.Schematic, err)
+	}
+	// Canonicalization: an uppercase/dash MAC reaches the same row.
+	if err := SetSchematic("AA-BB-CC-DD-EE-12", "e5f6a7b8"); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := GetMacAddress(mac); h.Schematic != "e5f6a7b8" {
+		t.Fatalf("canonicalized re-bind = %q, want e5f6a7b8", h.Schematic)
+	}
+	if err := SetSchematic("not-a-mac", "x"); err == nil {
+		t.Fatal("invalid MAC must be rejected")
+	}
+}

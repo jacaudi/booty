@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
@@ -17,12 +19,13 @@ import (
 
 // ConfigDTO is the wire shape of a config identity.
 type ConfigDTO struct {
-	ID             int64  `json:"id"`
-	Name           string `json:"name"`
-	Kind           string `json:"kind"`
-	ActiveRevision int    `json:"activeRevision"`
-	RevisionCount  int    `json:"revisionCount"`
-	UpdatedAt      string `json:"updatedAt"`
+	ID                 int64  `json:"id"`
+	Name               string `json:"name"`
+	Kind               string `json:"kind"`
+	ActiveRevision     int    `json:"activeRevision"`
+	RevisionCount      int    `json:"revisionCount"`
+	UpdatedAt          string `json:"updatedAt"`
+	DerivedSchematicID string `json:"derivedSchematicId,omitzero"` // kind='schematic' only: active revision's Factory ID
 }
 
 // RevisionDTO is the wire shape of one immutable revision.
@@ -34,7 +37,7 @@ type RevisionDTO struct {
 }
 
 func toConfigListDTO(r db.ConfigListRow) ConfigDTO {
-	return ConfigDTO{ID: r.ID, Name: r.Name, Kind: r.Kind, ActiveRevision: r.ActiveRevision, RevisionCount: r.RevisionCount, UpdatedAt: r.UpdatedAt}
+	return ConfigDTO{ID: r.ID, Name: r.Name, Kind: r.Kind, ActiveRevision: r.ActiveRevision, RevisionCount: r.RevisionCount, UpdatedAt: r.UpdatedAt, DerivedSchematicID: r.DerivedSchematicID}
 }
 
 // registerConfigs mounts /configs on the /api/v1 group. Mutations are OPEN in
@@ -69,23 +72,37 @@ func registerConfigs(api huma.API, deps APIDeps) {
 	}, func(ctx context.Context, in *struct {
 		Body struct {
 			Name   string `json:"name"`
-			Kind   string `json:"kind" enum:"butane,machineconfig,preseed"`
+			Kind   string `json:"kind" enum:"butane,machineconfig,preseed,schematic"`
 			Source string `json:"source"`
 		}
 	}) (*struct{ Body ConfigDTO }, error) {
 		if in.Body.Name == "" || in.Body.Source == "" {
 			return nil, huma.Error422UnprocessableEntity("name and source are required")
 		}
-		// Validate by a stub-var render (subsumes /validate). Bad butane → 422.
-		if _, _, report, err := renderConfig(in.Body.Kind, []byte(in.Body.Source), stubVars()); err != nil {
-			return nil, huma.Error422UnprocessableEntity("config validation failed: "+report, err)
+		// Per-kind validation gate (SGE I3): render for renderable kinds,
+		// Factory build for schematics. Runs BEFORE CreateConfig so a
+		// failed build leaves no config row, no revision, no target.
+		derivedID, err := validateConfigSource(ctx, in.Body.Kind, in.Body.Source)
+		if err != nil {
+			return nil, err
 		}
 		id, err := deps.Store.CreateConfig(in.Body.Name, in.Body.Kind)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("create config (duplicate name?)", err)
 		}
-		if err := appendActiveRevision(deps.Store, id, in.Body.Source); err != nil {
+		if err := appendActiveRevision(deps.Store, id, in.Body.Source, derivedID); err != nil {
 			return nil, huma.Error500InternalServerError("add revision", err)
+		}
+		if derivedID != nil {
+			// The config+revision are already committed at this point, so a
+			// pre-cache failure must not surface as a 500 misrepresenting a
+			// resource that actually exists. Pre-caching is self-healing: the
+			// reconciler's seedTargets/hostTalosSchematics re-ensures the
+			// target on the next tick — log and continue.
+			if err := ensureSchematicPreCache(deps, *derivedID); err != nil {
+				slog.Warn("schematic pre-cache failed; config created, will self-heal on next reconcile",
+					"config_id", id, "config_name", in.Body.Name, "schematic", *derivedID, "error", err)
+			}
 		}
 		return configDTOResp(deps.Store, id)
 	})
@@ -118,6 +135,9 @@ func registerConfigs(api huma.API, deps APIDeps) {
 		out.Body.ConfigDTO = ConfigDTO{ID: c.ID, Name: c.Name, Kind: c.Kind, RevisionCount: n, UpdatedAt: c.UpdatedAt}
 		if rev, err := deps.Store.GetActiveRevision(in.ID); err == nil {
 			out.Body.ActiveRevision = rev.Revision
+			if rev.DerivedSchematicID != nil {
+				out.Body.DerivedSchematicID = *rev.DerivedSchematicID
+			}
 			if src, derr := base64.StdEncoding.DecodeString(rev.SourceB64); derr == nil {
 				out.Body.Source = string(src)
 			}
@@ -144,14 +164,24 @@ func registerConfigs(api huma.API, deps APIDeps) {
 		if in.Body.Source == "" {
 			return nil, huma.Error422UnprocessableEntity("source is required")
 		}
-		if _, _, report, verr := renderConfig(c.Kind, []byte(in.Body.Source), stubVars()); verr != nil {
-			return nil, huma.Error422UnprocessableEntity("config validation failed: "+report, verr)
+		derivedID, verr := validateConfigSource(ctx, c.Kind, in.Body.Source)
+		if verr != nil {
+			return nil, verr
 		}
-		if err := appendActiveRevision(deps.Store, in.ID, in.Body.Source); err != nil {
+		if err := appendActiveRevision(deps.Store, in.ID, in.Body.Source, derivedID); err != nil {
 			return nil, huma.Error500InternalServerError("add revision", err)
 		}
 		if err := deps.Store.PruneRevisions(in.ID, viper.GetInt(config.ConfigRevisionsKeep)); err != nil {
 			return nil, huma.Error500InternalServerError("prune revisions", err)
+		}
+		if derivedID != nil {
+			// Same rationale as create-config: the new revision is already
+			// committed, and pre-caching self-heals on the next reconcile —
+			// log and continue instead of a misleading 500.
+			if err := ensureSchematicPreCache(deps, *derivedID); err != nil {
+				slog.Warn("schematic pre-cache failed; config updated, will self-heal on next reconcile",
+					"config_id", in.ID, "config_name", c.Name, "schematic", *derivedID, "error", err)
+			}
 		}
 		return configDTOResp(deps.Store, in.ID)
 	})
@@ -177,6 +207,11 @@ func registerConfigs(api huma.API, deps APIDeps) {
 		}
 		if err != nil {
 			return nil, huma.Error500InternalServerError("get config", err)
+		}
+		if c.Kind == "schematic" {
+			// Schematics are not templates: they resolve to an ID + a cache
+			// target and are never rendered or served (design §4).
+			return nil, huma.Error422UnprocessableEntity("schematic configs are not renderable")
 		}
 		rev, err := deps.Store.GetActiveRevision(in.ID)
 		if err != nil {
@@ -281,11 +316,48 @@ func registerConfigs(api huma.API, deps APIDeps) {
 	})
 }
 
+// validateConfigSource is the per-kind validation gate shared by create-config
+// and update-config (SGE I3). Renderable kinds (butane/machineconfig/preseed)
+// validate by a stub-var render; 'schematic' validates by BUILDING against the
+// Image Factory — the Factory owns schematic validation (design §4) and the
+// returned content-addressed ID becomes the revision's derived_schematic_id.
+// P6's 'taloscluster' (the next non-renderable kind, validated by spec/patch
+// parse) slots in as a new case arm here — an additive change, not an edit to
+// the create/update handlers (No-Wall).
+// The returned *string is non-nil only for kind='schematic'.
+func validateConfigSource(ctx context.Context, kind, source string) (*string, error) {
+	switch kind {
+	case "schematic":
+		id, err := buildSchematic(ctx, viper.GetString(config.TalosFactoryURL), []byte(source))
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity("schematic build failed: "+err.Error(), err)
+		}
+		return &id, nil
+	default: // renderable kinds: butane | machineconfig | preseed
+		if _, _, report, err := renderConfig(kind, []byte(source), stubVars()); err != nil {
+			return nil, huma.Error422UnprocessableEntity("config validation failed: "+report, err)
+		}
+		return nil, nil
+	}
+}
+
+// ensureSchematicPreCache ensures the boot-asset cache target for a freshly
+// built schematic and kicks an async reconcile so the assets fetch eagerly
+// (design D4). Shared by the create and update handlers.
+func ensureSchematicPreCache(deps APIDeps, id string) error {
+	if err := cache.EnsureSchematicTarget(deps.Store, id); err != nil {
+		return huma.Error500InternalServerError("ensure schematic cache target", err)
+	}
+	deps.Trigger()
+	return nil
+}
+
 // appendActiveRevision base64-encodes source, records its sha256, appends the
-// revision, and advances the config's active pointer.
-func appendActiveRevision(store *db.Store, configID int64, source string) error {
+// revision (with its Factory-derived schematic ID, when kind='schematic'), and
+// advances the config's active pointer.
+func appendActiveRevision(store *db.Store, configID int64, source string, derivedSchematicID *string) error {
 	sum := sha256.Sum256([]byte(source))
-	revID, _, err := store.AddConfigRevision(configID, base64.StdEncoding.EncodeToString([]byte(source)), hex.EncodeToString(sum[:]))
+	revID, _, err := store.AddConfigRevision(configID, base64.StdEncoding.EncodeToString([]byte(source)), hex.EncodeToString(sum[:]), derivedSchematicID)
 	if err != nil {
 		return err
 	}
@@ -301,6 +373,9 @@ func configDTOResp(store *db.Store, id int64) (*struct{ Body ConfigDTO }, error)
 	dto := ConfigDTO{ID: c.ID, Name: c.Name, Kind: c.Kind, RevisionCount: n, UpdatedAt: c.UpdatedAt}
 	if rev, err := store.GetActiveRevision(id); err == nil {
 		dto.ActiveRevision = rev.Revision
+		if rev.DerivedSchematicID != nil {
+			dto.DerivedSchematicID = *rev.DerivedSchematicID
+		}
 	}
 	return &struct{ Body ConfigDTO }{Body: dto}, nil
 }

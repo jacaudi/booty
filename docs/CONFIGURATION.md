@@ -94,6 +94,46 @@ family → `butane` kind, since Ignition is Butane's compiled wire format). See
 [schema/DATABASE.md](schema/DATABASE.md#configs) for the enum and its relationship to family
 `ConfigKind`.
 
+## Talos schematics (P5)
+
+A Talos **schematic** is a `configs` row of `kind='schematic'`: its `source` is Image Factory
+customization YAML, and saving it **builds** against the Factory (`POST <talosFactoryURL>/schematics`)
+rather than rendering a template. See [schema/API.md](schema/API.md#configs) for the full
+create/edit/preview/rollback contract and [schema/DATABASE.md](schema/DATABASE.md#config_revisions)
+for `derived_schematic_id`.
+
+**Scope — extensions and overlays only.** The Image Factory's installer and initramfs images honor
+only system extensions (and, for SBCs, an overlay) — `extraKernelArgs` and `meta` are silently
+**ignored** on both of booty's Talos paths: the netboot `kernel`/`initramfs` served from
+`/image/<schematic>/<version>/…`, and the installed system's `installer/<schematic>:<version>` image.
+Exposing those two customization fields would be a footgun (a knob that visibly does nothing), so
+they are documented as **not applicable** rather than supported. Kernel arguments still have a real
+home in booty's flow: the iPXE boot cmdline for the netboot kernel, or `machine.install.extraKernelArgs`
+in a `machineconfig`-kind config for the installed system.
+
+**Air-gap.** There is no bare-ID import — a schematic ID with no Factory serving its bytes is
+useless, since the ID only names content the Factory hosts (both the boot-asset paths and the
+installer image are fetched *from* the Factory by ID). For an air-gapped deployment, point the
+existing `--talosFactoryURL` flag at a private or self-hosted Image Factory: both schematic **builds**
+(`POST`/`PUT /configs/{id}`) and the reconciler's runtime `/image` fetches follow the same flag, so a
+private Factory serves both without further configuration.
+
+**The vanilla schematic.** `--talosSchematic`'s default is the Image Factory's published "vanilla"
+(no-extensions) schematic ID, pinned as the compile-time constant `config.DefaultTalosSchematic`. At
+every startup, booty also seeds a config named `vanilla` (`kind='schematic'`, source
+`customization: {}\n`) whose revision records that same constant as its `derived_schematic_id`
+directly — **no Factory call is made** to do this, since schematics are content-addressed and the
+vanilla ID is already known. This keeps startup safe even when the configured Factory is unreachable.
+Seeding is create-if-absent by name: a config already named `vanilla` (from a prior run, or
+operator-created) makes it a no-op.
+
+**Pre-caching on save.** Saving a schematic config (create or edit) ensures a Talos discovery-mode
+cache target for the built ID — windowed by `--talosRetainMinors`, the same as the predefined Talos
+target — and triggers an async reconcile pass, so boot assets pre-fetch instead of waiting for a host
+to request them. Schematic-derived targets are **not** pruned when their owning config is deleted:
+`DELETE /api/v1/configs/{id}` is `403` until auth (P10) anyway, so this is over-caching only, not a
+dangling reference.
+
 ## Signature verification (`--signaturePolicy`)
 
 booty verifies the integrity of the boot artifacts it downloads before serving them. The mechanism

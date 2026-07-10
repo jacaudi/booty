@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, Button, Form, Modal, Select, Space, Table, Typography, message } from 'antd'
+import { Alert, AutoComplete, Button, Form, Modal, Select, Space, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { Host } from '../api/types'
-import { approveHostWith, listHosts, revokeHost, setMenuMode } from '../api/client'
+import { approveHostWith, bindSchematic, listHosts, revokeHost, setMenuMode } from '../api/client'
 import type { Config } from '../api/configs'
 import { listConfigs } from '../api/configs'
 import type { Role } from '../api/roles'
@@ -60,11 +60,19 @@ export default function HostsView() {
     if (!allowing) return
     const values = await allowForm.validateFields()
     const mac = allowing.mac
-    await act(
-      () => approveHostWith(mac, { configId: values.configId, roleIds: values.roleIds }),
-      mac,
-      `Approved ${mac}`,
-    )
+    try {
+      if (values.schematic) {
+        // Bind BEFORE approve so approve's target-param encoding picks the
+        // schematic up (approve reads host.Schematic at approval time).
+        const byName = configs.find((c) => c.kind === 'schematic' && c.name === values.schematic)
+        await bindSchematic(mac, byName ? { configId: byName.id } : { schematic: values.schematic })
+      }
+      await approveHostWith(mac, { configId: values.configId, roleIds: values.roleIds })
+      message.success(`Approved ${mac}`)
+      await load()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'action failed')
+    }
     setAllowing(null)
   }
 
@@ -141,7 +149,7 @@ export default function HostsView() {
             <Select
               allowClear
               placeholder="none"
-              options={configs.map((c) => ({ value: c.id, label: c.name }))}
+              options={configs.filter((c) => c.kind !== 'schematic').map((c) => ({ value: c.id, label: c.name }))}
             />
           </Form.Item>
           <Form.Item name="roleIds" label="Roles">
@@ -152,6 +160,17 @@ export default function HostsView() {
               options={roles.map((r) => ({ value: r.id, label: r.name }))}
             />
           </Form.Item>
+          {allowing?.os === 'talos' && (
+            <Form.Item name="schematic" label="Talos schematic" help="pick a named schematic or paste a raw ID">
+              <AutoComplete
+                allowClear
+                placeholder="vanilla"
+                options={configs
+                  .filter((c) => c.kind === 'schematic')
+                  .map((c) => ({ value: c.name, label: c.name }))}
+              />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </Space>

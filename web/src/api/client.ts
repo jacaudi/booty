@@ -33,6 +33,13 @@ export function bindHost(mac: string, body: { configId?: number; roleIds?: numbe
   return request(`/hosts/${mac}/bind`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 }
 
+// bindSchematic writes a Talos schematic onto a host (P5): configId picks a
+// named schematic-kind config (its current built ID is bound server-side);
+// schematic is the raw free-entry ID. Exactly one is required.
+export function bindSchematic(mac: string, body: { configId?: number; schematic?: string }): Promise<unknown> {
+  return request(`/hosts/${mac}/schematic`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+}
+
 export function revokeHost(mac: string): Promise<unknown> {
   return request(`/hosts/${mac}/revoke`, { method: 'POST' })
 }

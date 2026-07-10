@@ -60,7 +60,8 @@ Talos); see [STORAGE.md](STORAGE.md).
 Migrations are embedded (`pkg/db/migrations/`) and applied up-only under
 `PRAGMA user_version`. P1a introduces four tables; P3a adds a fifth (`cache_entries`); P4 adds four
 more (`configs`, `config_revisions`, `roles`, `host_roles`) plus a `hosts.config_id` column, all in
-one additive migration — re-running it is a no-op.
+one additive migration — re-running it is a no-op. P5 (migration `0004`) extends `configs.kind` to
+admit `'schematic'` and adds `config_revisions.derived_schematic_id` — see below.
 
 ### `targets`
 `id`, `os`, `arch`, `params` (JSON TEXT), `mode` (`discovery`|`manual`),
@@ -157,9 +158,27 @@ Boot-config identities (P4). The live source lives in the revision pointed at by
 |--------|------|---------|
 | `id` | INTEGER PK AUTOINCREMENT | Stable row ID used by the API (`/configs/{id}`). |
 | `name` | TEXT NOT NULL UNIQUE | Operator-chosen config name. |
-| `kind` | TEXT NOT NULL CHECK (`butane`\|`machineconfig`\|`preseed`) | The config source dialect the operator authors. See "`kind` vs family `ConfigKind`" below. |
+| `kind` | TEXT NOT NULL CHECK (`butane`\|`machineconfig`\|`preseed`\|`schematic`) | The config source dialect the operator authors (`schematic` added in P5). See "`kind` vs family `ConfigKind`" below. |
 | `active_revision_id` | INTEGER → `config_revisions(id)` | The currently-live revision. `NULL` until the first revision is added. |
 | `created_at`/`updated_at` | TEXT | Timestamps; `updated_at` bumps on every active-pointer move (create, edit, or rollback). |
+
+> **P5 — migration `0004` rebuilds this table.** SQLite cannot `ALTER` a
+> `CHECK` constraint, so extending `kind` to admit `'schematic'` required a
+> full copy → drop → rename rebuild (per SQLite's documented table-rebuild
+> procedure) rather than an additive column change. Rows and IDs are copied
+> verbatim; existing behavior for `butane`/`machineconfig`/`preseed` configs
+> is unchanged. Because `config_revisions` and `roles` hold foreign keys into
+> `configs`, the migration runner (`pkg/db/migrate.go`) now executes with
+> `PRAGMA foreign_keys = OFF` on a dedicated connection whenever at least one
+> migration is pending, so the rebuild's `DROP TABLE` does not fire an
+> implicit `ON DELETE CASCADE` into `config_revisions`. After the migration
+> batch it runs `PRAGMA foreign_key_check` — aborting with an error if
+> anything was left dangling — before re-enabling `foreign_keys`. A
+> steady-state reopen with no pending migrations skips this bracket entirely,
+> so it is byte-identical to the pre-P5 runner. This FK-off / rebuild /
+> foreign-key-check pattern is now the standing approach for any future
+> migration that needs to rebuild a table with dependents (e.g. to change
+> another `CHECK` constraint).
 
 ### `config_revisions`
 
@@ -174,14 +193,24 @@ row — it inserts a new one (`revision` = max+1 for the config) and repoints
 | `revision` | INTEGER NOT NULL | Per-config sequence number (1, 2, 3, …); `UNIQUE(config_id, revision)`. |
 | `source_b64` | TEXT NOT NULL | Base64-encoded config source (opaque to the DB; decoded and rendered by the HTTP layer). |
 | `source_sha256` | TEXT NOT NULL | Hex SHA-256 of the raw source, computed at write time. |
+| `derived_schematic_id` | TEXT (nullable) | **P5.** For `kind='schematic'` revisions, the Image Factory-returned content-addressed sha256 for this revision's source. `NULL` for every other kind. Written at INSERT time — revisions are immutable, so there is no post-insert setter. A schematic config's *current* ID is its active revision's value (see [API.md](API.md#configs) for how `POST`/`PUT /configs` build and store it). |
 | `created_at` | TEXT | Revision creation timestamp. |
 
 **Rollback** (`POST /configs/{id}/rollback`) repoints `active_revision_id` at an existing older
-revision — a pointer move, not a copy; no new revision is created. **Prune** (applied after every
-`PUT`, bounded by `--configRevisionsKeep`) deletes revisions outside the newest-N **union** the
-currently-active revision: the active row is never deleted even when it falls outside the newest-N
-window (e.g. after a rollback to an old revision followed by edits to a *different* config leaves
-this one's old active revision untouched). See [CONFIGURATION.md](../CONFIGURATION.md).
+revision — a pointer move, not a copy; no new revision is created. For a schematic config this
+re-points at that older revision's **already-stored** `derived_schematic_id` — no Factory rebuild
+occurs. **Prune** (applied after every `PUT`, bounded by `--configRevisionsKeep`) deletes revisions
+outside the newest-N **union** the currently-active revision: the active row is never deleted even
+when it falls outside the newest-N window (e.g. after a rollback to an old revision followed by
+edits to a *different* config leaves this one's old active revision untouched). See
+[CONFIGURATION.md](../CONFIGURATION.md).
+
+**Seeded `vanilla` config (P5).** At every startup, `http.SeedVanillaSchematic` create-if-absents a
+config named `vanilla` (`kind='schematic'`, source `customization: {}\n`). Its revision's
+`derived_schematic_id` is set directly to the known constant `config.DefaultTalosSchematic` (also
+the `--talosSchematic` flag default) — **without** a Factory POST, since schematics are
+content-addressed and the vanilla ID is already known. Idempotent: a config already named `vanilla`
+(from a prior run, or operator-created) makes the seed a no-op.
 
 ### `roles`
 
@@ -218,6 +247,15 @@ satisfy `config.kind == configKindForFamily(hostFamily.ConfigKind)`, enforced bo
 (`POST /hosts/{mac}/approve` / `/bind`, `422` on mismatch) and again at resolve time
 (`pkg/http/resolve.go`, which falls through to the file path on mismatch rather than erroring the
 boot).
+
+**`schematic` (P5) is not a bindable dialect.** `configKindForFamily` never returns `schematic` for
+any OS family, so a `schematic`-kind config can never satisfy the family-match check above — it is
+rejected with `422` at bind time (`/approve`, `/bind`) and, as defense in depth, falls through at
+resolve time exactly like any other mismatch. Concretely, `schematic` configs are never served by
+`/ignition.json`, `/machineconfig`, or `/preseed`. They are consumed through a separate, dedicated
+endpoint instead — `POST /hosts/{mac}/schematic` (see [API.md](API.md#hosts)) — which writes the
+derived ID straight into `hosts.schematic`, bypassing `hosts.config_id` and the family-match gate
+entirely.
 
 Pragmas on every connection: `journal_mode=WAL`, `foreign_keys=ON`,
 `busy_timeout=5000`.
