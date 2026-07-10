@@ -48,6 +48,32 @@ explicit `config_id`, and no role default whose kind matches the host's OS famil
   on a hit; any miss or family/kind mismatch falls straight into the pre-P4 file-serving code,
   verbatim.
 
+## Cluster secrets & node-config storage (P6)
+
+Cluster state that must never leave `--dataDir` in plaintext is stored **encrypted, in the
+database** — not as files:
+
+- **`clusters.secrets_enc`** — the cluster's secrets bundle (PKI, tokens, cluster ID/secret),
+  age-encrypted under the identity at `--secretsKey`.
+- **`cluster_node_configs.config_enc`** — each member's frozen, per-host machineconfig revision,
+  age-encrypted the same way. See [DATABASE.md](DATABASE.md#cluster_node_configs).
+
+Nothing under `--dataDir/config/` is used for cluster members — the on-disk template
+(`machineconfig.yaml`) remains the P4 fallback for **non-member** Talos hosts only (see
+[Boot config storage](#boot-config-storage-p4) above).
+
+### The DR coupling — back up the DB and the key, separately
+
+Recovering a cluster after loss requires **both**:
+
+1. **The backed-up `booty.db`** (or its WAL-checkpointed equivalent) — holds the ciphertext.
+2. **The on-box age identity file at `--secretsKey`** — the only thing that can decrypt it.
+
+A database backup without the key is cryptographically useless (undecryptable ciphertext); the key
+without the database backup has nothing to decrypt. **Back these up separately**, with the same
+durability guarantees given any other secret material — losing either one is equivalent to losing
+cluster secrets recovery entirely.
+
 ## Artifact cache layout
 
 Cached kernel/initramfs (and rootfs, for CoreOS) are stored under a uniform, segment-based path:

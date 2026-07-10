@@ -26,6 +26,7 @@ values used when neither a flag nor an env var is set.
 | `--talosRetainMinors` | `3` | Number of newest Talos minor lines to keep cached — **first-boot default only** (see below). |
 | `--talosConfigFile` | `config/machineconfig.yaml` | Talos machine-config template, relative to `--dataDir`. |
 | `--talosFactoryURL` | `https://factory.talos.dev` | Talos Image Factory base URL. |
+| `--secretsKey` | `""` (unset) | Path to an age identity file (`age-keygen` output) encrypting Talos cluster secrets and frozen node configs at rest. **Fail-closed** when unset: cluster create/import/add-member/export refuse with `422`. **Fail-fast** when set but invalid: refuses startup (see [below](#talos-cluster-authoring-p6)). |
 | `--proxyDHCPEnabled` | `false` | Enable the proxyDHCP responder (UDP 67 + 4011). |
 | `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | Pass-1 BIOS iPXE binary name (staged in `--dataDir`). |
 | `--proxyDHCPBootfileUEFI` | `ipxe.efi` | Pass-1 UEFI (x86-64) iPXE binary name. |
@@ -133,6 +134,80 @@ target — and triggers an async reconcile pass, so boot assets pre-fetch instea
 to request them. Schematic-derived targets are **not** pruned when their owning config is deleted:
 `DELETE /api/v1/configs/{id}` is `403` until auth (P10) anyway, so this is over-caching only, not a
 dangling reference.
+
+## Talos cluster authoring (P6)
+
+A Talos **cluster** (`clusters` row) is authored or imported state that generates, freezes, and
+serves per-member machineconfigs — distinct from a single Talos host's schematic/config binding
+(above). See [schema/API.md](schema/API.md#clusters-p6) for the full
+create/import/add-member/export contract and [schema/DATABASE.md](schema/DATABASE.md#clusters) for
+the table shapes.
+
+### Secrets: fail-closed and fail-fast (`--secretsKey`)
+
+A cluster's PKI/tokens/cluster-ID bundle, and each member's frozen machineconfig, are age-encrypted
+at rest under `--secretsKey` — the path to an `age-keygen`-format identity file. This flag has two
+failure postures:
+
+- **Fail-closed when unset.** With no `--secretsKey`, `POST /clusters` (create), `POST /clusters/import`,
+  `POST /clusters/{id}/members` (add or re-bind), and `POST /clusters/{id}/export` all refuse with
+  `422` rather than minting, freezing, or exporting unencrypted secrets.
+- **Fail-fast when set but broken.** A `--secretsKey` path that doesn't exist, isn't readable, or
+  doesn't parse as an age identity refuses **startup** entirely — mirroring `--signaturePolicy`'s
+  validation gate. booty never starts in a state where a configured-but-broken key would silently
+  disable cluster operations.
+
+### The retention pin (M3) and its limitation (D-F)
+
+Every distinct `(schematic, talos_version)` pair referenced by a live cluster's members is pinned:
+the cache reconciler's eviction sweep never evicts it, regardless of `--talosRetainMinors` or age. A
+memberless cluster still pins its `talos_version` under the default schematic (`--talosSchematic`).
+
+**Limitation — the pin does not back-fetch.** The pin only protects already-cached bytes from
+**eviction**; it does not retroactively **fetch** a version that has already aged below the
+discovery window at the moment its schematic's cache target is first created. If a cluster is
+created (or a member added) pinning a version older than what's currently in-window for that
+schematic, the version may never get cached automatically. **Workaround:** add a manual version row
+via `POST /api/v1/targets/{id}/versions` (see [schema/API.md](schema/API.md#targets)) to force it
+into the cache. Auto-creating that manual row at cluster-create / add-member time is a plausible
+future hardening, deliberately **not implemented** in this slice.
+
+### Deferred orchestration (D5)
+
+booty's role stops at authoring and serving machineconfigs. Cluster bootstrap, upgrades, resets,
+node drains, etcd membership, and kubeconfig retrieval are **operator-driven** — via `talosctl` /
+`kubectl` against the endpoint booty pins, not through booty. Concretely:
+
+- **Remove-member stops provisioning, not cluster membership.** `DELETE /clusters/{id}/members/{mac}`
+  clears the host's binding and prunes its frozen revisions — it does **not** evict the node from
+  Kubernetes or etcd. An operator must drain/remove the node through `kubectl`/`talosctl` separately.
+- **Member `status` is derived, not probed.** A member's `status` (`booted` \| `pending`) reflects
+  `host.Booted` — whether booty has seen the host boot — not cluster health, node readiness, or etcd
+  membership. There is no health subsystem in this slice.
+
+### The netboot pin (I1) and version-bump skew
+
+A cluster member's TFTP boot resolves its Talos boot kernel/initramfs from `cluster.talos_version` —
+the cluster's **pinned** version — rather than `NewestCached` (the non-member default), so the boot
+kernel stays aligned with the installer image baked into the member's frozen machineconfig.
+
+A `PUT /clusters/{id}` that bumps `talosVersion` immediately advances every member's **live** netboot
+pin, and also pre-caches the new version's boot assets and triggers a reconcile — so a member
+rebooting before re-bind can still netboot. But the member's frozen machineconfig, and therefore its
+**install** image, does not change until it is **explicitly re-bound**
+(`POST /clusters/{id}/members` naming the existing member). Between the version-bump `PUT` and the
+re-bind, a member that reboots netboots the **new** pinned kernel but **installs the old** frozen
+image — a **self-healing skew**: re-bind members promptly after a version bump to close the gap.
+
+### Install disk (D-B)
+
+Generated member configs default the install disk to **`/dev/sda`**, mirroring `talosctl gen config`'s
+`--install-disk` default. Hardware with no `/dev/sda` (NVMe-only nodes, etc.) **must** override it via
+a `machine.install` strategic-merge patch — set at the cluster, role, or per-host layer (see
+[schema/API.md](schema/API.md#clusters-p6) for how patch layers compose). Validate-before-freeze
+(generation's admission gate) catches a config with **no** install disk at all (`422`, refuses to
+freeze) but **cannot** catch a wrong-but-present disk — an incorrect override installs to the wrong
+device silently.
 
 ## Signature verification (`--signaturePolicy`)
 

@@ -61,7 +61,9 @@ Migrations are embedded (`pkg/db/migrations/`) and applied up-only under
 `PRAGMA user_version`. P1a introduces four tables; P3a adds a fifth (`cache_entries`); P4 adds four
 more (`configs`, `config_revisions`, `roles`, `host_roles`) plus a `hosts.config_id` column, all in
 one additive migration — re-running it is a no-op. P5 (migration `0004`) extends `configs.kind` to
-admit `'schematic'` and adds `config_revisions.derived_schematic_id` — see below.
+admit `'schematic'` and adds `config_revisions.derived_schematic_id` — see below. P6 (migration
+`0005`) adds `clusters` and `cluster_node_configs`, three nullable `hosts` membership columns, and
+extends `configs.kind` to admit `'taloscluster'` — see below.
 
 ### `targets`
 `id`, `os`, `arch`, `params` (JSON TEXT), `mode` (`discovery`|`manual`),
@@ -133,6 +135,9 @@ P1c; remaining columns keep their defaults):
 | `uuid`/`serial` | TEXT | Scanned on every host read; not yet populated by booty (hardware identity, reserved for a future slice). |
 | `first_seen`/`last_seen` | TEXT | Reserved: timestamps (not yet surfaced). |
 | `config_id` | INTEGER (nullable) | **P4.** Explicit per-host config binding — precedence rung 1 (see [CONFIGURATION.md](../CONFIGURATION.md)). `NULL` = no explicit binding. Plain nullable column, not a DB-level foreign key (SQLite's `ALTER TABLE ADD COLUMN` can't portably carry one); referential cleanup lands with P10 — `DELETE /configs` is `403` until then, so no dangling `config_id` can be created. Set via `POST /hosts/{mac}/approve` or `/bind`. |
+| `cluster_id` | INTEGER (nullable) → `clusters(id)` | **P6.** The cluster this host is a member of. `NULL` = not a member; a host is in **at most one** cluster. Plain nullable column (same not-a-DB-FK rationale as `config_id`); referential cleanup lands with P10. Set via `POST /clusters/{id}/members`, cleared via `DELETE /clusters/{id}/members/{mac}`. |
+| `machine_type` | TEXT (nullable) | **P6.** `controlplane` \| `worker` \| `NULL` (not a member). Written alongside `cluster_id`. |
+| `node_config_id` | INTEGER (nullable) → `cluster_node_configs(id)` | **P6.** The member's currently-active frozen revision. Serving's top rung (see [API.md](API.md#clusters-p6)): a host with `node_config_id` set is served that revision's bytes verbatim, ahead of every P4 resolve rung. |
 
 > **As of P1c:** `approved`, `boot_mode`, `assigned_os`, `assigned_arch`, and `assigned_params`
 > are the columns booty now actively reads and writes. Migration `0001` (P1a) created all of these;
@@ -158,7 +163,7 @@ Boot-config identities (P4). The live source lives in the revision pointed at by
 |--------|------|---------|
 | `id` | INTEGER PK AUTOINCREMENT | Stable row ID used by the API (`/configs/{id}`). |
 | `name` | TEXT NOT NULL UNIQUE | Operator-chosen config name. |
-| `kind` | TEXT NOT NULL CHECK (`butane`\|`machineconfig`\|`preseed`\|`schematic`) | The config source dialect the operator authors (`schematic` added in P5). See "`kind` vs family `ConfigKind`" below. |
+| `kind` | TEXT NOT NULL CHECK (`butane`\|`machineconfig`\|`preseed`\|`schematic`\|`taloscluster`) | The config source dialect the operator authors (`schematic` added in P5, `taloscluster` added in P6). See "`kind` vs family `ConfigKind`" below. |
 | `active_revision_id` | INTEGER → `config_revisions(id)` | The currently-live revision. `NULL` until the first revision is added. |
 | `created_at`/`updated_at` | TEXT | Timestamps; `updated_at` bumps on every active-pointer move (create, edit, or rollback). |
 
@@ -179,6 +184,13 @@ Boot-config identities (P4). The live source lives in the revision pointed at by
 > foreign-key-check pattern is now the standing approach for any future
 > migration that needs to rebuild a table with dependents (e.g. to change
 > another `CHECK` constraint).
+
+> **P6 — migration `0005` rebuilds this table again.** Extending `kind` to
+> admit `'taloscluster'` needed the same copy → drop → rename rebuild as P5,
+> under the identical `foreign_keys=OFF` / `foreign_key_check` bracket
+> (`pkg/db/migrate.go`) — the standing pattern the P5 note predicted. Rows and
+> IDs are copied verbatim; existing behavior for
+> `butane`/`machineconfig`/`preseed`/`schematic` configs is unchanged.
 
 ### `config_revisions`
 
@@ -235,6 +247,48 @@ Many-to-many join between hosts and roles (P4).
 `PRIMARY KEY (host_mac, role_id)`. Written wholesale by `SetHostRoles` (delete-then-insert,
 transactional) — a host's role set is always replaced atomically, never partially updated.
 
+### `clusters`
+
+One authored or imported Talos cluster (P6). Pinned versions and endpoint are structured fields —
+reproducibility-critical, never buried inside YAML — and membership lives on `hosts` columns, not a
+join table (see above).
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `id` | INTEGER PK AUTOINCREMENT | Stable row ID used by the API (`/clusters/{id}`). |
+| `name` | TEXT NOT NULL UNIQUE | Operator-chosen cluster name. |
+| `endpoint` | TEXT NOT NULL | Cluster API endpoint URL. |
+| `talos_version` | TEXT NOT NULL | Pinned Talos version (v-prefixed). Drives generation, the installer image tag, and (for members) the TFTP netboot version pin. |
+| `k8s_version` | TEXT NOT NULL | Pinned Kubernetes version. |
+| `spec_config_id` | INTEGER (nullable) → `configs(id)` | The bound `taloscluster`-kind config carrying cluster-wide + role patches. `NULL` = no spec. |
+| `secrets_enc` | BLOB NOT NULL | The cluster's secrets bundle (PKI, tokens, cluster ID/secret), age-encrypted under `--secretsKey`. Never stored in plaintext. |
+| `created_at`/`updated_at` | TEXT | Timestamps; `updated_at` bumps on every `PUT /clusters/{id}`. |
+
+### `cluster_node_configs`
+
+Immutable, append-only frozen machineconfig revisions for cluster members (P6,
+materialize-and-freeze). Deliberately a **separate, encrypted** store from P4's plaintext
+`config_revisions` — the two hold different knowledge under different confidentiality requirements
+(M5/D10).
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `id` | INTEGER PK AUTOINCREMENT | Row ID; referenced by `hosts.node_config_id`. |
+| `mac` | TEXT NOT NULL | The member host this revision belongs to. |
+| `cluster_id` | INTEGER NOT NULL → `clusters(id)` | Owning cluster. |
+| `revision` | INTEGER NOT NULL | Per-mac sequence number (1, 2, 3, …); `UNIQUE(mac, revision)`. |
+| `config_enc` | BLOB NOT NULL | The frozen machineconfig bytes, age-encrypted under `--secretsKey`. |
+| `sha256` | TEXT NOT NULL | Hex SHA-256 of the **plaintext** bytes (integrity / change detection — the DB never hashes ciphertext). |
+| `source` | TEXT NOT NULL CHECK (`generated`\|`imported`) | Whether the bytes came from booty's generation engine or were frozen verbatim from an uploaded `controlplane.yaml`. |
+| `host_patch` | TEXT (nullable) | The per-host strategic-merge patch that produced these bytes — a durable generation input co-located with its output. `NULL` for imported or patch-less revisions. **Reused** automatically on a re-bind that omits a patch, so a customization survives without being re-supplied. |
+| `created_at` | TEXT | Revision creation timestamp. |
+
+Superseded frozen revisions are **not pruned** on re-bind — each re-bind
+(`POST /clusters/{id}/members` naming an existing member) appends a new row, and encrypted blobs
+accumulate. This mirrors P4's `config_revisions` (unbounded until `--configRevisionsKeep` prunes);
+deletion-driven pruning for `cluster_node_configs` waits for P10. `DELETE /clusters/{id}/members/{mac}`
+does prune eagerly: it removes every frozen revision the mac holds for that cluster.
+
 **`kind` vs family `ConfigKind` (§3.1).** `configs.kind` is the dialect an operator *authors*
 (`butane`, `machineconfig`, `preseed`); each OS family separately declares a `ConfigKind` — the
 boot-config-URL *mechanism* served at `/ignition.json`, `/machineconfig`, `/preseed`
@@ -256,6 +310,11 @@ resolve time exactly like any other mismatch. Concretely, `schematic` configs ar
 endpoint instead — `POST /hosts/{mac}/schematic` (see [API.md](API.md#hosts)) — which writes the
 derived ID straight into `hosts.schematic`, bypassing `hosts.config_id` and the family-match gate
 entirely.
+
+**`taloscluster` (P6) is likewise not a bindable dialect**, for the same reason: `configKindForFamily`
+never returns it, so it cannot satisfy the family-match check and is never served by
+`/ignition.json`, `/machineconfig`, or `/preseed`. It is consumed through `clusters.spec_config_id`
+instead (see above and [API.md](API.md#clusters-p6)) — a cluster-level binding, not a host-level one.
 
 Pragmas on every connection: `journal_mode=WAL`, `foreign_keys=ON`,
 `busy_timeout=5000`.
