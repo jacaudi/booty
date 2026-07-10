@@ -1,0 +1,45 @@
+import { request } from './client'
+
+export interface Member {
+  mac: string
+  hostname: string
+  machineType: string
+  schematic?: string
+  status: string
+}
+
+export interface Cluster {
+  id: number
+  name: string
+  endpoint: string
+  talosVersion: string
+  k8sVersion: string
+  specConfigId?: number
+  members: Member[]
+  updatedAt: string
+}
+
+export async function listClusters(): Promise<Cluster[]> {
+  const body = await request<{ clusters: Cluster[] }>('/clusters')
+  return body?.clusters ?? []
+}
+
+export function getCluster(id: number): Promise<Cluster | undefined> {
+  return request<Cluster>(`/clusters/${id}`)
+}
+
+export function createCluster(input: { name: string; endpoint: string; talosVersion: string; k8sVersion: string }): Promise<Cluster | undefined> {
+  return request<Cluster>('/clusters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
+}
+
+export function addMember(id: number, input: { mac: string; machineType: string; schematicId?: number; schematic?: string; patch?: string }): Promise<Cluster | undefined> {
+  return request<Cluster>(`/clusters/${id}/members`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
+}
+
+export function removeMember(id: number, mac: string): Promise<unknown> {
+  return request(`/clusters/${id}/members/${mac}`, { method: 'DELETE' })
+}
+
+export function importCluster(input: { name: string; controlplane: string; controlplaneMac: string }): Promise<Cluster | undefined> {
+  return request<Cluster>('/clusters/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
+}
