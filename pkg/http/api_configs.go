@@ -72,7 +72,7 @@ func registerConfigs(api huma.API, deps APIDeps) {
 	}, func(ctx context.Context, in *struct {
 		Body struct {
 			Name   string `json:"name"`
-			Kind   string `json:"kind" enum:"butane,machineconfig,preseed,schematic"`
+			Kind   string `json:"kind" enum:"butane,machineconfig,preseed,schematic,taloscluster"`
 			Source string `json:"source"`
 		}
 	}) (*struct{ Body ConfigDTO }, error) {
@@ -208,10 +208,10 @@ func registerConfigs(api huma.API, deps APIDeps) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("get config", err)
 		}
-		if c.Kind == "schematic" {
-			// Schematics are not templates: they resolve to an ID + a cache
-			// target and are never rendered or served (design §4).
-			return nil, huma.Error422UnprocessableEntity("schematic configs are not renderable")
+		if c.Kind == "schematic" || c.Kind == "taloscluster" {
+			// Non-renderable kinds: schematics resolve to an ID + cache target;
+			// taloscluster configs hold cluster/role patches. Neither is a template.
+			return nil, huma.Error422UnprocessableEntity(c.Kind + " configs are not renderable")
 		}
 		rev, err := deps.Store.GetActiveRevision(in.ID)
 		if err != nil {
@@ -333,6 +333,14 @@ func validateConfigSource(ctx context.Context, kind, source string) (*string, er
 			return nil, huma.Error422UnprocessableEntity("schematic build failed: "+err.Error(), err)
 		}
 		return &id, nil
+	case "taloscluster":
+		// The next non-renderable kind (P6): validated by parsing the cluster
+		// spec and loading every patch it names — never rendered or served. This
+		// is the arm P5 reserved here (No-Wall: additive, siblings untouched).
+		if err := validateClusterSpecSource([]byte(source)); err != nil {
+			return nil, huma.Error422UnprocessableEntity("taloscluster spec validation failed: "+err.Error(), err)
+		}
+		return nil, nil
 	default: // renderable kinds: butane | machineconfig | preseed
 		if _, _, report, err := renderConfig(kind, []byte(source), stubVars()); err != nil {
 			return nil, huma.Error422UnprocessableEntity("config validation failed: "+report, err)
