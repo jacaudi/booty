@@ -108,6 +108,8 @@ func registerClusters(api huma.API, deps APIDeps) {
 				Clusters []ClusterDTO `json:"clusters"`
 			}
 		}{}
+		// Non-nil so an empty list serializes as [] not null (list field).
+		out.Body.Clusters = []ClusterDTO{}
 		for i := range list {
 			dto, err := clusterToDTO(deps.Store, &list[i])
 			if err != nil {

@@ -185,6 +185,22 @@ func TestExportClusterSecrets(t *testing.T) {
 	}
 }
 
+func TestListClustersEmptyIsArray(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	// With no clusters, the list field must be [] not null.
+	resp := api.Get("/api/v1/clusters")
+	if resp.Code != 200 {
+		t.Fatalf("list = %d: %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), `"clusters":null`) {
+		t.Fatalf("empty list serialized clusters as null: %s", resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"clusters":[]`) {
+		t.Fatalf("empty list should serialize clusters as []: %s", resp.Body.String())
+	}
+}
+
 func TestClusterDTOMembersNeverNull(t *testing.T) {
 	deps := clustersTestSetup(t)
 	api := newTestAPI(t, deps)
