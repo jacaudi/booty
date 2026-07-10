@@ -27,18 +27,35 @@ type Host struct {
 	UUID           string
 	Serial         string
 	ConfigID       *int64 // hosts.config_id (P4 per-host config override); nil = unbound
+
+	// P6 cluster membership (design §3): a host is in at most one cluster.
+	// All three are written ONLY through the dedicated setters (Task 4) —
+	// UpsertHost never touches them, mirroring the P1c approved/assigned columns.
+	ClusterID    *int64 // hosts.cluster_id; nil = not a cluster member
+	MachineType  string // 'controlplane' | 'worker'; "" when not a member
+	NodeConfigID *int64 // hosts.node_config_id -> cluster_node_configs.id (active frozen revision)
 }
 
 const hostCols = `mac, hostname, ip, booted, ignition_file, os, do_install, schematic, ` +
-	`approved, boot_mode, assigned_os, assigned_arch, assigned_params, uuid, serial, config_id`
+	`approved, boot_mode, assigned_os, assigned_arch, assigned_params, uuid, serial, config_id, ` +
+	`cluster_id, machine_type, node_config_id`
 
 func scanHost(scan func(...any) error) (Host, error) {
 	var h Host
-	var configID sql.NullInt64
+	var configID, clusterID, nodeConfigID sql.NullInt64
+	var machineType sql.NullString
 	err := scan(&h.MAC, &h.Hostname, &h.IP, &h.Booted, &h.IgnitionFile, &h.OS, &h.DoInstall, &h.Schematic,
-		&h.Approved, &h.BootMode, &h.AssignedOS, &h.AssignedArch, &h.AssignedParams, &h.UUID, &h.Serial, &configID)
+		&h.Approved, &h.BootMode, &h.AssignedOS, &h.AssignedArch, &h.AssignedParams, &h.UUID, &h.Serial, &configID,
+		&clusterID, &machineType, &nodeConfigID)
 	if configID.Valid {
 		h.ConfigID = &configID.Int64
+	}
+	if clusterID.Valid {
+		h.ClusterID = &clusterID.Int64
+	}
+	h.MachineType = machineType.String
+	if nodeConfigID.Valid {
+		h.NodeConfigID = &nodeConfigID.Int64
 	}
 	return h, err
 }
