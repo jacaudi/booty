@@ -55,7 +55,7 @@ export default function ClustersView() {
     { title: 'Endpoint', dataIndex: 'endpoint', key: 'endpoint' },
     { title: 'Talos', dataIndex: 'talosVersion', key: 'talos' },
     { title: 'Kubernetes', dataIndex: 'k8sVersion', key: 'k8s' },
-    { title: 'Members', key: 'members', render: (_: unknown, c: Cluster) => c.members.length },
+    { title: 'Members', key: 'members', render: (_: unknown, c: Cluster) => c.members?.length ?? 0 },
   ]
 
   const memberColumns = (clusterId: number) => [
@@ -93,7 +93,7 @@ export default function ClustersView() {
         expandable={{
           expandedRowRender: (c) => (
             <AssignMemberPanel cluster={c} onChange={load}>
-              <Table rowKey="mac" size="small" columns={memberColumns(c.id)} dataSource={c.members} pagination={false} />
+              <Table rowKey="mac" size="small" columns={memberColumns(c.id)} dataSource={c.members ?? []} pagination={false} />
             </AssignMemberPanel>
           ),
         }}

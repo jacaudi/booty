@@ -61,6 +61,9 @@ func clusterToDTO(store *db.Store, c *db.Cluster) (*ClusterDTO, error) {
 	dto := &ClusterDTO{
 		ID: c.ID, Name: c.Name, Endpoint: c.Endpoint, TalosVersion: c.TalosVersion,
 		K8sVersion: c.K8sVersion, SpecConfigID: c.SpecConfigID, UpdatedAt: c.UpdatedAt,
+		// Non-nil so an empty membership serializes as [] not null — members is a
+		// list field, and a null crashes list consumers (the web view's .length).
+		Members: []MemberDTO{},
 	}
 	for _, h := range members {
 		dto.Members = append(dto.Members, MemberDTO{

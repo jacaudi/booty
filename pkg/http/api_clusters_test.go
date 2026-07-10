@@ -185,6 +185,30 @@ func TestExportClusterSecrets(t *testing.T) {
 	}
 }
 
+func TestClusterDTOMembersNeverNull(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	// A memberless cluster must serialize members as [] (a list field), never
+	// null — a null crashes list-field consumers (the web view calls .length).
+	resp := api.Post("/api/v1/clusters", map[string]any{
+		"name": "empty", "endpoint": "https://e:6443", "talosVersion": "v1.13.5", "k8sVersion": "v1.34.0",
+	})
+	if resp.Code != 201 {
+		t.Fatalf("create = %d: %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), `"members":null`) {
+		t.Fatalf("memberless cluster serialized members as null: %s", resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"members":[]`) {
+		t.Fatalf("memberless cluster should serialize members as []: %s", resp.Body.String())
+	}
+	// And the list endpoint too.
+	list := api.Get("/api/v1/clusters")
+	if strings.Contains(list.Body.String(), `"members":null`) {
+		t.Fatalf("list serialized members as null: %s", list.Body.String())
+	}
+}
+
 func TestDeleteClusterForbidden(t *testing.T) {
 	deps := clustersTestSetup(t)
 	api := newTestAPI(t, deps)

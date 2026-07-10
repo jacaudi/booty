@@ -18,6 +18,17 @@ describe('ClustersView', () => {
     expect(screen.getByText('v1.13.5')).toBeInTheDocument()
   })
 
+  it('renders a memberless cluster (members null) without crashing', async () => {
+    // The API serializes a memberless cluster's members as null (Go nil slice);
+    // the view must tolerate it and show a 0 count, not throw on .length.
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([
+      { id: 1, name: 'nomembers', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', members: null as unknown as [], updatedAt: '' },
+    ])
+    render(<ClustersView />)
+    await waitFor(() => screen.getByText('nomembers'))
+    expect(screen.getByText('nomembers')).toBeInTheDocument()
+  })
+
   it('create submits the pinned inputs', async () => {
     vi.mocked(clustersApi.listClusters).mockResolvedValue([])
     vi.mocked(clustersApi.createCluster).mockResolvedValue(undefined)
