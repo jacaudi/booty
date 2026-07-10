@@ -17,12 +17,11 @@ import (
 // content-addressed sha256 (design D3 — no surrogate FK), written to
 // host.Schematic so the boot path is untouched.
 //
-// P6 seam (SGE I2): when P6's migration 0005 adds hosts.cluster_id, THIS
-// handler gains one additive guard — refuse when the host is a cluster member
-// (cluster_id set) — because a member's schematic is single-sourced through
+// P6 seam (SGE I2 — now active, P6's migration 0005 added hosts.cluster_id):
+// this handler refuses to bind a raw schematic when the host is a cluster
+// member (cluster_id set) — a member's schematic is single-sourced through
 // P6's add-member/regenerate path (the frozen install.image and the pinned
-// netboot version must move together). The column does not exist yet, so the
-// guard cannot be coded in P5.
+// netboot version must move together).
 func registerSchematics(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "bind-host-schematic", Method: http.MethodPost, Path: "/hosts/{mac}/schematic",
@@ -50,6 +49,9 @@ func registerSchematics(api huma.API, deps APIDeps) {
 		// only Talos hosts carry a schematic.
 		if h.OS != "talos" {
 			return nil, huma.Error422UnprocessableEntity("schematic binding applies to Talos hosts only")
+		}
+		if h.ClusterID != nil {
+			return nil, huma.Error422UnprocessableEntity("host is a cluster member; change its schematic via the cluster add-member path")
 		}
 		if (in.Body.ConfigID == nil) == (in.Body.Schematic == "") {
 			return nil, huma.Error422UnprocessableEntity("exactly one of configId or schematic is required")

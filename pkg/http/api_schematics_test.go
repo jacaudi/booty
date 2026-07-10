@@ -124,3 +124,27 @@ func TestSchematicBindApproveParamsByteIdentical(t *testing.T) {
 		t.Fatalf("bound params = %q, want %q (P5 perturbed the boot path)", bh.AssignedParams, want)
 	}
 }
+
+// TestBindSchematicRefusesClusterMember is the P6 I2 seam activation guard:
+// a cluster member's schematic is single-sourced through the cluster
+// add-member/regenerate path, so the raw P5 bind endpoint must refuse it.
+func TestBindSchematicRefusesClusterMember(t *testing.T) {
+	deps := hostsTestSetup(t)
+	api := newTestAPI(t, deps)
+	const mac = "aa:bb:cc:dd:ee:a0"
+	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos"}); err != nil {
+		t.Fatal(err)
+	}
+	cid, err := deps.Store.CreateCluster("member", "https://e:6443", "v1.13.5", "v1.34.0", []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hardware.SetHostCluster(mac, &cid); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := api.Post("/api/v1/hosts/"+mac+"/schematic", map[string]any{"schematic": "deadbeef"})
+	if resp.Code != 422 {
+		t.Fatalf("member schematic bind = %d, want 422 (single-sourced through add-member)", resp.Code)
+	}
+}
