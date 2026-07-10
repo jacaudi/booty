@@ -10,6 +10,7 @@ import (
 
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/spf13/viper"
 )
@@ -308,5 +309,74 @@ func TestHoldingTemplateExists(t *testing.T) {
 	}
 	if strings.Contains(tmpl, "http://[[server]]/booty.ipxe") {
 		t.Errorf("holding.ipxe must NOT chain via http://[[server]]/booty.ipxe (no HTTP route exists), got:\n%s", tmpl)
+	}
+}
+
+func TestBootTokensTalosMemberUsesClusterPin(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.TalosSchematic, "defaultschematic")
+	viper.Set(config.TalosArchitecture, "amd64")
+
+	s, err := db.Open(filepath.Join(root, "booty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetStore(nil); s.Close() })
+	SetStore(s)
+	// hardware.GetMacAddress below reads hardware's own package-level store
+	// handle (separate from tftp's); wire it too, mirroring
+	// pkg/http/serving_test.go's servingStore helper.
+	hardware.SetStore(s)
+	t.Cleanup(func() { hardware.SetStore(nil) })
+
+	const mac = "aa:bb:cc:dd:ee:90"
+	if err := s.UpsertHost(db.Host{MAC: mac, OS: "talos", Schematic: "schemZ"}); err != nil {
+		t.Fatal(err)
+	}
+	cid, err := s.CreateCluster("pinned", "https://10.0.0.10:6443", "v1.13.5", "v1.34.0", []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetHostCluster(mac, &cid); err != nil {
+		t.Fatal(err)
+	}
+	// Seed a NEWER cached version so NewestCached would win if the pin were ignored.
+	if err := os.MkdirAll(filepath.Join(root, "cache", "talos", "schemZ", "amd64", "v1.13.9"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	host, err := hardware.GetMacAddress(mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := bootTokens("talos", "10.0.0.1", host)
+	if tokens["[[talos-version]]"] != "v1.13.5" {
+		t.Fatalf("member must boot the pinned version v1.13.5, got %q", tokens["[[talos-version]]"])
+	}
+	// The baseurl must carry the pinned version too (boot + install aligned).
+	if !strings.Contains(tokens["[[talos-baseurl]]"], "v1.13.5") {
+		t.Fatalf("baseurl must carry the pin: %q", tokens["[[talos-baseurl]]"])
+	}
+}
+
+func TestBootTokensTalosNonMemberUsesNewestCached(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.TalosSchematic, "defaultschematic")
+	viper.Set(config.TalosArchitecture, "amd64")
+	SetStore(nil) // no store: non-member path must not crash
+
+	if err := os.MkdirAll(filepath.Join(root, "cache", "talos", "schemZ", "amd64", "v1.13.9"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	host := &hardware.Host{OS: "talos", Schematic: "schemZ"} // no ClusterID
+	tokens := bootTokens("talos", "10.0.0.1", host)
+	if tokens["[[talos-version]]"] != "v1.13.9" {
+		t.Fatalf("non-member must use NewestCached v1.13.9, got %q", tokens["[[talos-version]]"])
 	}
 }
