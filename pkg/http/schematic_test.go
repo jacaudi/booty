@@ -40,6 +40,36 @@ func TestBuildSchematicSuccess(t *testing.T) {
 	}
 }
 
+func TestBuildSchematicTrailingSlashSafe(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/schematics" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"id":"a1b2c3d4"}`)
+	}))
+	defer srv.Close()
+
+	// A Factory base URL WITH a trailing slash must POST to the same
+	// "/schematics" path as one WITHOUT — not "//schematics".
+	for name, factoryURL := range map[string]string{
+		"no trailing slash":   srv.URL,
+		"with trailing slash": srv.URL + "/",
+	} {
+		t.Run(name, func(t *testing.T) {
+			id, err := buildSchematic(t.Context(), factoryURL, []byte("customization: {}\n"))
+			if err != nil {
+				t.Fatalf("buildSchematic: %v", err)
+			}
+			if id != "a1b2c3d4" {
+				t.Fatalf("id = %q, want a1b2c3d4", id)
+			}
+		})
+	}
+}
+
 func TestBuildSchematicFactoryErrorSurfacesDetail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

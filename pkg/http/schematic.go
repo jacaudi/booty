@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"time"
 
@@ -46,7 +47,11 @@ func buildSchematic(ctx context.Context, factoryURL string, source []byte) (stri
 		errors.New("http: image factory build timed out"))
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, factoryURL+"/schematics", bytes.NewReader(source))
+	schematicsURL, err := url.JoinPath(factoryURL, "schematics")
+	if err != nil {
+		return "", fmt.Errorf("http: build schematic url: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, schematicsURL, bytes.NewReader(source))
 	if err != nil {
 		return "", fmt.Errorf("http: build schematic request: %w", err)
 	}

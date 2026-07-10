@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -93,8 +94,14 @@ func registerConfigs(api huma.API, deps APIDeps) {
 			return nil, huma.Error500InternalServerError("add revision", err)
 		}
 		if derivedID != nil {
+			// The config+revision are already committed at this point, so a
+			// pre-cache failure must not surface as a 500 misrepresenting a
+			// resource that actually exists. Pre-caching is self-healing: the
+			// reconciler's seedTargets/hostTalosSchematics re-ensures the
+			// target on the next tick — log and continue.
 			if err := ensureSchematicPreCache(deps, *derivedID); err != nil {
-				return nil, err
+				slog.Warn("schematic pre-cache failed; config created, will self-heal on next reconcile",
+					"config_id", id, "config_name", in.Body.Name, "schematic", *derivedID, "error", err)
 			}
 		}
 		return configDTOResp(deps.Store, id)
@@ -168,8 +175,12 @@ func registerConfigs(api huma.API, deps APIDeps) {
 			return nil, huma.Error500InternalServerError("prune revisions", err)
 		}
 		if derivedID != nil {
+			// Same rationale as create-config: the new revision is already
+			// committed, and pre-caching self-heals on the next reconcile —
+			// log and continue instead of a misleading 500.
 			if err := ensureSchematicPreCache(deps, *derivedID); err != nil {
-				return nil, err
+				slog.Warn("schematic pre-cache failed; config updated, will self-heal on next reconcile",
+					"config_id", in.ID, "config_name", c.Name, "schematic", *derivedID, "error", err)
 			}
 		}
 		return configDTOResp(deps.Store, in.ID)
