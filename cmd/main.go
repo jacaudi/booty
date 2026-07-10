@@ -60,6 +60,8 @@ var args struct {
 	configRevisionsKeep int
 
 	signaturePolicy string
+
+	secretsKey string
 }
 
 var (
@@ -106,6 +108,13 @@ func init() {
 		"signaturePolicy",
 		"warn",
 		"Signature policy: strict (reject unverified), warn (block tampering, allow+log other verify failures), off (no verification)",
+	)
+
+	flags.StringVar(
+		&args.secretsKey,
+		"secretsKey",
+		"",
+		"Path to an age identity file (age-keygen output) encrypting Talos cluster secrets at rest; unset disables cluster create/import/generation (fail-closed)",
 	)
 
 	flags.StringVar(
@@ -274,6 +283,10 @@ func run(cmd *cobra.Command, argv []string) error {
 		return err
 	}
 
+	if err := config.ValidateSecretsKey(); err != nil {
+		return err
+	}
+
 	// Resolve the client-facing port before anything reads ServerHttpPort
 	// (TFTP boot-config URLs, HTTP ignition/machineconfig/preseed templates).
 	// viper.Set takes precedence over the bound flag default, so every
@@ -291,6 +304,16 @@ func run(cmd *cobra.Command, argv []string) error {
 	defer store.Close()
 	hardware.SetStore(store)
 	tftp.SetStore(store)
+
+	// A cluster's frozen machineconfigs can only be decrypted/served with the age
+	// key. Starting without --secretsKey when clusters already exist is allowed
+	// (secrets ops fail closed per-operation, not at startup), but every member's
+	// /machineconfig will 500 — warn so a silent fleet outage is diagnosable (M5).
+	if viper.GetString(config.SecretsKey) == "" {
+		if cs, cerr := store.ListClusters(); cerr == nil && len(cs) > 0 {
+			slog.Warn("clusters exist but --secretsKey is unset; members' machineconfigs will fail to serve until it is provided", "clusters", len(cs))
+		}
+	}
 
 	if err := hardware.Load(); err != nil {
 		return fmt.Errorf("hardware: %w", err)

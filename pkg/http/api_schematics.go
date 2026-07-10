@@ -17,12 +17,11 @@ import (
 // content-addressed sha256 (design D3 — no surrogate FK), written to
 // host.Schematic so the boot path is untouched.
 //
-// P6 seam (SGE I2): when P6's migration 0005 adds hosts.cluster_id, THIS
-// handler gains one additive guard — refuse when the host is a cluster member
-// (cluster_id set) — because a member's schematic is single-sourced through
+// P6 seam (SGE I2 — now active, P6's migration 0005 added hosts.cluster_id):
+// this handler refuses to bind a raw schematic when the host is a cluster
+// member (cluster_id set) — a member's schematic is single-sourced through
 // P6's add-member/regenerate path (the frozen install.image and the pinned
-// netboot version must move together). The column does not exist yet, so the
-// guard cannot be coded in P5.
+// netboot version must move together).
 func registerSchematics(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "bind-host-schematic", Method: http.MethodPost, Path: "/hosts/{mac}/schematic",
@@ -51,31 +50,12 @@ func registerSchematics(api huma.API, deps APIDeps) {
 		if h.OS != "talos" {
 			return nil, huma.Error422UnprocessableEntity("schematic binding applies to Talos hosts only")
 		}
-		if (in.Body.ConfigID == nil) == (in.Body.Schematic == "") {
-			return nil, huma.Error422UnprocessableEntity("exactly one of configId or schematic is required")
+		if h.ClusterID != nil {
+			return nil, huma.Error422UnprocessableEntity("host is a cluster member; change its schematic via the cluster add-member path")
 		}
-
-		id := in.Body.Schematic
-		if in.Body.ConfigID != nil {
-			cfg, err := deps.Store.GetConfig(*in.Body.ConfigID)
-			if errors.Is(err, db.ErrNotFound) {
-				return nil, huma.Error422UnprocessableEntity("config does not exist")
-			}
-			if err != nil {
-				return nil, huma.Error500InternalServerError("get config", err)
-			}
-			if cfg.Kind != "schematic" {
-				return nil, huma.Error422UnprocessableEntity("config is not a schematic")
-			}
-			rev, err := deps.Store.GetActiveRevision(*in.Body.ConfigID)
-			if err != nil || rev.DerivedSchematicID == nil {
-				return nil, huma.Error422UnprocessableEntity("schematic config has no built revision")
-			}
-			id = *rev.DerivedSchematicID
-		}
-		// The bound value becomes a cache path segment + factory URL segment.
-		if err := cache.ValidatePathParam(id); err != nil {
-			return nil, huma.Error422UnprocessableEntity("schematic id is not path-safe", err)
+		id, err := resolveSchematicID(deps.Store, in.Body.ConfigID, in.Body.Schematic)
+		if err != nil {
+			return nil, err
 		}
 		if err := hardware.SetSchematic(in.MAC, id); err != nil {
 			return nil, huma.Error500InternalServerError("bind schematic", err)
@@ -86,4 +66,38 @@ func registerSchematics(api huma.API, deps APIDeps) {
 		}
 		return &struct{ Body *hardware.Host }{Body: updated}, nil
 	})
+}
+
+// resolveSchematicID resolves a schematic binding to its content-addressed ID:
+// a configID names a schematic-kind config (its CURRENT active revision's
+// derived ID is bound), else raw is a free-entry ID. Exactly one must be
+// supplied. The result is path-validated (it becomes a cache + factory URL
+// segment). Extracted when the P6 add-member path became a second consumer
+// (DRY: single source for "schematic binding -> ID").
+func resolveSchematicID(store *db.Store, configID *int64, raw string) (string, error) {
+	if (configID == nil) == (raw == "") {
+		return "", huma.Error422UnprocessableEntity("exactly one of configId or schematic is required")
+	}
+	id := raw
+	if configID != nil {
+		cfg, err := store.GetConfig(*configID)
+		if errors.Is(err, db.ErrNotFound) {
+			return "", huma.Error422UnprocessableEntity("config does not exist")
+		}
+		if err != nil {
+			return "", huma.Error500InternalServerError("get config", err)
+		}
+		if cfg.Kind != "schematic" {
+			return "", huma.Error422UnprocessableEntity("config is not a schematic")
+		}
+		rev, err := store.GetActiveRevision(*configID)
+		if err != nil || rev.DerivedSchematicID == nil {
+			return "", huma.Error422UnprocessableEntity("schematic config has no built revision")
+		}
+		id = *rev.DerivedSchematicID
+	}
+	if err := cache.ValidatePathParam(id); err != nil {
+		return "", huma.Error422UnprocessableEntity("schematic id is not path-safe", err)
+	}
+	return id, nil
 }

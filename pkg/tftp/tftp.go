@@ -270,6 +270,28 @@ func hostParams(host *hardware.Host) map[string]string {
 	return p
 }
 
+// clusterPinnedTalosVersion returns the pinned talos version for a cluster
+// member (host.cluster_id set), looked up via the shared store. ok=false for a
+// non-member, a nil store, or any lookup failure — the caller then falls back
+// to NewestCached. A lookup failure is logged and tolerated (boot must not be
+// blocked by a transient DB issue; the install image still carries the pin).
+func clusterPinnedTalosVersion(host *hardware.Host) (string, bool) {
+	if host == nil || host.ClusterID == nil {
+		return "", false
+	}
+	store := currentStore()
+	if store == nil {
+		return "", false
+	}
+	c, err := store.GetCluster(*host.ClusterID)
+	if err != nil {
+		slog.Warn("tftp: cluster version lookup failed; falling back to newest cached",
+			"mac", host.MAC, "cluster", *host.ClusterID, "err", err)
+		return "", false
+	}
+	return c.TalosVersion, true
+}
+
 // bootTokens builds the per-request substitution map for the ASSIGNED/legacy
 // boot path. Each OS resolves its path-discriminating variant the same way:
 // host override, else flag — schematic for talos (typed column), channel for
@@ -293,9 +315,17 @@ func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string
 			schematic = host.Schematic
 		}
 		arch := viper.GetString(config.TalosArchitecture)
-		// Empty when nothing is cached yet (pre-first-sync) → BASEURL 404s, same
-		// failure mode as the other OSes before their first version check.
-		version := cache.NewestCached("talos", arch, map[string]string{"schematic": schematic})
+		// I1 Option A: a cluster member boots its cluster's PINNED talos version,
+		// so the boot kernel/initramfs align with the frozen install image.
+		// Non-members (and members whose cluster lookup fails) fall back to the
+		// newest cached version — at the TFTP layer boot availability beats pin
+		// fidelity, and the frozen machineconfig still pins the install image.
+		version, pinned := clusterPinnedTalosVersion(host)
+		if !pinned {
+			// Empty when nothing is cached yet (pre-first-sync) → BASEURL 404s, same
+			// failure mode as the other OSes before their first version check.
+			version = cache.NewestCached("talos", arch, map[string]string{"schematic": schematic})
+		}
 		return bootTokensFor("talos", schematic, arch, version, urlHost)
 	}
 	// unknown os: only the shared [[server]] token (identical to the old fall-through).

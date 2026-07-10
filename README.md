@@ -30,6 +30,10 @@ It does one job: get your machines netbooted into the right OS.
 - **Serves per-host boot configs.** Each registered host (keyed by MAC) is mapped to an OS and an
   optional config template. booty renders and serves the right Ignition JSON (Flatcar / CoreOS) or
   Talos machine config (Talos) at boot time.
+- **Authors Talos clusters.** Create a cluster from scratch or import an existing one from its
+  `controlplane.yaml`, then add or remove member nodes. Each member's machineconfig is generated
+  once and served **byte-identically** thereafter; cluster secrets and frozen node configs are
+  age-encrypted at rest (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
 - **Drives the full iPXE chain over TFTP.** It answers the magic `booty.ipxe` filename with a
   dynamically generated, per-host iPXE script that points the machine at the cached kernel,
   initramfs, and config.

@@ -3,6 +3,7 @@ import HomeView from './views/HomeView'
 import HostsView from './views/HostsView'
 import CacheView from './views/CacheView'
 import BootConfigsView from './views/BootConfigsView'
+import ClustersView from './views/ClustersView'
 import AboutView from './views/AboutView'
 
 export interface NavEntry {
@@ -18,5 +19,6 @@ export const navEntries: NavEntry[] = [
   { path: '/hosts', label: 'Hosts', element: <HostsView /> },
   { path: '/cache', label: 'Cache', element: <CacheView /> },
   { path: '/boot-configs', label: 'Boot Configs', element: <BootConfigsView /> },
+  { path: '/clusters', label: 'Clusters', element: <ClustersView /> },
   { path: '/about', label: 'About', element: <AboutView /> },
 ]

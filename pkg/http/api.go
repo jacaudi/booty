@@ -39,4 +39,5 @@ func registerOperations(api huma.API, deps APIDeps) {
 	registerConfigs(grp, deps)    // P4 T8
 	registerRoles(grp, deps)      // P4 T9
 	registerSchematics(grp, deps) // P5 T8
+	registerClusters(grp, deps)   // P6 T13
 }

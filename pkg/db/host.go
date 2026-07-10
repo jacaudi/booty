@@ -27,18 +27,35 @@ type Host struct {
 	UUID           string
 	Serial         string
 	ConfigID       *int64 // hosts.config_id (P4 per-host config override); nil = unbound
+
+	// P6 cluster membership (design §3): a host is in at most one cluster.
+	// All three are written ONLY through the dedicated setters (Task 4) —
+	// UpsertHost never touches them, mirroring the P1c approved/assigned columns.
+	ClusterID    *int64 // hosts.cluster_id; nil = not a cluster member
+	MachineType  string // 'controlplane' | 'worker'; "" when not a member
+	NodeConfigID *int64 // hosts.node_config_id -> cluster_node_configs.id (active frozen revision)
 }
 
 const hostCols = `mac, hostname, ip, booted, ignition_file, os, do_install, schematic, ` +
-	`approved, boot_mode, assigned_os, assigned_arch, assigned_params, uuid, serial, config_id`
+	`approved, boot_mode, assigned_os, assigned_arch, assigned_params, uuid, serial, config_id, ` +
+	`cluster_id, machine_type, node_config_id`
 
 func scanHost(scan func(...any) error) (Host, error) {
 	var h Host
-	var configID sql.NullInt64
+	var configID, clusterID, nodeConfigID sql.NullInt64
+	var machineType sql.NullString
 	err := scan(&h.MAC, &h.Hostname, &h.IP, &h.Booted, &h.IgnitionFile, &h.OS, &h.DoInstall, &h.Schematic,
-		&h.Approved, &h.BootMode, &h.AssignedOS, &h.AssignedArch, &h.AssignedParams, &h.UUID, &h.Serial, &configID)
+		&h.Approved, &h.BootMode, &h.AssignedOS, &h.AssignedArch, &h.AssignedParams, &h.UUID, &h.Serial, &configID,
+		&clusterID, &machineType, &nodeConfigID)
 	if configID.Valid {
 		h.ConfigID = &configID.Int64
+	}
+	if clusterID.Valid {
+		h.ClusterID = &clusterID.Int64
+	}
+	h.MachineType = machineType.String
+	if nodeConfigID.Valid {
+		h.NodeConfigID = &nodeConfigID.Int64
 	}
 	return h, err
 }
@@ -149,6 +166,41 @@ func (s *Store) SetHostSchematic(mac, schematic string) error {
 	if _, err := s.db.Exec(
 		`UPDATE hosts SET schematic = ?, last_seen = datetime('now') WHERE mac = ?`, schematic, mac); err != nil {
 		return fmt.Errorf("db: set host schematic %s: %w", mac, err)
+	}
+	return nil
+}
+
+// SetHostCluster sets (or clears, when clusterID is nil) hosts.cluster_id —
+// the P6 membership pointer. The last_seen bump is pattern-consistency with
+// SetAssignment/SetHostConfig/SetHostSchematic: every host-touch accessor
+// refreshes last_seen.
+func (s *Store) SetHostCluster(mac string, clusterID *int64) error {
+	if _, err := s.db.Exec(
+		`UPDATE hosts SET cluster_id = ?, last_seen = datetime('now') WHERE mac = ?`, clusterID, mac); err != nil {
+		return fmt.Errorf("db: set host cluster %s: %w", mac, err)
+	}
+	return nil
+}
+
+// SetHostMachineType sets hosts.machine_type ('controlplane' | 'worker'); ""
+// clears it to NULL (remove-member). Vocabulary is validated at the API
+// boundary, not here.
+func (s *Store) SetHostMachineType(mac, machineType string) error {
+	if _, err := s.db.Exec(
+		`UPDATE hosts SET machine_type = NULLIF(?, ''), last_seen = datetime('now') WHERE mac = ?`,
+		machineType, mac); err != nil {
+		return fmt.Errorf("db: set host machine type %s: %w", mac, err)
+	}
+	return nil
+}
+
+// SetHostNodeConfig sets (or clears, when nodeConfigID is nil) the host's
+// ACTIVE frozen node-config revision pointer — the P6 mirror of P4's
+// config_id active-pointer idiom.
+func (s *Store) SetHostNodeConfig(mac string, nodeConfigID *int64) error {
+	if _, err := s.db.Exec(
+		`UPDATE hosts SET node_config_id = ?, last_seen = datetime('now') WHERE mac = ?`, nodeConfigID, mac); err != nil {
+		return fmt.Errorf("db: set host node config %s: %w", mac, err)
 	}
 	return nil
 }

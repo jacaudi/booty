@@ -171,10 +171,10 @@ the config's active pointer. See [DATABASE.md](DATABASE.md) for the table shapes
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/api/v1/configs` | List configs (name, kind, active revision number, revision count). | `{"configs":[…]}` |
-| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`preseed`\|`schematic`). Renderable kinds validate by rendering `source` against stub vars — a bad config surfaces the fatal report in the `422` body. `schematic` validates differently — see "Schematic configs" below. The first revision is recorded and made active. **OPEN.** | `201` config JSON |
+| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`preseed`\|`schematic`\|`taloscluster`). Renderable kinds validate by rendering `source` against stub vars — a bad config surfaces the fatal report in the `422` body. `schematic` and `taloscluster` validate differently — see "Schematic configs" below and [Clusters](#clusters-p6). The first revision is recorded and made active. **OPEN.** | `201` config JSON |
 | `GET` | `/api/v1/configs/{id}` | Get a config's identity plus its active revision's decoded source. | config JSON `+source` / `404` |
 | `PUT` | `/api/v1/configs/{id}` | Append a new immutable revision from `{"source"}` and make it active. Same per-kind validation as create. On success, also prunes older revisions per `--configRevisionsKeep` (the active revision is always kept — see [CONFIGURATION.md](../CONFIGURATION.md)). **OPEN.** | config JSON / `404` |
-| `POST` | `/api/v1/configs/{id}/preview` | Render the config's **active revision**. Body: `{"mac"?}`. **Subsumes `/validate`** — omit `mac` to validate against stub vars only (report-only: a bad Butane config returns its fatal report in the `200` body, never a `5xx`); pass `mac` to render against a real host's vars (the same vars the boot path would use). **`schematic`-kind configs return `422`** ("schematic configs are not renderable") — see below. **OPEN.** | `{"rendered","contentType","report"}` |
+| `POST` | `/api/v1/configs/{id}/preview` | Render the config's **active revision**. Body: `{"mac"?}`. **Subsumes `/validate`** — omit `mac` to validate against stub vars only (report-only: a bad Butane config returns its fatal report in the `200` body, never a `5xx`); pass `mac` to render against a real host's vars (the same vars the boot path would use). **`schematic`- and `taloscluster`-kind configs return `422`** (`"<kind> configs are not renderable"`) — see below. **OPEN.** | `{"rendered","contentType","report"}` |
 | `GET` | `/api/v1/configs/{id}/revisions` | List a config's revisions, newest first, each flagged `active`. | `{"revisions":[…]}` |
 | `POST` | `/api/v1/configs/{id}/rollback` | Move the active pointer to an existing revision (`{"revision"}`, validated to belong to this config). A pointer move — no content is copied, no new revision is created; for a schematic config this re-points at that revision's already-stored ID, no Factory rebuild. **OPEN.** | config JSON / `422` |
 | `DELETE` | `/api/v1/configs/{id}` | **403 until auth (P10).** Covers schematic-kind configs too — none can be deleted out from under a host binding. | `403` |
@@ -185,7 +185,7 @@ the config's active pointer. See [DATABASE.md](DATABASE.md) for the table shapes
 |-------|------|---------|
 | `id` | integer | `configs.id`. |
 | `name` | string | Operator-chosen, unique. |
-| `kind` | string | `butane` \| `machineconfig` \| `preseed` \| `schematic` — the dialect an operator authors (see `kind` vs family `ConfigKind` in [DATABASE.md](DATABASE.md#configs)). |
+| `kind` | string | `butane` \| `machineconfig` \| `preseed` \| `schematic` \| `taloscluster` — the dialect an operator authors (see `kind` vs family `ConfigKind` in [DATABASE.md](DATABASE.md#configs)). |
 | `activeRevision` | integer | The active revision's number; `0` when the config has no active revision yet. |
 | `revisionCount` | integer | Total revisions retained (bounded by `--configRevisionsKeep`). |
 | `updatedAt` | string | Bumped on every active-pointer move (create, edit, or rollback). |
@@ -275,10 +275,11 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 > exactly as it did before P5. `DELETE /api/v1/configs/{id}` remains `403` (see above), so a config a
 > host is schematic-bound to cannot be deleted out from under it.
 >
-> **P6 seam.** When P6 adds `hosts.cluster_id`, this endpoint gains one additive guard: refuse
-> rebinding when the host is a cluster member, since a member's schematic must move in lockstep with
-> P6's add-member/regenerate path (the frozen `install.image` and the pinned netboot version travel
-> together). The column does not exist in P5, so no guard is coded yet.
+> **Cluster-member guard (P6).** `POST /hosts/{mac}/schematic` refuses to bind a raw schematic when
+> the host is a cluster member (`host.cluster_id` set): `422` ("host is a cluster member; change its
+> schematic via the cluster add-member path"). A member's schematic moves only through the cluster's
+> add-member/re-bind path, since the frozen `install.image` and the pinned netboot version must
+> travel together — see [Clusters](#clusters-p6) below.
 
 > The management UI (`web/`, served at `/ui/`) consumes these hosts endpoints:
 > `GET /api/v1/hosts`, `POST /api/v1/hosts/{mac}/approve`,
@@ -286,6 +287,92 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 > `POST /api/v1/hosts/{mac}/schematic`.
 > `PUT`/`DELETE /api/v1/hosts/{mac}` are wired but return 403 until auth (P10),
 > so the UI exposes no edit/delete actions.
+
+### Clusters (P6)
+
+A Talos **cluster** is authored/imported state distinct from a single host's schematic/config
+binding: pinned versions + endpoint (structured fields, never buried in YAML), an optional
+`taloscluster`-kind spec config (cluster-wide + per-role patches), an age-encrypted secrets bundle,
+and a set of member hosts. See [DATABASE.md](DATABASE.md#clusters) for the table shapes and
+[CONFIGURATION.md](../CONFIGURATION.md#talos-cluster-authoring-p6) for the generation, re-bind, and
+secrets model.
+
+| Method | Path | Purpose | Response |
+|--------|------|---------|----------|
+| `GET` | `/api/v1/clusters` | List clusters with derived members. | `{"clusters":[…]}` |
+| `POST` | `/api/v1/clusters` | Create a cluster (greenfield): mints and encrypts a fresh secrets bundle pinned to `talosVersion`'s contract. **Fail-closed** without `--secretsKey` (`422`). **OPEN.** | `201` cluster JSON |
+| `GET` | `/api/v1/clusters/{id}` | Get a cluster (with derived members). | cluster JSON / `404` |
+| `PUT` | `/api/v1/clusters/{id}` | Update a cluster's pinned inputs (`endpoint`, `talosVersion`, `k8sVersion`, `specConfigId`). Does **not** regenerate any member's frozen config — see "Re-bind lifecycle" below. **OPEN.** | cluster JSON / `404` / `422` |
+| `POST` | `/api/v1/clusters/import` | Adopt an existing cluster from an uploaded `controlplane.yaml`: reconstructs the secrets bundle, endpoint, and pinned versions, and freezes the uploaded bytes verbatim for the named control-plane host. Requires a **controlplane.yaml** — a worker config is rejected (`422`; it lacks the CA keys to reconstruct the secrets bundle). **Fail-closed** without `--secretsKey` (`422`). **OPEN.** | `201` cluster JSON |
+| `POST` | `/api/v1/clusters/{id}/members` | Add a host to a cluster, or **re-bind** an existing member (see "Re-bind lifecycle" below). Generates, freezes, and pre-caches the member's machineconfig and binds the host. **Fail-closed** without `--secretsKey` (`422`). **OPEN.** | cluster JSON / `404` / `422` |
+| `DELETE` | `/api/v1/clusters/{id}/members/{mac}` | Remove a host from a cluster: clears its membership columns (reverting to pre-P6 precedence) and prunes its frozen revisions. Stops provisioning only — does **not** touch etcd/Kubernetes (see [CONFIGURATION.md](../CONFIGURATION.md#talos-cluster-authoring-p6)). **OPEN.** | cluster JSON / `404` / `422` |
+| `POST` | `/api/v1/clusters/{id}/export` | Export the cluster's secrets bundle as `secrets.yaml`. **Fail-closed** without `--secretsKey` (`422`). **OPEN.** | `{"secretsYaml":"…"}` |
+| `DELETE` | `/api/v1/clusters/{id}` | **403 until auth (P10).** | `403` |
+
+**`ClusterDTO`:**
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | integer | `clusters.id`. |
+| `name` | string | Operator-chosen, unique. |
+| `endpoint` | string | Cluster API endpoint URL (e.g. `https://10.0.0.10:6443`). |
+| `talosVersion` | string | Pinned Talos version (v-prefixed). Drives the generated install image and, for members, the netboot kernel pin. |
+| `k8sVersion` | string | Pinned Kubernetes version. |
+| `specConfigId` | integer *(omitted when unset)* | The bound `taloscluster`-kind config carrying cluster-wide + role patches. Absent when the cluster has no spec. |
+| `members` | array of `MemberDTO` | **Always an array — `[]` for a memberless cluster, never `null`.** |
+| `updatedAt` | string | Bumped on every `PUT`. |
+
+**`MemberDTO`:**
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `mac` | string | The member host's MAC. |
+| `hostname` | string | Host's hostname. |
+| `machineType` | string | `controlplane` \| `worker`. |
+| `schematic` | string *(omitted when empty)* | The member's per-node P5 schematic ID. |
+| `status` | string | `booted` \| `pending` — **derived** from `host.Booted` (non-empty → `booted`); no liveness probing, no health subsystem. |
+
+**Boundary validation** (all `422`): `endpoint` must parse as a URL with a host; `talosVersion` must
+parse as a Talos version (e.g. `v1.13.5`); on add-member, `machineType` must be `controlplane` or
+`worker`, and a host already bound to **another** cluster is rejected — a host is in **at most one**
+cluster (re-binding to the *same* cluster is the re-bind path, below). Import requires a
+**controlplane.yaml**: a worker config is rejected with `422`.
+
+**Fail-closed on `--secretsKey`.** Every endpoint that mints, decrypts, or freezes secrets — create,
+import, add-member, export — returns `422` when `--secretsKey` is unset. See
+[CONFIGURATION.md](../CONFIGURATION.md#talos-cluster-authoring-p6) for the fail-closed/fail-fast
+split.
+
+**Re-bind lifecycle (D-C).** `PUT /clusters/{id}` updates the cluster's pinned inputs but does
+**not** regenerate any member's frozen config — a member's new frozen revision is only minted on an
+**explicit re-bind**: `POST /clusters/{id}/members` called again naming a MAC that already belongs
+to *this* cluster. A per-host `patch` supplied on the original add-member **is persisted** on that
+member's frozen revision and **reused** automatically on a re-bind that omits it — the customization
+survives without being re-supplied.
+
+**Version-bump skew.** After a `PUT` that bumps `talosVersion`, and before a member is re-bound: the
+member's netboot pin is **live** immediately (the `PUT` pre-caches the new version's boot assets and
+triggers a reconcile, so a rebooting member can still netboot), but the member's frozen machineconfig
+— and therefore its **install** image — does not change until the member is **explicitly re-bound**.
+In that window a member that reboots netboots the **new** pinned kernel but **installs the old**
+frozen image. This is a self-healing skew, not a bug: re-bind members promptly after a version bump
+to close the gap.
+
+**Seam interactions with P5.** `POST /hosts/{mac}/schematic` (the raw schematic bind, see
+[Hosts](#hosts) above) returns `422` for a cluster member — a member's schematic moves only through
+this cluster's add-member/re-bind path. `GET /machineconfig?mac=` serves a member's active frozen
+revision **verbatim, byte-identical** to what was generated or imported (see
+[DATABASE.md](DATABASE.md#cluster_node_configs)); non-member hosts continue through the pre-P6
+resolution rungs unchanged.
+
+**Config `kind` gains `taloscluster` (P6).** A `taloscluster`-kind config (`POST`/`PUT /configs`) is
+spec-only: `source` is YAML naming cluster-wide + per-role (`controlPlanePatches`/`workerPatches`)
+strategic-merge/JSON6902 patch sources, validated by parsing the spec and loading each named patch —
+no Factory call, no rendering. Like `schematic`, it is **not renderable**:
+`POST /configs/{id}/preview` returns `422` ("taloscluster configs are not renderable"). See
+[DATABASE.md](DATABASE.md#configs) for the enum and
+[CONFIGURATION.md](../CONFIGURATION.md#talos-cluster-authoring-p6) for how a bound spec composes with
+a member's per-host patch.
 
 ### Cache
 

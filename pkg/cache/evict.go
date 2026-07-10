@@ -23,6 +23,14 @@ func evictOverBudget(store *db.Store, maxBytes int64) error {
 	if maxBytes <= 0 {
 		return nil
 	}
+	// M3: (schematic, version) pairs a live cluster references are never evicted,
+	// even when archived and below the discovery window — a parallel never-evict
+	// input alongside D13's newest-cached guard (design §8). Resolved once per
+	// call; the set is small (one entry per cluster×member-schematic).
+	pins, err := clusterPins(store)
+	if err != nil {
+		return err
+	}
 	for {
 		total, err := store.SumCacheBytes()
 		if err != nil {
@@ -46,6 +54,12 @@ func evictOverBudget(store *db.Store, maxBytes int64) error {
 			params, _ := decodeParams(cand.Params)
 			if cand.Version == NewestCached(canonicalToCacheName(cand.OS), cand.Arch, params) {
 				continue
+			}
+			// M3: never evict a version a live cluster pins.
+			if cand.OS == "talos" {
+				if _, pinned := pins[SchematicVersion{Schematic: paramSegment(params), Version: cand.Version}]; pinned {
+					continue
+				}
 			}
 			c = &candidates[i]
 			break

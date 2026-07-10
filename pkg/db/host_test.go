@@ -183,3 +183,38 @@ func TestPreserveExistingHostBoot(t *testing.T) {
 		t.Fatalf("second preserve = (%d,%v), want (0,nil)", n, err)
 	}
 }
+
+func TestHostClusterColumnsRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	const mac = "aa:bb:cc:dd:ee:55"
+	if err := s.UpsertHost(Host{MAC: mac, OS: "talos"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fresh host: all three membership fields zero.
+	h, err := s.GetHost(mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.ClusterID != nil || h.MachineType != "" || h.NodeConfigID != nil {
+		t.Fatalf("fresh host carries membership: %+v", h)
+	}
+
+	// Written columns scan back typed (written raw here; Task 4 adds setters).
+	if _, err := s.db.Exec(
+		`INSERT INTO clusters (name, endpoint, talos_version, k8s_version, secrets_enc)
+		 VALUES ('rt', 'https://e:6443', 'v1.13.5', 'v1.34.0', X'00')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(
+		`UPDATE hosts SET cluster_id = 1, machine_type = 'controlplane' WHERE mac = ?`, mac); err != nil {
+		t.Fatal(err)
+	}
+	h, err = s.GetHost(mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.ClusterID == nil || *h.ClusterID != 1 || h.MachineType != "controlplane" {
+		t.Fatalf("membership fields did not round-trip: %+v", h)
+	}
+}

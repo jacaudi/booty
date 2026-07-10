@@ -51,6 +51,18 @@ func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 		}
 
 		if host != nil {
+			// P6 top rung: a cluster member serves its ACTIVE frozen, encrypted
+			// node config VERBATIM (materialize-and-freeze, design §5). A member
+			// whose frozen bytes cannot be loaded/decrypted gets a LOUD 500 and
+			// NEVER falls through — feeding a member a non-member config (one
+			// without its cluster's secrets/identity) would be worse than an error.
+			if host.NodeConfigID != nil {
+				serveFrozenNodeConfig(w, store, host)
+				return
+			}
+		}
+
+		if host != nil {
 			if src, kind, ok := resolveConfig(store, host); ok && kind == "machineconfig" {
 				out, ct, _, err := renderConfig("machineconfig", src, machineConfigVars(store, r, host))
 				if err != nil {
@@ -168,4 +180,24 @@ func machineConfigVarsCore(store *db.Store, host *hardware.Host, hostname, uuid,
 			map[string]string{"schematic": vars.Schematic})
 	}
 	return vars
+}
+
+// serveFrozenNodeConfig writes a cluster member's active frozen machineconfig
+// (design §5): load the encrypted revision, decrypt under --secretsKey, and
+// replay the plaintext bytes byte-for-byte with the Talos content type. Every
+// failure is a loud 500; this function is only reached for hosts whose
+// node_config_id is set, so a fall-through is never correct.
+func serveFrozenNodeConfig(w http.ResponseWriter, store *db.Store, host *hardware.Host) {
+	nc, err := store.GetClusterNodeConfig(*host.NodeConfigID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load frozen node config", err)
+		return
+	}
+	plain, err := decryptSecrets(nc.ConfigEnc)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "decrypt frozen node config", err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/yaml")
+	_, _ = w.Write(plain)
 }
