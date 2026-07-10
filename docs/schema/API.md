@@ -171,13 +171,13 @@ the config's active pointer. See [DATABASE.md](DATABASE.md) for the table shapes
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/api/v1/configs` | List configs (name, kind, active revision number, revision count). | `{"configs":[…]}` |
-| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`preseed`). Validates by rendering `source` against stub vars — a bad Butane config surfaces the fatal report in the `422` body. The first revision is recorded and made active. **OPEN.** | `201` config JSON |
+| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`preseed`\|`schematic`). Renderable kinds validate by rendering `source` against stub vars — a bad config surfaces the fatal report in the `422` body. `schematic` validates differently — see "Schematic configs" below. The first revision is recorded and made active. **OPEN.** | `201` config JSON |
 | `GET` | `/api/v1/configs/{id}` | Get a config's identity plus its active revision's decoded source. | config JSON `+source` / `404` |
-| `PUT` | `/api/v1/configs/{id}` | Append a new immutable revision from `{"source"}` and make it active. Same stub-var validation as create. On success, also prunes older revisions per `--configRevisionsKeep` (the active revision is always kept — see [CONFIGURATION.md](../CONFIGURATION.md)). **OPEN.** | config JSON / `404` |
-| `POST` | `/api/v1/configs/{id}/preview` | Render the config's **active revision**. Body: `{"mac"?}`. **Subsumes `/validate`** — omit `mac` to validate against stub vars only (report-only: a bad Butane config returns its fatal report in the `200` body, never a `5xx`); pass `mac` to render against a real host's vars (the same vars the boot path would use). **OPEN.** | `{"rendered","contentType","report"}` |
+| `PUT` | `/api/v1/configs/{id}` | Append a new immutable revision from `{"source"}` and make it active. Same per-kind validation as create. On success, also prunes older revisions per `--configRevisionsKeep` (the active revision is always kept — see [CONFIGURATION.md](../CONFIGURATION.md)). **OPEN.** | config JSON / `404` |
+| `POST` | `/api/v1/configs/{id}/preview` | Render the config's **active revision**. Body: `{"mac"?}`. **Subsumes `/validate`** — omit `mac` to validate against stub vars only (report-only: a bad Butane config returns its fatal report in the `200` body, never a `5xx`); pass `mac` to render against a real host's vars (the same vars the boot path would use). **`schematic`-kind configs return `422`** ("schematic configs are not renderable") — see below. **OPEN.** | `{"rendered","contentType","report"}` |
 | `GET` | `/api/v1/configs/{id}/revisions` | List a config's revisions, newest first, each flagged `active`. | `{"revisions":[…]}` |
-| `POST` | `/api/v1/configs/{id}/rollback` | Move the active pointer to an existing revision (`{"revision"}`, validated to belong to this config). A pointer move — no content is copied, no new revision is created. **OPEN.** | config JSON / `422` |
-| `DELETE` | `/api/v1/configs/{id}` | **403 until auth (P10).** | `403` |
+| `POST` | `/api/v1/configs/{id}/rollback` | Move the active pointer to an existing revision (`{"revision"}`, validated to belong to this config). A pointer move — no content is copied, no new revision is created; for a schematic config this re-points at that revision's already-stored ID, no Factory rebuild. **OPEN.** | config JSON / `422` |
+| `DELETE` | `/api/v1/configs/{id}` | **403 until auth (P10).** Covers schematic-kind configs too — none can be deleted out from under a host binding. | `403` |
 
 **`ConfigDTO`:**
 
@@ -185,10 +185,24 @@ the config's active pointer. See [DATABASE.md](DATABASE.md) for the table shapes
 |-------|------|---------|
 | `id` | integer | `configs.id`. |
 | `name` | string | Operator-chosen, unique. |
-| `kind` | string | `butane` \| `machineconfig` \| `preseed` — the dialect an operator authors (see `kind` vs family `ConfigKind` in [DATABASE.md](DATABASE.md#configs)). |
+| `kind` | string | `butane` \| `machineconfig` \| `preseed` \| `schematic` — the dialect an operator authors (see `kind` vs family `ConfigKind` in [DATABASE.md](DATABASE.md#configs)). |
 | `activeRevision` | integer | The active revision's number; `0` when the config has no active revision yet. |
 | `revisionCount` | integer | Total revisions retained (bounded by `--configRevisionsKeep`). |
 | `updatedAt` | string | Bumped on every active-pointer move (create, edit, or rollback). |
+| `derivedSchematicId` | string *(omitted when empty)* | **P5.** The active revision's Image Factory-derived content-addressed ID. Present only for `kind='schematic'` configs with a built active revision; omitted for every other kind. |
+
+**Schematic configs (P5) — save = build.** For `kind='schematic'`, `source` is not a template but
+Image Factory customization YAML (extensions and, for SBCs, an overlay — see
+[CONFIGURATION.md](../CONFIGURATION.md#talos-schematics-p5) for scope). Both `POST /configs` and
+`PUT /configs/{id}` submit `source` verbatim to `POST <talosFactoryURL>/schematics` — a single
+bounded stdlib request (~15s timeout, dedicated client) — and store the Factory's returned
+content-addressed ID as the new revision's `derivedSchematicId`
+(`config_revisions.derived_schematic_id`; see [DATABASE.md](DATABASE.md#config_revisions)). Any
+transport error, non-2xx response, or an ID that fails path-safety validation returns `422` with
+the Factory's detail and writes **no** config row, revision, or cache target — validation runs
+before the config/revision insert. On success, booty also ensures a Talos discovery-mode cache
+target for the new ID and triggers an async reconcile pass, so boot assets pre-fetch rather than
+waiting for a host to request them (see [CONFIGURATION.md](../CONFIGURATION.md)).
 
 **`RevisionDTO`:**
 
@@ -227,6 +241,7 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 | `GET` | `/api/v1/hosts` | List known hosts. Optional `?approved=true\|false` filter. | `{"hosts":[…]}` |
 | `POST` | `/api/v1/hosts/{mac}/approve` | Approve a host. If the host has a non-empty `os` field, also sets `boot_mode='assigned'` and `assigned_os=os` (plus `schematic` param for Talos), making the host immediately boot-ready once its target's versions are cached. **P4:** the body is now optional and extended to `{"configId"?, "roleIds"?[]}` — an empty/omitted body is byte-identical to pre-P4 approve; a present `configId`/`roleIds` is validated and bound in the same call (see the family-match rule below). **OPEN.** | host JSON / `404` / `422` |
 | `POST` | `/api/v1/hosts/{mac}/bind` | **P4.** Rebind `{"configId"?, "roleIds"?[]}` on an already-approved host without changing its approval state. Same validation as `approve`'s binding. **OPEN.** | host JSON / `404` / `422` |
+| `POST` | `/api/v1/hosts/{mac}/schematic` | **P5.** Bind a Talos schematic to a host. Body: `{"configId"?, "schematic"?}` — **exactly one** of the two, `422` otherwise. See "Schematic binding" below. **OPEN.** | host JSON / `404` / `422` |
 | `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). **OPEN.** | `204` |
 | `POST` | `/api/v1/hosts/{mac}/menu` | Approve (if needed) and put the host into interactive boot-menu mode (`boot_mode='menu'`). Does **not** route through `SetAssignment`; `approved_os` is unchanged. **OPEN.** `404` if MAC is unknown. | host JSON / `404` |
 | `PUT` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
@@ -244,9 +259,31 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 > two writes (out of scope for the current trust window). See [DATABASE.md](DATABASE.md#configs)
 > for the `kind` enum and its relationship to `ConfigKind`.
 
+> **Schematic binding (P5).** `POST /hosts/{mac}/schematic` is a dedicated endpoint — not part of
+> `approve`/`bind`'s config/role binding — because it is a different contract: Talos-only, bound by
+> the natural content-addressed sha256 (no surrogate foreign key). Validation, in order (all `422`
+> except the unknown-MAC case, which is `404`): the MAC must resolve to a known host; `h.OS` must be
+> `talos` (mirrors `approve`'s literal `h.OS == "talos"` check); exactly one of `configId`/`schematic`
+> must be present. If `configId` is given, it must name an existing `kind='schematic'` config with a
+> built active revision (config-not-found and no-built-revision are both `422`) — that revision's
+> **current** derived ID is what gets bound, so an edited schematic only rolls the host forward on an
+> explicit re-bind. `schematic` is the free-entry escape hatch — a raw content-addressed ID that need
+> not be in the config registry (the registry is advisory) — still checked for path-safety (`422` on
+> failure) since the bound value becomes a cache path segment and a Factory URL segment. On success
+> the resolved ID is written straight into `host.Schematic`; **the boot path is unchanged** — the
+> value renders through the existing `[[talos-schematic]]` iPXE token and `/machineconfig` handler
+> exactly as it did before P5. `DELETE /api/v1/configs/{id}` remains `403` (see above), so a config a
+> host is schematic-bound to cannot be deleted out from under it.
+>
+> **P6 seam.** When P6 adds `hosts.cluster_id`, this endpoint gains one additive guard: refuse
+> rebinding when the host is a cluster member, since a member's schematic must move in lockstep with
+> P6's add-member/regenerate path (the frozen `install.image` and the pinned netboot version travel
+> together). The column does not exist in P5, so no guard is coded yet.
+
 > The management UI (`web/`, served at `/ui/`) consumes these hosts endpoints:
 > `GET /api/v1/hosts`, `POST /api/v1/hosts/{mac}/approve`,
-> `POST /api/v1/hosts/{mac}/revoke`, `POST /api/v1/hosts/{mac}/menu`.
+> `POST /api/v1/hosts/{mac}/revoke`, `POST /api/v1/hosts/{mac}/menu`,
+> `POST /api/v1/hosts/{mac}/schematic`.
 > `PUT`/`DELETE /api/v1/hosts/{mac}` are wired but return 403 until auth (P10),
 > so the UI exposes no edit/delete actions.
 
