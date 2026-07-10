@@ -24,6 +24,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.10.1
 	github.com/stretchr/testify v1.11.1
+	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	golang.org/x/mod v0.37.0
 	golang.org/x/sync v0.20.0
 	modernc.org/sqlite v1.53.0
@@ -46,8 +47,10 @@ require (
 	github.com/cosi-project/runtime v1.14.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/evanphx/json-patch v5.9.11+incompatible // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/gertd/go-pluralize v0.2.1 // indirect
+	github.com/ghodss/yaml v1.0.0 // indirect
 	github.com/google/cel-go v0.27.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -89,7 +92,6 @@ require (
 	github.com/vincent-petithory/dataurl v1.0.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
-	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/exp v0.0.0-20250128182459-e0ece0dbea4c // indirect
 	golang.org/x/net v0.53.0 // indirect
