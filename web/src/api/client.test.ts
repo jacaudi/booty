@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { approveHost, listHosts, revokeHost, setMenuMode } from './client'
+import { approveHost, bindSchematic, listHosts, revokeHost, setMenuMode } from './client'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -42,5 +42,15 @@ describe('api client', () => {
   it('throws on a non-ok response', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })))
     await expect(listHosts()).rejects.toThrow(/failed: 500/)
+  })
+
+  it('bindSchematic POSTs to /hosts/{mac}/schematic', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, text: () => Promise.resolve('{}') })
+    vi.stubGlobal('fetch', fetchMock)
+    await bindSchematic('aa:bb', { configId: 3 })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/hosts/aa:bb/schematic',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ configId: 3 }) }),
+    )
   })
 })

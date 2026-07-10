@@ -60,4 +60,38 @@ describe('HostsView', () => {
     render(<HostsView />)
     await waitFor(() => expect(screen.getByText('boom')).toBeInTheDocument())
   })
+
+  it('Allow on a talos host binds the schematic BEFORE approving', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([
+      { mac: 'ta:lo', hostname: '', ip: '', os: 'talos', booted: '', approved: false } as Host,
+    ])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 4, name: 'iscsi', kind: 'schematic', activeRevision: 1, revisionCount: 1, derivedSchematicId: 'a1b2c3d4', updatedAt: '' },
+    ])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    const order: string[] = []
+    vi.mocked(client.bindSchematic).mockImplementation(async () => { order.push('bind') })
+    vi.mocked(client.approveHostWith).mockImplementation(async () => { order.push('approve') })
+    render(<HostsView />)
+    await waitFor(() => screen.getByText('ta:lo'))
+    await userEvent.click(screen.getByRole('button', { name: /allow/i }))
+    const schematicInput = await screen.findByLabelText(/talos schematic/i)
+    await userEvent.type(schematicInput, 'iscsi')
+    await userEvent.click(await screen.findByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(client.bindSchematic).toHaveBeenCalledWith('ta:lo', { configId: 4 }))
+    expect(order).toEqual(['bind', 'approve'])
+  })
+
+  it('Allow on a non-talos host shows no schematic field', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([
+      { mac: 'fl:at', hostname: '', ip: '', os: 'flatcar', booted: '', approved: false } as Host,
+    ])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    render(<HostsView />)
+    await waitFor(() => screen.getByText('fl:at'))
+    await userEvent.click(screen.getByRole('button', { name: /allow/i }))
+    await screen.findByLabelText(/config/i)
+    expect(screen.queryByLabelText(/talos schematic/i)).not.toBeInTheDocument()
+  })
 })
