@@ -191,6 +191,18 @@ func registerClusters(api huma.API, deps APIDeps) {
 		if err := validateClusterInputs(in.Body.Endpoint, in.Body.TalosVersion); err != nil {
 			return nil, err
 		}
+		if in.Body.K8sVersion == "" {
+			return nil, huma.Error422UnprocessableEntity("k8sVersion is required")
+		}
+		// PUT preserves the existing spec binding when specConfigId is omitted: a
+		// nil pointer can't be distinguished from an explicit null under omitempty,
+		// so PUT cannot CLEAR the spec (no present need; a later PATCH could). This
+		// avoids silently dropping the spec (and its machine.install override) on a
+		// version-bump PUT that doesn't re-send specConfigId.
+		specConfigID := in.Body.SpecConfigID
+		if specConfigID == nil {
+			specConfigID = c.SpecConfigID
+		}
 		if in.Body.SpecConfigID != nil {
 			spec, gerr := deps.Store.GetConfig(*in.Body.SpecConfigID)
 			if errors.Is(gerr, db.ErrNotFound) {
@@ -204,7 +216,7 @@ func registerClusters(api huma.API, deps APIDeps) {
 			}
 		}
 		versionBumped := c.TalosVersion != in.Body.TalosVersion
-		if err := deps.Store.UpdateCluster(in.ID, in.Body.Endpoint, in.Body.TalosVersion, in.Body.K8sVersion, in.Body.SpecConfigID); err != nil {
+		if err := deps.Store.UpdateCluster(in.ID, in.Body.Endpoint, in.Body.TalosVersion, in.Body.K8sVersion, specConfigID); err != nil {
 			return nil, huma.Error500InternalServerError("update cluster", err)
 		}
 		// I1 desync guard (Important #1): the tftp netboot pin reads the LIVE
@@ -531,19 +543,22 @@ func registerClusterMembers(api huma.API, deps APIDeps) {
 		if h.ClusterID == nil || *h.ClusterID != in.ID {
 			return nil, huma.Error422UnprocessableEntity("host is not a member of this cluster")
 		}
-		// Clear membership (revert to P4 precedence, §6.4) then prune frozen
-		// revisions. node_config_id first so no row references a deleted config.
+		// Revert to P4 precedence (§6.4). Order is retry-safe: clear node_config_id
+		// FIRST (serving immediately reverts to P4, and no row references a deleted
+		// config), then prune the frozen revisions, and clear cluster_id LAST — so
+		// if any step fails mid-sequence, cluster_id is still set and a retry passes
+		// the membership guard above and completes the cleanup (rather than 422ing).
 		if err := hardware.SetHostNodeConfig(in.MAC, nil); err != nil {
 			return nil, huma.Error500InternalServerError("clear node config", err)
+		}
+		if err := deps.Store.DeleteClusterNodeConfigs(h.MAC, in.ID); err != nil {
+			return nil, huma.Error500InternalServerError("prune node configs", err)
 		}
 		if err := hardware.SetHostMachineType(in.MAC, ""); err != nil {
 			return nil, huma.Error500InternalServerError("clear machine type", err)
 		}
 		if err := hardware.SetHostCluster(in.MAC, nil); err != nil {
 			return nil, huma.Error500InternalServerError("clear cluster", err)
-		}
-		if err := deps.Store.DeleteClusterNodeConfigs(h.MAC, in.ID); err != nil {
-			return nil, huma.Error500InternalServerError("prune node configs", err)
 		}
 		return clusterDTOResp(deps.Store, in.ID)
 	})
@@ -572,9 +587,30 @@ func registerClusterMembers(api huma.API, deps APIDeps) {
 		if fields.TalosVersion == "" {
 			return nil, huma.Error422UnprocessableEntity("could not determine Talos version from install image")
 		}
+		if fields.K8sVersion == "" {
+			return nil, huma.Error422UnprocessableEntity("could not determine Kubernetes version from the control-plane config")
+		}
 		schematic := fields.Schematic
 		if schematic == "" {
 			schematic = viper.GetString(config.TalosSchematic)
+		}
+		// Resolve + validate the control-plane host BEFORE creating the cluster, so
+		// a failed/guarded import never leaves an orphan cluster row (name is UNIQUE
+		// and DELETE is 403 until P10). Same host guards add-member enforces, plus:
+		// import always creates a NEW cluster, so a host already in ANY cluster is a
+		// conflict — never silently steal it from another cluster.
+		h, err := hardware.GetMacAddress(in.Body.ControlplaneMAC)
+		if errors.Is(err, hardware.ErrNotFound) {
+			return nil, huma.Error404NotFound("controlplane host not found")
+		}
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid controlplane MAC", err)
+		}
+		if h.OS != "talos" {
+			return nil, huma.Error422UnprocessableEntity("cluster membership applies to Talos hosts only")
+		}
+		if h.ClusterID != nil {
+			return nil, huma.Error422UnprocessableEntity("host already belongs to a cluster")
 		}
 		// Reconstruct + persist the encrypted secrets bundle from the CP config.
 		// Reuse the already-parsed prov (Fold 5): secrets.NewBundleFromConfig takes
@@ -599,16 +635,9 @@ func registerClusterMembers(api huma.API, deps APIDeps) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("read cluster", err)
 		}
-		// Bind the CP host to the VERBATIM imported bytes (source='imported',
-		// byte-identical recreation, D8). Reuse freezeAndBind so the host is
-		// wired exactly like a generated member.
-		h, err := hardware.GetMacAddress(in.Body.ControlplaneMAC)
-		if errors.Is(err, hardware.ErrNotFound) {
-			return nil, huma.Error404NotFound("controlplane host not found")
-		}
-		if err != nil {
-			return nil, huma.Error422UnprocessableEntity("invalid controlplane MAC", err)
-		}
+		// Bind the CP host (resolved + validated above) to the VERBATIM imported
+		// bytes (source='imported', byte-identical recreation, D8). Reuse
+		// freezeAndBind so the host is wired exactly like a generated member.
 		// Imported bytes are verbatim; there is no separate per-host patch, so
 		// host_patch is "" (Fold 3).
 		if err := freezeAndBind(deps, cluster.ID, h.MAC, "controlplane", schematic, []byte(in.Body.Controlplane), "imported", ""); err != nil {

@@ -305,6 +305,16 @@ func run(cmd *cobra.Command, argv []string) error {
 	hardware.SetStore(store)
 	tftp.SetStore(store)
 
+	// A cluster's frozen machineconfigs can only be decrypted/served with the age
+	// key. Starting without --secretsKey when clusters already exist is allowed
+	// (secrets ops fail closed per-operation, not at startup), but every member's
+	// /machineconfig will 500 — warn so a silent fleet outage is diagnosable (M5).
+	if viper.GetString(config.SecretsKey) == "" {
+		if cs, cerr := store.ListClusters(); cerr == nil && len(cs) > 0 {
+			slog.Warn("clusters exist but --secretsKey is unset; members' machineconfigs will fail to serve until it is provided", "clusters", len(cs))
+		}
+	}
+
 	if err := hardware.Load(); err != nil {
 		return fmt.Errorf("hardware: %w", err)
 	}

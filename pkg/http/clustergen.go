@@ -2,6 +2,7 @@ package http
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,7 +71,7 @@ func parseClusterSpec(source []byte) (clusterSpec, error) {
 // cluster-wide, then the machine-type role layer, then the optional per-host
 // patch (narrowest, last — configpatcher.Apply applies in slice order).
 func patchSourcesFor(spec clusterSpec, machineType, hostPatch string) []string {
-	out := append([]string(nil), spec.ClusterPatches...)
+	out := slices.Clone(spec.ClusterPatches)
 	switch machineType {
 	case "controlplane":
 		out = append(out, spec.ControlPlanePatches...)
@@ -107,7 +108,7 @@ func validateClusterSpecSource(source []byte) error {
 	if err != nil {
 		return err
 	}
-	all := append(append(append([]string(nil), spec.ClusterPatches...), spec.ControlPlanePatches...), spec.WorkerPatches...)
+	all := slices.Concat(spec.ClusterPatches, spec.ControlPlanePatches, spec.WorkerPatches)
 	if _, err := loadPatchList(all); err != nil {
 		return err
 	}

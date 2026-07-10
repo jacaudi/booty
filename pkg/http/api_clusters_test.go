@@ -168,6 +168,47 @@ func TestUpdateClusterVersionBumpPreCaches(t *testing.T) {
 // ptr is a tiny test helper for *int64 literals.
 func ptr(v int64) *int64 { return &v }
 
+func TestUpdateClusterPreservesSpecWhenOmitted(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/clusters", map[string]any{
+		"name": "spec", "endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.13.5", "k8sVersion": "v1.34.0",
+	})
+	cfgID, err := deps.Store.CreateConfig("cluster-spec", "taloscluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bind the spec via PUT.
+	if resp := api.Put("/api/v1/clusters/1", map[string]any{
+		"endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.13.5", "k8sVersion": "v1.34.0", "specConfigId": cfgID,
+	}); resp.Code != 200 {
+		t.Fatalf("bind spec = %d: %s", resp.Code, resp.Body.String())
+	}
+	// A later PUT that OMITS specConfigId must not silently unbind it.
+	if resp := api.Put("/api/v1/clusters/1", map[string]any{
+		"endpoint": "https://10.0.0.99:6443", "talosVersion": "v1.13.9", "k8sVersion": "v1.34.0",
+	}); resp.Code != 200 {
+		t.Fatalf("update = %d: %s", resp.Code, resp.Body.String())
+	}
+	c, _ := deps.Store.GetCluster(1)
+	if c.SpecConfigID == nil || *c.SpecConfigID != cfgID {
+		t.Fatalf("PUT omitting specConfigId silently unbound the spec: %+v", c.SpecConfigID)
+	}
+}
+
+func TestUpdateClusterRejectsEmptyK8sVersion(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/clusters", map[string]any{
+		"name": "k8s", "endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.13.5", "k8sVersion": "v1.34.0",
+	})
+	if resp := api.Put("/api/v1/clusters/1", map[string]any{
+		"endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.13.5", "k8sVersion": "",
+	}); resp.Code != 422 {
+		t.Fatalf("update with empty k8sVersion = %d, want 422", resp.Code)
+	}
+}
+
 func TestExportClusterSecrets(t *testing.T) {
 	deps := clustersTestSetup(t)
 	api := newTestAPI(t, deps)

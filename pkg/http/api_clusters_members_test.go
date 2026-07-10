@@ -225,6 +225,72 @@ func TestImportReconstructsCluster(t *testing.T) {
 	}
 }
 
+func TestImportUnregisteredHostLeavesNoOrphanCluster(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	cp := string(genControlPlaneBytes(t, "controlplane"))
+	// Control-plane MAC that booty does not know → import must fail AND must not
+	// have committed a cluster row (name is UNIQUE + DELETE is 403 → orphan).
+	resp := api.Post("/api/v1/clusters/import", map[string]any{
+		"name": "orphan", "controlplane": cp, "controlplaneMac": "aa:bb:cc:dd:ee:f0",
+	})
+	if resp.Code == 201 {
+		t.Fatalf("import with unregistered CP host unexpectedly succeeded")
+	}
+	list, err := deps.Store.ListClusters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("failed import left an orphan cluster: %+v", list)
+	}
+}
+
+func TestImportRejectsHostAlreadyInAnotherCluster(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	// Host bound to cluster A.
+	api.Post("/api/v1/clusters", map[string]any{"name": "a", "endpoint": "https://e:6443", "talosVersion": "v1.13.5", "k8sVersion": "v1.34.0"})
+	const mac = "aa:bb:cc:dd:ee:f1"
+	hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos"})
+	if resp := api.Post("/api/v1/clusters/1/members", map[string]any{"mac": mac, "machineType": "controlplane"}); resp.Code != 200 {
+		t.Fatalf("bind to A = %d: %s", resp.Code, resp.Body.String())
+	}
+	// Import naming that same host as the CP must be refused, must not steal it,
+	// and must not create the cluster.
+	cp := string(genControlPlaneBytes(t, "controlplane"))
+	resp := api.Post("/api/v1/clusters/import", map[string]any{
+		"name": "steal", "controlplane": cp, "controlplaneMac": mac,
+	})
+	if resp.Code != 422 {
+		t.Fatalf("import stealing a member = %d, want 422", resp.Code)
+	}
+	h, _ := hardware.GetMacAddress(mac)
+	if h.ClusterID == nil || *h.ClusterID != 1 {
+		t.Fatalf("host was stolen from cluster A: %+v", h)
+	}
+	if list, _ := deps.Store.ListClusters(); len(list) != 1 {
+		t.Fatalf("failed import created a cluster: %+v", list)
+	}
+}
+
+func TestImportRejectsNonTalosHost(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	const mac = "aa:bb:cc:dd:ee:f2"
+	hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar"})
+	cp := string(genControlPlaneBytes(t, "controlplane"))
+	resp := api.Post("/api/v1/clusters/import", map[string]any{
+		"name": "nontalos", "controlplane": cp, "controlplaneMac": mac,
+	})
+	if resp.Code != 422 {
+		t.Fatalf("import onto a non-talos host = %d, want 422", resp.Code)
+	}
+	if list, _ := deps.Store.ListClusters(); len(list) != 0 {
+		t.Fatalf("failed import created a cluster: %+v", list)
+	}
+}
+
 func TestImportRejectsWorkerOnlyAtAPI(t *testing.T) {
 	deps := clustersTestSetup(t)
 	api := newTestAPI(t, deps)
