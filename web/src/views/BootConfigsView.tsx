@@ -389,7 +389,10 @@ function SchematicsTab() {
     buildCustomization({ extensions: values.extensions ?? [], overlayName: values.overlayName, overlayImage: values.overlayImage })
 
   const submitCreate = async () => {
-    const values = await createForm.validateFields()
+    // AntD renders per-field errors on rejection (e.g. the overlay
+    // both-or-neither rule); nothing else to surface here.
+    const values = await createForm.validateFields().catch(() => null)
+    if (!values) return
     try {
       const created = await createConfig({ name: values.name, kind: 'schematic', source: fieldsToSource(values) })
       message.success(`Built ${values.name}: ${created?.derivedSchematicId ?? 'unknown id'}`)
@@ -416,7 +419,10 @@ function SchematicsTab() {
       setEditing(null)
       return
     }
-    const values = await editForm.validateFields()
+    // AntD renders per-field errors on rejection (e.g. the overlay
+    // both-or-neither rule); nothing else to surface here.
+    const values = await editForm.validateFields().catch(() => null)
+    if (!values) return
     try {
       const updated = await updateConfig(editing.id, fieldsToSource(values))
       message.success(`Rebuilt ${editing.name}: ${updated?.derivedSchematicId ?? 'unknown id'}`)
@@ -475,10 +481,36 @@ function SchematicsTab() {
       <Form.Item name="extensions" label="Official extensions" help="e.g. siderolabs/iscsi-tools">
         <Select mode="tags" placeholder="siderolabs/…" open={false} tokenSeparators={[',', ' ']} />
       </Form.Item>
-      <Form.Item name="overlayName" label="Overlay name (SBCs, optional)">
+      <Form.Item
+        name="overlayName"
+        label="Overlay name (SBCs, optional)"
+        dependencies={['overlayImage']}
+        rules={[
+          ({ getFieldValue }) => ({
+            validator(_, value) {
+              return !!value === !!getFieldValue('overlayImage')
+                ? Promise.resolve()
+                : Promise.reject(new Error('Overlay requires both a name and an image'))
+            },
+          }),
+        ]}
+      >
         <Input placeholder="rpi_generic" />
       </Form.Item>
-      <Form.Item name="overlayImage" label="Overlay image (optional)">
+      <Form.Item
+        name="overlayImage"
+        label="Overlay image (optional)"
+        dependencies={['overlayName']}
+        rules={[
+          ({ getFieldValue }) => ({
+            validator(_, value) {
+              return !!value === !!getFieldValue('overlayName')
+                ? Promise.resolve()
+                : Promise.reject(new Error('Overlay requires both a name and an image'))
+            },
+          }),
+        ]}
+      >
         <Input placeholder="siderolabs/sbc-raspberrypi" />
       </Form.Item>
     </>

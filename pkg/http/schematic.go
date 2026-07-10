@@ -102,17 +102,22 @@ func SeedVanillaSchematic(store *db.Store) error {
 	if slices.ContainsFunc(list, func(r db.ConfigListRow) bool { return r.Name == "vanilla" }) {
 		return nil // already seeded (or operator-owned name): no-op
 	}
-	id, err := store.CreateConfig("vanilla", "schematic")
-	if err != nil {
-		return fmt.Errorf("http: seed vanilla schematic: %w", err)
-	}
 	vanillaID := config.DefaultTalosSchematic
 	// Defense-in-depth: honor the plan-wide "ValidatePathParam applies to every
 	// ID before it is stored, seeded, or bound" invariant even for the
 	// compile-time-known trusted constant — a bad edit to DefaultTalosSchematic
 	// fails fast at startup rather than seeding an unusable cache segment.
+	// Validated BEFORE the config row is created: if this ever fails, startup
+	// aborts with no row persisted, so a later restart still attempts (and can
+	// succeed) seeding once the constant is fixed — rather than leaving behind
+	// an orphaned "vanilla" config with no active revision that the presence
+	// check above would then permanently skip.
 	if err := cache.ValidatePathParam(vanillaID); err != nil {
 		return fmt.Errorf("http: seed vanilla schematic: invalid constant id: %w", err)
+	}
+	id, err := store.CreateConfig("vanilla", "schematic")
+	if err != nil {
+		return fmt.Errorf("http: seed vanilla schematic: %w", err)
 	}
 	if err := appendActiveRevision(store, id, vanillaSchematicSource, &vanillaID); err != nil {
 		return fmt.Errorf("http: seed vanilla schematic revision: %w", err)

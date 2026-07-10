@@ -60,7 +60,7 @@ func TestMigrate_IsIdempotentAcrossReopen(t *testing.T) {
 func TestMigration0003ConfigsRoles(t *testing.T) {
 	s := newTestStore(t) // Open() runs every migration, incl. 0003
 
-	// user_version reached 3 (three migrations applied).
+	// user_version reached 4 (four migrations applied).
 	var uv int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
