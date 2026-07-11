@@ -1,6 +1,7 @@
 package http
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -216,5 +217,158 @@ func TestTranslateDebianConfigDiskCoherence(t *testing.T) {
 				t.Errorf("%s must be rejected", c.name)
 			}
 		})
+	}
+}
+
+// espSyncSdaSdb is the ESP-sync late_command line emitted for a 2-disk
+// /dev/sda + /dev/sdb UEFI mirror: mkfs the secondary ESP, clone the primary
+// ESP onto it, and register a fallback UEFI boot entry so the node still boots
+// if the primary disk dies (Task 5 composes this as the sole late_command
+// source; Tasks 6/7 prepend ssh / append operator). Trailing newline: it is
+// the last emitted line for these accounts-less specs. Interpreted string:
+// \" -> ", \\ -> \, so the loader path is \EFI\debian\shimx64.efi.
+const espSyncSdaSdb = "d-i preseed/late_command string in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label \"debian (disk 2)\" --loader \\EFI\\debian\\shimx64.efi\n"
+
+// TestTranslateDebianConfigMirror golden-pins the four raid:mirror combos —
+// UEFI-native (target nodes are UEFI). Each member disk gets its OWN small ESP
+// (~512M, method{ efi }, NOT a raid member — the ESP cannot be mirrored: the
+// firmware writes to it directly before mdadm assembles, so a mirrored ESP
+// desyncs and d-i refuses /boot/efi on md). The remainder of each disk is a
+// raid member: md /boot (ext4, partition 2) + md root (partition 3). Recipe
+// structure grounded in the bearice EFI+RAID1 gist and std.rocks mdadm-uefi
+// (cited in debiangen.go). The per-disk ESP entry, partman-efi, the
+// device-enumerated partman-auto-raid/recipe, mdadm/boot_degraded, and the
+// LVM-on-md nesting are the POINT of these tests, not incidental.
+//
+// PROVISIONAL: these pin BYTES, not install-correctness — see the netboot-lab
+// UEFI gate below. The redundancy-critical ESP-sync late_command IS emitted
+// here (it is intrinsic to a UEFI mirror), pinned as espSyncSdaSdb. It is the
+// sole late_command source for these accounts-less specs; Task 6 prepends the
+// ssh block and Task 7 appends the operator's own late_command, giving the
+// final 3-source order: ssh -> ESP-sync -> operator.
+func TestTranslateDebianConfigMirror(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "plain-ext4-mirror",
+			src:  "disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n",
+			want: `d-i partman-auto/disk string /dev/sda /dev/sdb
+d-i partman-auto/method string raid
+d-i partman-efi/non_efi_system boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-auto/expert_recipe string \
+    multiraid :: \
+    512 512 640 free $bootable{ } method{ efi } format{ } . \
+    512 512 512 raid $primary{ } method{ raid } . \
+    1000 10000 -1 raid $primary{ } method{ raid } .
+d-i partman-auto-raid/recipe string \
+    1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
+    1 2 0 ext4 / /dev/sda3#/dev/sdb3 .
+d-i mdadm/boot_degraded boolean true
+d-i partman-md/confirm boolean true
+d-i partman-md/confirm_nooverwrite boolean true
+` + partmanTail + "d-i grub-installer/bootdev string /dev/sda /dev/sdb\n" + espSyncSdaSdb,
+		},
+		{
+			name: "plain-xfs-mirror",
+			src:  "disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n  filesystem: xfs\n",
+			want: `d-i partman-auto/disk string /dev/sda /dev/sdb
+d-i partman-auto/method string raid
+d-i partman-efi/non_efi_system boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-auto/expert_recipe string \
+    multiraid :: \
+    512 512 640 free $bootable{ } method{ efi } format{ } . \
+    512 512 512 raid $primary{ } method{ raid } . \
+    1000 10000 -1 raid $primary{ } method{ raid } .
+d-i partman-auto-raid/recipe string \
+    1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
+    1 2 0 xfs / /dev/sda3#/dev/sdb3 .
+d-i mdadm/boot_degraded boolean true
+d-i partman-md/confirm boolean true
+d-i partman-md/confirm_nooverwrite boolean true
+` + partmanTail + "d-i grub-installer/bootdev string /dev/sda /dev/sdb\n" + espSyncSdaSdb,
+		},
+		{
+			name: "lvm-ext4-mirror",
+			src:  "disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n  layout: lvm\n",
+			want: `d-i partman-auto/disk string /dev/sda /dev/sdb
+d-i partman-auto/method string raid
+d-i partman-efi/non_efi_system boolean true
+d-i partman-md/device_remove_md boolean true
+` + lvmBlock + `d-i partman-auto/expert_recipe string \
+    multiraid :: \
+    512 512 640 free $bootable{ } method{ efi } format{ } . \
+    512 512 512 raid $primary{ } method{ raid } . \
+    1000 10000 -1 raid $primary{ } method{ raid } . \
+    2048 4096 -1 ext4 $defaultignore{ } $lvmok{ } method{ format } format{ } use_filesystem{ } filesystem{ ext4 } mountpoint{ / } .
+d-i partman-auto-raid/recipe string \
+    1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
+    1 2 0 lvm - /dev/sda3#/dev/sdb3 .
+d-i mdadm/boot_degraded boolean true
+d-i partman-md/confirm boolean true
+d-i partman-md/confirm_nooverwrite boolean true
+` + partmanTail + "d-i grub-installer/bootdev string /dev/sda /dev/sdb\n" + espSyncSdaSdb,
+		},
+		{
+			name: "lvm-xfs-mirror",
+			src:  "disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n  layout: lvm\n  filesystem: xfs\n",
+			want: `d-i partman-auto/disk string /dev/sda /dev/sdb
+d-i partman-auto/method string raid
+d-i partman-efi/non_efi_system boolean true
+d-i partman-md/device_remove_md boolean true
+` + lvmBlock + `d-i partman-auto/expert_recipe string \
+    multiraid :: \
+    512 512 640 free $bootable{ } method{ efi } format{ } . \
+    512 512 512 raid $primary{ } method{ raid } . \
+    1000 10000 -1 raid $primary{ } method{ raid } . \
+    2048 4096 -1 xfs $defaultignore{ } $lvmok{ } method{ format } format{ } use_filesystem{ } filesystem{ xfs } mountpoint{ / } .
+d-i partman-auto-raid/recipe string \
+    1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
+    1 2 0 lvm - /dev/sda3#/dev/sdb3 .
+d-i mdadm/boot_degraded boolean true
+d-i partman-md/confirm boolean true
+d-i partman-md/confirm_nooverwrite boolean true
+` + partmanTail + "d-i grub-installer/bootdev string /dev/sda /dev/sdb\n" + espSyncSdaSdb,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := translate(t, c.src); got != c.want {
+				t.Errorf("got:\n%s\nwant:\n%s", got, c.want)
+			}
+		})
+	}
+}
+
+// TestTranslateDebianConfigMirrorNeedsTwoDevices: coherence (design §6.5).
+func TestTranslateDebianConfigMirrorNeedsTwoDevices(t *testing.T) {
+	if _, err := translateDebianConfig([]byte("disk:\n  devices: [/dev/sda]\n  raid: mirror\n")); err == nil {
+		t.Error("raid: mirror with < 2 devices must be rejected")
+	}
+}
+
+// TestTranslateDebianConfigBootDegradedFalse: the operator can opt out.
+func TestTranslateDebianConfigBootDegradedFalse(t *testing.T) {
+	got := translate(t, "disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n  boot_degraded: false\n")
+	if !strings.Contains(got, "d-i mdadm/boot_degraded boolean false\n") {
+		t.Errorf("boot_degraded: false not emitted:\n%s", got)
+	}
+}
+
+// TestPartitionName: udev inserts a "p" separator when the device name ends
+// in a digit (nvme0n1 -> nvme0n1p1); classic sdX concatenates.
+func TestPartitionName(t *testing.T) {
+	if got := partitionName("/dev/sda", 2); got != "/dev/sda2" {
+		t.Errorf("sda partition = %q, want /dev/sda2", got)
+	}
+	if got := partitionName("/dev/nvme0n1", 1); got != "/dev/nvme0n1p1" {
+		t.Errorf("nvme partition = %q, want /dev/nvme0n1p1", got)
+	}
+	if got := memberParts([]string{"/dev/nvme0n1", "/dev/nvme1n1"}, 2); got != "/dev/nvme0n1p2#/dev/nvme1n1p2" {
+		t.Errorf("memberParts = %q", got)
 	}
 }

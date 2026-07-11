@@ -67,18 +67,29 @@ type debianUser struct {
 // only. Defaults WITHIN a present disk block: layout=plain, filesystem=ext4,
 // raid=none. No disk block at all -> no partman lines (I4).
 type debianDisk struct {
-	Devices    []string `yaml:"devices"`
-	RAID       string   `yaml:"raid"`       // "" (=none) | none | mirror
-	Layout     string   `yaml:"layout"`     // "" (=plain) | plain | lvm
-	Filesystem string   `yaml:"filesystem"` // "" (=ext4) | ext4 | xfs
+	Devices      []string `yaml:"devices"`
+	RAID         string   `yaml:"raid"`          // "" (=none) | none | mirror
+	Layout       string   `yaml:"layout"`        // "" (=plain) | plain | lvm
+	Filesystem   string   `yaml:"filesystem"`    // "" (=ext4) | ext4 | xfs
+	BootDegraded *bool    `yaml:"boot_degraded"` // mirror only; default true
 }
 
-// diskView is the disk half of the emission view.
+// diskView is the disk half of the emission view. UEFI mirror recipes are
+// device-list-parameterized: BootParts/RootParts enumerate partition 2/3 of
+// every member device (partition 1 is the per-disk ESP), '#'-joined per
+// partman-auto-raid/recipe syntax.
 type diskView struct {
 	Devices    string // space-joined
-	Method     string // regular | lvm
+	Method     string // regular | lvm | raid
 	LVM        bool
 	Filesystem string
+	// mirror only:
+	Mirror       bool
+	DevCount     int
+	BootParts    string // md /boot members, e.g. /dev/sda2#/dev/sdb2
+	RootParts    string // md root members, e.g. /dev/sda3#/dev/sdb3
+	BootDegraded bool
+	ESPSyncCmd   string // ESP-sync late_command source (mirror only), composed into preseedView.LateCommand
 }
 
 // buildDiskView validates disk coherence (design §6.5 — only called when a
@@ -93,8 +104,11 @@ func buildDiskView(d *debianDisk) (*diskView, error) {
 	if fs != "ext4" && fs != "xfs" {
 		return nil, fmt.Errorf("http: debianconfig: invalid disk.filesystem %q (want ext4|xfs)", d.Filesystem)
 	}
-	if raid != "none" {
-		return nil, fmt.Errorf("http: debianconfig: invalid disk.raid %q (want none)", d.RAID)
+	if raid != "none" && raid != "mirror" {
+		return nil, fmt.Errorf("http: debianconfig: invalid disk.raid %q (want none|mirror)", d.RAID)
+	}
+	if raid == "mirror" && len(d.Devices) < 2 {
+		return nil, errors.New("http: debianconfig: raid: mirror requires at least 2 disk.devices")
 	}
 	if len(d.Devices) == 0 {
 		return nil, errors.New("http: debianconfig: disk.devices requires at least one device")
@@ -103,7 +117,78 @@ func buildDiskView(d *debianDisk) (*diskView, error) {
 	if v.LVM {
 		v.Method = "lvm"
 	}
+	if raid == "mirror" {
+		// UEFI-native curated mirror (target nodes are UEFI). Layout per member
+		// disk: partition 1 = a per-disk ESP (method{ efi }, ~512M, NOT a raid
+		// member); partition 2 = md /boot (ext4); partition 3 = md root. The ESP
+		// CANNOT live on mdadm: firmware writes to /boot/efi directly before md
+		// assembles, so a mirrored ESP desyncs and d-i refuses /boot/efi on md —
+		// hence one plain ESP per disk, cloned post-install by the ESP-sync
+		// late_command (v.ESPSyncCmd, composed below). Recipe structure grounded in the bearice
+		// EFI+RAID1 gist (github.com/.../331a954d86d890d9dbeacdd7de3aabe8) and
+		// std.rocks/gnulinux_mdadm_uefi.html — adapt, do not reinvent.
+		// M1: assumes partman numbers partitions in recipe order (/dev/sdaN <->
+		// the Nth expert_recipe entry) — documented partman behavior, not
+		// strictly guaranteed.
+		// M3: $bootable{ } is carried on the per-disk ESP entry (per the
+		// reference) and intentionally OMITTED on the md /boot/root raid members;
+		// grub-efi installs to every member's ESP (grub-installer + the ESP-sync
+		// efibootmgr entry), so no MBR boot flag is needed.
+		v.Mirror = true
+		v.Method = "raid"
+		v.DevCount = len(d.Devices)
+		v.BootParts = memberParts(d.Devices, 2) // partition 1 is the ESP
+		v.RootParts = memberParts(d.Devices, 3)
+		v.BootDegraded = true // unattended-node default (design §6.2)
+		if d.BootDegraded != nil {
+			v.BootDegraded = *d.BootDegraded
+		}
+		v.ESPSyncCmd = espSyncLateCommand(d.Devices)
+	}
 	return v, nil
+}
+
+// espSyncLateCommand builds the redundancy-critical ESP-sync fragment: the ESP
+// CANNOT be mirrored (§ buildDiskView comment), so after install we clone the
+// primary disk's ESP (device 0, partition 1) onto every OTHER member's ESP and
+// register a fallback UEFI boot entry, so the node still UEFI-boots if the
+// primary disk dies. Grounded in std.rocks/gnulinux_mdadm_uefi.html (clone ESP
+// + efibootmgr --create for the secondary disk). Runs inside the target during
+// preseed/late_command; /boot/efi is the mounted primary ESP at that point.
+// The efibootmgr loader path uses literal backslashes (\EFI\debian\shimx64.efi).
+func espSyncLateCommand(devices []string) string {
+	var cmds []string
+	for i := 1; i < len(devices); i++ {
+		dev := devices[i]
+		esp := partitionName(dev, 1)
+		label := fmt.Sprintf("debian (disk %d)", i+1)
+		cmds = append(cmds,
+			"in-target sh -c 'mkfs.vfat -F32 "+esp+"'",
+			"in-target sh -c 'mount "+esp+" /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt'",
+			`in-target efibootmgr --create --disk `+dev+` --part 1 --label "`+label+`" --loader \EFI\debian\shimx64.efi`,
+		)
+	}
+	return strings.Join(cmds, " ; ")
+}
+
+// partitionName returns device's nth partition node, inserting the "p"
+// separator udev uses when the device name ends in a digit
+// (/dev/nvme0n1 -> /dev/nvme0n1p1); classic /dev/sdX concatenates.
+func partitionName(device string, n int) string {
+	if len(device) > 0 && device[len(device)-1] >= '0' && device[len(device)-1] <= '9' {
+		return fmt.Sprintf("%sp%d", device, n)
+	}
+	return fmt.Sprintf("%s%d", device, n)
+}
+
+// memberParts enumerates partition n of every member device, '#'-joined per
+// partman-auto-raid/recipe syntax.
+func memberParts(devices []string, n int) string {
+	parts := make([]string, len(devices))
+	for i, d := range devices {
+		parts[i] = partitionName(d, n)
+	}
+	return strings.Join(parts, "#")
 }
 
 // preseedView is the flattened emission view derived from a validated spec so
@@ -123,6 +208,7 @@ type preseedView struct {
 	UserFullname, Username, UserHash            string
 	Packages                                    string
 	Disk                                        *diskView
+	LateCommand                                 string
 }
 
 // buildPreseedView validates spec coherence and derives the emission view.
@@ -171,6 +257,15 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		}
 		v.Disk = dv
 	}
+	// Compose the single d-i late_command line from ordered sources. Task 5:
+	// the ESP-sync (UEFI mirror only). Task 6 prepends the ssh-keys block;
+	// Task 7 appends the operator's own late_command. Final order:
+	// ssh -> ESP-sync -> operator.
+	var lateParts []string
+	if v.Disk != nil && v.Disk.ESPSyncCmd != "" {
+		lateParts = append(lateParts, v.Disk.ESPSyncCmd)
+	}
+	v.LateCommand = strings.Join(lateParts, " ; ")
 	return v, nil
 }
 
@@ -203,18 +298,33 @@ d-i passwd/username string {{ .Username }}
 d-i passwd/user-password-crypted password {{ .UserHash }}
 {{ end }}{{ end }}{{ if .Disk }}d-i partman-auto/disk string {{ .Disk.Devices }}
 d-i partman-auto/method string {{ .Disk.Method }}
-{{ if .Disk.LVM }}d-i partman-lvm/device_remove_lvm boolean true
+{{ if .Disk.Mirror }}d-i partman-efi/non_efi_system boolean true
+d-i partman-md/device_remove_md boolean true
+{{ end }}{{ if .Disk.LVM }}d-i partman-lvm/device_remove_lvm boolean true
 d-i partman-auto-lvm/guided_size string max
 d-i partman-lvm/confirm boolean true
 d-i partman-lvm/confirm_nooverwrite boolean true
-{{ end }}d-i partman-auto/choose_recipe select atomic
+{{ end }}{{ if .Disk.Mirror }}d-i partman-auto/expert_recipe string \
+    multiraid :: \
+    512 512 640 free $bootable{ } method{ efi } format{ } . \
+    512 512 512 raid $primary{ } method{ raid } . \
+    1000 10000 -1 raid $primary{ } method{ raid } .{{ if .Disk.LVM }} \
+    2048 4096 -1 {{ .Disk.Filesystem }} $defaultignore{ } $lvmok{ } method{ format } format{ } use_filesystem{ } filesystem{ {{ .Disk.Filesystem }} } mountpoint{ / } .{{ end }}
+d-i partman-auto-raid/recipe string \
+    1 {{ .Disk.DevCount }} 0 ext4 /boot {{ .Disk.BootParts }} . \
+    1 {{ .Disk.DevCount }} 0 {{ if .Disk.LVM }}lvm -{{ else }}{{ .Disk.Filesystem }} /{{ end }} {{ .Disk.RootParts }} .
+d-i mdadm/boot_degraded boolean {{ .Disk.BootDegraded }}
+d-i partman-md/confirm boolean true
+d-i partman-md/confirm_nooverwrite boolean true
+{{ else }}d-i partman-auto/choose_recipe select atomic
 d-i partman/default_filesystem string {{ .Disk.Filesystem }}
-d-i partman-partitioning/confirm_write_new_label boolean true
+{{ end }}d-i partman-partitioning/confirm_write_new_label boolean true
 d-i partman/choose_partition select finish
 d-i partman/confirm boolean true
 d-i partman/confirm_nooverwrite boolean true
 d-i grub-installer/bootdev string {{ .Disk.Devices }}
 {{ end }}{{ if .Packages }}d-i pkgsel/include string {{ .Packages }}
+{{ end }}{{ if .LateCommand }}d-i preseed/late_command string {{ .LateCommand }}
 {{ end }}`
 
 var preseedTmpl = template.Must(template.New("debianpreseed").Parse(preseedTemplateText))
