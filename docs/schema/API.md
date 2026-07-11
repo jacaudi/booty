@@ -171,7 +171,7 @@ the config's active pointer. See [DATABASE.md](DATABASE.md) for the table shapes
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/api/v1/configs` | List configs (name, kind, active revision number, revision count). | `{"configs":[…]}` |
-| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`preseed`\|`schematic`\|`taloscluster`). Renderable kinds validate by rendering `source` against stub vars — a bad config surfaces the fatal report in the `422` body. `schematic` and `taloscluster` validate differently — see "Schematic configs" below and [Clusters](#clusters-p6). The first revision is recorded and made active. **OPEN.** | `201` config JSON |
+| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`preseed`\|`schematic`\|`taloscluster`\|`debianconfig`). Renderable kinds validate by rendering `source` against stub vars — a bad config surfaces the fatal report in the `422` body. `schematic` and `taloscluster` validate differently — see "Schematic configs" below and [Clusters](#clusters-p6). The first revision is recorded and made active. **OPEN.** | `201` config JSON |
 | `GET` | `/api/v1/configs/{id}` | Get a config's identity plus its active revision's decoded source. | config JSON `+source` / `404` |
 | `PUT` | `/api/v1/configs/{id}` | Append a new immutable revision from `{"source"}` and make it active. Same per-kind validation as create. On success, also prunes older revisions per `--configRevisionsKeep` (the active revision is always kept — see [CONFIGURATION.md](../CONFIGURATION.md)). **OPEN.** | config JSON / `404` |
 | `POST` | `/api/v1/configs/{id}/preview` | Render the config's **active revision**. Body: `{"mac"?}`. **Subsumes `/validate`** — omit `mac` to validate against stub vars only (report-only: a bad Butane config returns its fatal report in the `200` body, never a `5xx`); pass `mac` to render against a real host's vars (the same vars the boot path would use). **`schematic`- and `taloscluster`-kind configs return `422`** (`"<kind> configs are not renderable"`) — see below. **OPEN.** | `{"rendered","contentType","report"}` |
@@ -185,7 +185,7 @@ the config's active pointer. See [DATABASE.md](DATABASE.md) for the table shapes
 |-------|------|---------|
 | `id` | integer | `configs.id`. |
 | `name` | string | Operator-chosen, unique. |
-| `kind` | string | `butane` \| `machineconfig` \| `preseed` \| `schematic` \| `taloscluster` — the dialect an operator authors (see `kind` vs family `ConfigKind` in [DATABASE.md](DATABASE.md#configs)). |
+| `kind` | string | `butane` \| `machineconfig` \| `preseed` \| `schematic` \| `taloscluster` \| `debianconfig` — the dialect an operator authors (see `kind` vs family `ConfigKind` in [DATABASE.md](DATABASE.md#configs)). |
 | `activeRevision` | integer | The active revision's number; `0` when the config has no active revision yet. |
 | `revisionCount` | integer | Total revisions retained (bounded by `--configRevisionsKeep`). |
 | `updatedAt` | string | Bumped on every active-pointer move (create, edit, or rollback). |
@@ -212,6 +212,16 @@ waiting for a host to request them (see [CONFIGURATION.md](../CONFIGURATION.md))
 | `sha256` | string | Hex SHA-256 of the raw (decoded) source. |
 | `createdAt` | string | Revision creation timestamp. |
 | `active` | bool | Whether this is the config's current active revision. |
+
+**`debianconfig`** (Debian structured authoring) — a curated YAML that booty's
+own generator translates into a flat d-i preseed (the butane→ignition analog
+for Debian; no library exists, booty owns generation). It is *renderable*:
+create/update validate by a stub-var render (coherence violations 422),
+preview works, and a bound host serves the translated preseed at `/preseed`.
+It coexists with raw `preseed` — the family guard (`familyAllowsKind`) makes
+the preseed family the only 1:many family: `{preseed, debianconfig}`. The
+`--preseedFile` server default remains raw preseed. See
+`CONFIGURATION.md` § "Debian structured authoring" for the full schema.
 
 ### Roles (P4)
 

@@ -209,6 +209,124 @@ a `machine.install` strategic-merge patch — set at the cluster, role, or per-h
 freeze) but **cannot** catch a wrong-but-present disk — an incorrect override installs to the wrong
 device silently.
 
+## Debian structured authoring (`debianconfig`)
+
+`debianconfig` is a curated YAML config kind that booty translates into a flat
+Debian d-i preseed — author structure, serve preseed, exactly like authoring
+butane and serving ignition. Raw `preseed` configs remain fully supported (and
+the `--preseedFile` server default is always raw preseed); `debianconfig` is
+the recommended structured option, opt-in per config.
+
+**Emission contract:** unset fields emit **no** preseed line (d-i defaults or
+prompts apply). Ordering: curated fields → one composed `late_command`
+(generated ssh-keys block first, then yours) → `raw_preseed` **last**, so a
+duplicate debconf answer in `raw_preseed` always overrides a curated line.
+Template variables (`{{ .Hostname }}`, `{{ .ServerIP }}`, …) substitute in
+every field — including `raw_preseed` and `expert_recipe` — before translation.
+
+Full schema (every field optional unless noted):
+
+```yaml
+hostname: "{{ .Hostname }}"
+domain: cluster.local
+locale: en_US.UTF-8
+timezone: Etc/UTC
+keyboard: us
+mirror:                       # override-only; suite/codename comes from the
+  hostname: deb.debian.org    # Debian target's channel
+  directory: /debian
+  proxy: ""
+network:
+  interface: auto             # "auto" | a named iface (e.g. eth0)
+  static:                     # omit -> DHCP
+    address: 10.0.0.10
+    netmask: 255.255.255.0
+    gateway: 10.0.0.1
+    nameservers: [10.0.0.1]
+accounts:                     # password HASHES only ($6$..., pre-computed crypt);
+  root_password_hash: "$6$…"  # omit -> root login disabled (safe default)
+  user:                       # username + password_hash required if present
+    fullname: Ops
+    username: ops
+    password_hash: "$6$…"
+    ssh_authorized_keys: ["ssh-ed25519 …"]   # emitted via late_command (no
+                                             # native preseed directive exists)
+packages: [openssh-server, qemu-guest-agent]
+disk:
+  devices: [/dev/sda, /dev/sdb]
+  raid: mirror                # none (default) | mirror (UEFI mdadm RAID1 +
+                              # per-disk ESP + ESP-sync late_command)
+  layout: lvm                 # plain (default) | lvm
+  filesystem: ext4            # ext4 (default) | xfs
+  boot_degraded: true         # mirror only; default true (a node still boots
+                              # on a surviving disk)
+  # expert_recipe: |          # raw partman recipe; REPLACES the curated disk
+  #   ...                     # recipe entirely (devices/boot_degraded still apply)
+late_command: |
+  in-target systemctl enable ssh
+raw_preseed: |
+  d-i debian-installer/allow_unauthenticated boolean true
+```
+
+**Disk matrix** — every curated combination is a native partman primitive
+(target nodes are **UEFI**; the `raid: mirror` recipes are UEFI-native):
+
+| `layout` × `filesystem` | `raid: none` | `raid: mirror` (UEFI) |
+|---|---|---|
+| plain × ext4 | guided atomic, ext4 | ESP/disk + md `/boot` (ext4) + md `/` (ext4) |
+| plain × xfs | guided atomic, xfs | ESP/disk + md `/boot` (ext4) + md `/` (xfs) |
+| lvm × ext4 | guided LVM, ext4 | ESP/disk + md `/boot` + LVM-on-md `/`, root LV ext4 |
+| lvm × xfs | guided LVM, xfs | ESP/disk + md `/boot` + LVM-on-md `/`, root LV xfs |
+
+`raid: mirror` requires ≥ 2 `devices`; `/boot` stays ext4 on md in all mirror
+combos; the curated mirror recipes carry no swap (add one via `expert_recipe`
+if needed).
+
+> **UEFI mirror — how redundancy works.** The EFI System Partition **cannot be
+> mirrored** (firmware writes to it directly before mdadm assembles; d-i refuses
+> `/boot/efi` on md). So each member disk gets its **own** ESP (partition 1,
+> `method{ efi }`, not raid'd), and only `/boot` + root are on md. booty then
+> emits an **ESP-sync `late_command`** that, after install, clones the primary
+> ESP onto every other member and registers a fallback UEFI boot entry with
+> `efibootmgr`, so the node still UEFI-boots if the primary disk dies. For a
+> **BIOS/legacy** mirror instead, use `disk.expert_recipe` (curated BIOS mirror
+> is a planned follow-up). Single-disk (`raid: none`) installs let d-i's guided
+> recipe create the ESP itself.
+
+Your `late_command` is **flattened to a single `;`-joined debconf line**, so
+each line must be **independently sequenceable** — no multi-line shell
+constructs (`for`/`if`/`while`/heredocs) across lines. Put such logic in a
+script the `late_command` invokes, or keep it on one line.
+
+**Non-goals (upstream limitations, not booty's):** root-on-ZFS (the Debian
+installer does not support ZFS at all), btrfs RAID1 root, and RAID 0/5/6/10
+are not curated — reachable only via `expert_recipe`/`late_command` at your
+own risk. Coherence checks fire only when a `disk:` block is present; a spec
+with no `disk:` emits no partman lines.
+
+**Worked example — redundant-boot-disk node (mirror + LVM):**
+
+```yaml
+hostname: "{{ .Hostname }}"
+locale: en_US.UTF-8
+timezone: Etc/UTC
+accounts:
+  user:
+    username: ops
+    password_hash: "$6$…"
+    ssh_authorized_keys: ["ssh-ed25519 AAAA…"]
+packages: [openssh-server]
+disk:
+  devices: [/dev/sda, /dev/sdb]
+  raid: mirror
+  layout: lvm
+  filesystem: ext4
+```
+
+Create it with `POST /api/v1/configs {"name":"deb-mirror","kind":"debianconfig",
+"source":"…"}`, preview with `POST /api/v1/configs/{id}/preview`, bind it to a
+Debian host, and the host's `GET /preseed` serves the translated preseed.
+
 ## Signature verification (`--signaturePolicy`)
 
 booty verifies the integrity of the boot artifacts it downloads before serving them. The mechanism
