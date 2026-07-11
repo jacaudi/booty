@@ -372,3 +372,60 @@ func TestPartitionName(t *testing.T) {
 		t.Errorf("memberParts = %q", got)
 	}
 }
+
+// TestTranslateDebianConfigSSHKeysLateCommand: ssh_authorized_keys has no
+// native preseed directive (M3) — it lowers to an in-target late_command
+// block (mkdir, append keys, chown/chmod), golden-pinned.
+func TestTranslateDebianConfigSSHKeysLateCommand(t *testing.T) {
+	src := `accounts:
+  user:
+    username: ops
+    password_hash: $6$h
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAA key1
+      - ssh-ed25519 BBBB key2
+`
+	got := translate(t, src)
+	want := `d-i passwd/root-login boolean false
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string ops
+d-i passwd/username string ops
+d-i passwd/user-password-crypted password $6$h
+d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA key1" "ssh-ed25519 BBBB key2" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys
+`
+	if got != want {
+		t.Errorf("ssh keys:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigSSHKeyQuoteRejected: a key containing a single
+// quote would escape the sh -c quoting — reject it (coherence, 422 upstream).
+func TestTranslateDebianConfigSSHKeyQuoteRejected(t *testing.T) {
+	src := "accounts:\n  user:\n    username: ops\n    password_hash: $6$h\n    ssh_authorized_keys: [\"bad'key\"]\n"
+	if _, err := translateDebianConfig([]byte(src)); err == nil {
+		t.Error("key containing a single quote must be rejected")
+	}
+}
+
+// TestTranslateDebianConfigSSHThenESPSyncOrder pins the 2-source late_command
+// order for a UEFI mirror with ssh keys: the ssh block comes FIRST, then the
+// ESP-sync (' ; '-joined onto ONE d-i late_command line). Task 7 appends the
+// operator source after these two.
+func TestTranslateDebianConfigSSHThenESPSyncOrder(t *testing.T) {
+	src := `accounts:
+  user:
+    username: ops
+    password_hash: $6$h
+    ssh_authorized_keys: [ssh-ed25519 AAAA k1]
+disk:
+  devices: [/dev/sda, /dev/sdb]
+  raid: mirror
+`
+	got := translate(t, src)
+	sshFrag := "in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf \"%s\\n\" \"ssh-ed25519 AAAA k1\" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys"
+	espFrag := "in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label \"debian (disk 2)\" --loader \\EFI\\debian\\shimx64.efi"
+	wantLate := "d-i preseed/late_command string " + sshFrag + " ; " + espFrag + "\n"
+	if !strings.Contains(got, wantLate) {
+		t.Errorf("ssh-then-ESP-sync order not pinned:\ngot:\n%s\nwant late line:\n%s", got, wantLate)
+	}
+}

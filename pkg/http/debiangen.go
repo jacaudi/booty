@@ -58,9 +58,10 @@ type debianAccounts struct {
 }
 
 type debianUser struct {
-	Fullname     string `yaml:"fullname"` // optional; falls back to username
-	Username     string `yaml:"username"`
-	PasswordHash string `yaml:"password_hash"`
+	Fullname          string   `yaml:"fullname"` // optional; falls back to username
+	Username          string   `yaml:"username"`
+	PasswordHash      string   `yaml:"password_hash"`
+	SSHAuthorizedKeys []string `yaml:"ssh_authorized_keys"` // lowered to late_command (M3)
 }
 
 // debianDisk is the curated disk model (design §6): native partman primitives
@@ -171,6 +172,24 @@ func espSyncLateCommand(devices []string) string {
 	return strings.Join(cmds, " ; ")
 }
 
+// sshLateCommand lowers ssh_authorized_keys to an in-target late_command
+// fragment (M3): d-i has no native preseed directive for authorized keys.
+// The printf "%s\n" runs at install time inside the target; each key is a
+// double-quoted argument inside the single-quoted sh -c string (keys are
+// validated to contain no single quotes).
+func sshLateCommand(username string, keys []string) string {
+	home := "/home/" + username
+	quoted := make([]string, len(keys))
+	for i, k := range keys {
+		quoted[i] = `"` + k + `"`
+	}
+	return "in-target mkdir -p " + home + "/.ssh ; " +
+		`in-target sh -c 'printf "%s\n" ` + strings.Join(quoted, " ") + " >> " + home + "/.ssh/authorized_keys' ; " +
+		"in-target chown -R " + username + ":" + username + " " + home + "/.ssh ; " +
+		"in-target chmod 700 " + home + "/.ssh ; " +
+		"in-target chmod 600 " + home + "/.ssh/authorized_keys"
+}
+
 // partitionName returns device's nth partition node, inserting the "p"
 // separator udev uses when the device name ends in a digit
 // (/dev/nvme0n1 -> /dev/nvme0n1p1); classic /dev/sdX concatenates.
@@ -222,6 +241,7 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		Timezone: spec.Timezone,
 		Packages: strings.Join(spec.Packages, " "),
 	}
+	var sshCmd string
 	if n := spec.Network; n != nil {
 		v.Iface = n.Interface
 		if s := n.Static; s != nil {
@@ -248,6 +268,14 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 			v.Username = u.Username
 			v.UserHash = u.PasswordHash
 			v.UserFullname = cmp.Or(u.Fullname, u.Username)
+			if len(u.SSHAuthorizedKeys) > 0 {
+				for _, k := range u.SSHAuthorizedKeys {
+					if strings.Contains(k, "'") {
+						return preseedView{}, errors.New("http: debianconfig: ssh_authorized_keys must not contain single quotes")
+					}
+				}
+				sshCmd = sshLateCommand(u.Username, u.SSHAuthorizedKeys)
+			}
 		}
 	}
 	if spec.Disk != nil {
@@ -257,11 +285,13 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		}
 		v.Disk = dv
 	}
-	// Compose the single d-i late_command line from ordered sources. Task 5:
-	// the ESP-sync (UEFI mirror only). Task 6 prepends the ssh-keys block;
-	// Task 7 appends the operator's own late_command. Final order:
-	// ssh -> ESP-sync -> operator.
+	// Compose the single d-i late_command line from ordered sources: ssh block
+	// FIRST (source 1), then the ESP-sync (source 2, UEFI mirror). Task 7
+	// appends the operator's late_command (source 3).
 	var lateParts []string
+	if sshCmd != "" {
+		lateParts = append(lateParts, sshCmd)
+	}
 	if v.Disk != nil && v.Disk.ESPSyncCmd != "" {
 		lateParts = append(lateParts, v.Disk.ESPSyncCmd)
 	}
