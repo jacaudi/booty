@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -99,13 +100,17 @@ type diskView struct {
 	BootDegradedSet bool   // expert path: emit boot_degraded only when the operator set it
 }
 
+// errDiskNeedsDevice is returned by buildDiskView when disk.devices is empty:
+// every disk path (expert and curated alike) requires at least one device.
+var errDiskNeedsDevice = errors.New("http: debianconfig: disk.devices requires at least one device")
+
 // buildDiskView validates disk coherence (design §6.5 — only called when a
 // disk block is present) and derives the disk emission view.
 func buildDiskView(d *debianDisk) (*diskView, error) {
+	if len(d.Devices) == 0 {
+		return nil, errDiskNeedsDevice
+	}
 	if d.ExpertRecipe != "" {
-		if len(d.Devices) == 0 {
-			return nil, errors.New("http: debianconfig: disk.devices requires at least one device")
-		}
 		// B1: a multi-line partman-auto/expert_recipe debconf value needs a
 		// trailing `\` on every non-final physical line — which an operator's
 		// YAML block scalar lacks, so debconf would parse line 2 as a bogus
@@ -133,9 +138,6 @@ func buildDiskView(d *debianDisk) (*diskView, error) {
 	}
 	if raid == "mirror" && len(d.Devices) < 2 {
 		return nil, errors.New("http: debianconfig: raid: mirror requires at least 2 disk.devices")
-	}
-	if len(d.Devices) == 0 {
-		return nil, errors.New("http: debianconfig: disk.devices requires at least one device")
 	}
 	v := &diskView{Devices: strings.Join(d.Devices, " "), Filesystem: fs, LVM: layout == "lvm", Method: "regular"}
 	if v.LVM {
@@ -220,6 +222,30 @@ func validateSSHAuthorizedKey(k string) error {
 		if r < 0x20 {
 			return errors.New("http: debianconfig: ssh_authorized_keys must not contain control characters")
 		}
+	}
+	return nil
+}
+
+// usernameRE mirrors Debian useradd's default NAME_REGEX shape and doubles as
+// the shell-injection guardrail: username is interpolated by raw string
+// concatenation into a ROOT shell context (sshLateCommand's /home/<username>
+// and chown -R <username>:<username>) and into the preseed value line (d-i
+// passwd/username string <username>) — the same sink ssh_authorized_keys is
+// hardened against via validateSSHAuthorizedKey. The leading [a-z_] and the
+// restricted character class exclude every shell metacharacter, whitespace,
+// quote, and newline; length is capped at 32 (Debian useradd's limit).
+var usernameRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]*$`)
+
+// validateUsername rejects a username that cannot be safely interpolated into
+// sshLateCommand's root shell context or the preseed value line, and rejects
+// an empty username with a clear message (the pattern already rejects empty,
+// this just names the reason).
+func validateUsername(u string) error {
+	if u == "" {
+		return errors.New("http: debianconfig: accounts.user requires username and password_hash")
+	}
+	if len(u) > 32 || !usernameRE.MatchString(u) {
+		return fmt.Errorf("http: debianconfig: invalid accounts.user.username %q (must match %s, max 32 chars)", u, usernameRE.String())
 	}
 	return nil
 }
@@ -327,8 +353,11 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		v.HasAccounts = true
 		v.RootHash = a.RootPasswordHash
 		if u := a.User; u != nil {
-			if u.Username == "" || u.PasswordHash == "" {
+			if u.PasswordHash == "" {
 				return preseedView{}, errors.New("http: debianconfig: accounts.user requires username and password_hash")
+			}
+			if err := validateUsername(u.Username); err != nil {
+				return preseedView{}, err
 			}
 			v.HasUser = true
 			v.Username = u.Username

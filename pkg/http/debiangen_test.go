@@ -1,6 +1,7 @@
 package http
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -112,6 +113,40 @@ func TestTranslateDebianConfigUserRequiresUsernameAndHash(t *testing.T) {
 	}
 	if _, err := translateDebianConfig([]byte("accounts:\n  user:\n    password_hash: $6$h\n")); err == nil {
 		t.Error("user without username must be rejected")
+	}
+}
+
+// TestTranslateDebianConfigUsernameShellInjectionRejected: username is
+// interpolated by raw string concatenation into a ROOT shell context
+// (sshLateCommand's /home/<username> and chown -R <username>:<username>) and
+// into the preseed value line (d-i passwd/username string <username>) — the
+// SAME shell context ssh_authorized_keys is hardened against. A username
+// carrying shell metacharacters, whitespace, or control characters must be
+// rejected at generation time (422 upstream), not reach either sink.
+func TestTranslateDebianConfigUsernameShellInjectionRejected(t *testing.T) {
+	bad := []string{
+		"x; touch /tmp/pwned",
+		"a$(id)",
+		"has space",
+		`has"quote`,
+		"has`tick",
+		"has\nnewline",
+	}
+	for _, u := range bad {
+		src := "accounts:\n  user:\n    username: " + fmt.Sprintf("%q", u) + "\n    password_hash: $6$h\n"
+		if _, err := translateDebianConfig([]byte(src)); err == nil {
+			t.Errorf("username %q must be rejected", u)
+		}
+	}
+}
+
+// TestTranslateDebianConfigUsernameNormalAccepted: a normal lowercase
+// username (the shape every golden in this file already uses) is accepted —
+// pins that validateUsername does not over-reject.
+func TestTranslateDebianConfigUsernameNormalAccepted(t *testing.T) {
+	src := "accounts:\n  user:\n    username: ops\n    password_hash: $6$h\n"
+	if _, err := translateDebianConfig([]byte(src)); err != nil {
+		t.Errorf("normal username rejected: %v", err)
 	}
 }
 
