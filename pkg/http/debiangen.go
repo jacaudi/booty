@@ -181,7 +181,9 @@ func buildDiskView(d *debianDisk) (*diskView, error) {
 // primary disk dies. Grounded in std.rocks/gnulinux_mdadm_uefi.html (clone ESP
 // + efibootmgr --create for the secondary disk). Runs inside the target during
 // preseed/late_command; /boot/efi is the mounted primary ESP at that point.
-// The efibootmgr loader path uses literal backslashes (\EFI\debian\shimx64.efi).
+// The efibootmgr loader path uses literal backslashes (\EFI\debian\shimx64.efi),
+// single-quoted so they survive d-i's `sh -c` execution of late_command — d-i
+// runs preseed/late_command through /bin/sh, which strips unquoted backslashes.
 func espSyncLateCommand(devices []string) string {
 	var cmds []string
 	for i := 1; i < len(devices); i++ {
@@ -191,7 +193,7 @@ func espSyncLateCommand(devices []string) string {
 		cmds = append(cmds,
 			"in-target sh -c 'mkfs.vfat -F32 "+esp+"'",
 			"in-target sh -c 'mount "+esp+" /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt'",
-			`in-target efibootmgr --create --disk `+dev+` --part 1 --label "`+label+`" --loader \EFI\debian\shimx64.efi`,
+			`in-target efibootmgr --create --disk `+dev+` --part 1 --label "`+label+`" --loader '\EFI\debian\shimx64.efi'`,
 		)
 	}
 	return strings.Join(cmds, " ; ")
@@ -456,6 +458,7 @@ d-i partman/default_filesystem string {{ .Disk.Filesystem }}
 d-i partman/choose_partition select finish
 d-i partman/confirm boolean true
 d-i partman/confirm_nooverwrite boolean true
+d-i partman-basicfilesystems/no_swap boolean false
 d-i grub-installer/bootdev string {{ .Disk.Devices }}
 {{ end }}{{ if .Packages }}d-i pkgsel/include string {{ .Packages }}
 {{ end }}{{ if .LateCommand }}d-i preseed/late_command string {{ .LateCommand }}

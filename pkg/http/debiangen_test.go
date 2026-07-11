@@ -167,6 +167,7 @@ const partmanTail = `d-i partman-partitioning/confirm_write_new_label boolean tr
 d-i partman/choose_partition select finish
 d-i partman/confirm boolean true
 d-i partman/confirm_nooverwrite boolean true
+d-i partman-basicfilesystems/no_swap boolean false
 `
 
 const lvmBlock = `d-i partman-lvm/device_remove_lvm boolean true
@@ -261,8 +262,9 @@ func TestTranslateDebianConfigDiskCoherence(t *testing.T) {
 // if the primary disk dies (Task 5 composes this as the sole late_command
 // source; Tasks 6/7 prepend ssh / append operator). Trailing newline: it is
 // the last emitted line for these accounts-less specs. Interpreted string:
-// \" -> ", \\ -> \, so the loader path is \EFI\debian\shimx64.efi.
-const espSyncSdaSdb = "d-i preseed/late_command string in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label \"debian (disk 2)\" --loader \\EFI\\debian\\shimx64.efi\n"
+// \" -> ", \\ -> \, so the loader path is \EFI\debian\shimx64.efi, single-quoted
+// so the backslashes survive d-i's `sh -c` execution of late_command.
+const espSyncSdaSdb = "d-i preseed/late_command string in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label \"debian (disk 2)\" --loader '\\EFI\\debian\\shimx64.efi'\n"
 
 // TestTranslateDebianConfigMirror golden-pins the four raid:mirror combos —
 // UEFI-native (target nodes are UEFI). Each member disk gets its OWN small ESP
@@ -498,7 +500,7 @@ disk:
 `
 	got := translate(t, src)
 	sshFrag := "in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf \"%s\\n\" \"ssh-ed25519 AAAA k1\" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys"
-	espFrag := "in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label \"debian (disk 2)\" --loader \\EFI\\debian\\shimx64.efi"
+	espFrag := "in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label \"debian (disk 2)\" --loader '\\EFI\\debian\\shimx64.efi'"
 	wantLate := "d-i preseed/late_command string " + sshFrag + " ; " + espFrag + "\n"
 	if !strings.Contains(got, wantLate) {
 		t.Errorf("ssh-then-ESP-sync order not pinned:\ngot:\n%s\nwant late line:\n%s", got, wantLate)
@@ -658,7 +660,7 @@ d-i partman-md/confirm boolean true
 d-i partman-md/confirm_nooverwrite boolean true
 ` + partmanTail + `d-i grub-installer/bootdev string /dev/sda /dev/sdb
 d-i pkgsel/include string openssh-server
-d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys ; in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label "debian (disk 2)" --loader \EFI\debian\shimx64.efi ; in-target systemctl enable ssh
+d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys ; in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label "debian (disk 2)" --loader '\EFI\debian\shimx64.efi' ; in-target systemctl enable ssh
 d-i debian-installer/allow_unauthenticated boolean true
 `
 	if got := translate(t, src); got != want {
