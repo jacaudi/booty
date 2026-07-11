@@ -15,8 +15,9 @@ import (
 	"github.com/spf13/viper"
 )
 
-// handlePreseedRequest serves a Debian preseed: a DB-resolved config (rungs 1–2)
-// when the host is bound, else the --preseedFile server default (rung 4).
+// handlePreseedRequest serves a Debian preseed: a DB-resolved config (rungs
+// 1–2, kind preseed OR debianconfig — both render to a flat preseed) when the
+// host is bound, else the --preseedFile server default (rung 4).
 // Debian has no legacy per-host file column, so rung 3 does not apply.
 func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -24,8 +25,12 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 		host := identifyHost(r)
 
 		if host != nil {
-			if src, kind, ok := resolveConfig(store, host); ok && kind == "preseed" {
-				out, ct, _, err := renderConfig("preseed", src, preseedVars(store, host))
+			// The preseed family is 1:many (design §7): raw `preseed` and curated
+			// `debianconfig` both render to a flat preseed body. Dispatch renderConfig
+			// on the RESOLVED kind (M2) — the guard and the family contract are
+			// single-sourced in familyAllowsKind.
+			if src, kind, ok := resolveConfig(store, host); ok && familyAllowsKind("preseed", kind) {
+				out, ct, _, err := renderConfig(kind, src, preseedVars(store, host))
 				if err != nil {
 					writeError(w, http.StatusInternalServerError, "render bound preseed", err)
 					return
