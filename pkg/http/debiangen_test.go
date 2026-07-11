@@ -124,3 +124,97 @@ func TestTranslateDebianConfigBadYAMLIsError(t *testing.T) {
 		t.Errorf("valid YAML rejected: %v", err)
 	}
 }
+
+// partmanTail is the confirm tail every curated disk recipe ends with (before
+// the grub bootdev line). Test-side const — golden wants stay literal text.
+const partmanTail = `d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+`
+
+const lvmBlock = `d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-auto-lvm/guided_size string max
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+`
+
+// TestTranslateDebianConfigSingleDisk golden-pins the four raid:none combos
+// (design §6.2 matrix, non-mirror half). Defaults inside a present disk block:
+// layout=plain, filesystem=ext4, raid=none.
+func TestTranslateDebianConfigSingleDisk(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "plain-ext4-defaults",
+			src:  "disk:\n  devices: [/dev/sda]\n",
+			want: "d-i partman-auto/disk string /dev/sda\n" +
+				"d-i partman-auto/method string regular\n" +
+				"d-i partman-auto/choose_recipe select atomic\n" +
+				"d-i partman/default_filesystem string ext4\n" +
+				partmanTail +
+				"d-i grub-installer/bootdev string /dev/sda\n",
+		},
+		{
+			name: "plain-xfs",
+			src:  "disk:\n  devices: [/dev/sda]\n  layout: plain\n  filesystem: xfs\n  raid: none\n",
+			want: "d-i partman-auto/disk string /dev/sda\n" +
+				"d-i partman-auto/method string regular\n" +
+				"d-i partman-auto/choose_recipe select atomic\n" +
+				"d-i partman/default_filesystem string xfs\n" +
+				partmanTail +
+				"d-i grub-installer/bootdev string /dev/sda\n",
+		},
+		{
+			name: "lvm-ext4",
+			src:  "disk:\n  devices: [/dev/sda]\n  layout: lvm\n  filesystem: ext4\n",
+			want: "d-i partman-auto/disk string /dev/sda\n" +
+				"d-i partman-auto/method string lvm\n" +
+				lvmBlock +
+				"d-i partman-auto/choose_recipe select atomic\n" +
+				"d-i partman/default_filesystem string ext4\n" +
+				partmanTail +
+				"d-i grub-installer/bootdev string /dev/sda\n",
+		},
+		{
+			name: "lvm-xfs",
+			src:  "disk:\n  devices: [/dev/sda]\n  layout: lvm\n  filesystem: xfs\n",
+			want: "d-i partman-auto/disk string /dev/sda\n" +
+				"d-i partman-auto/method string lvm\n" +
+				lvmBlock +
+				"d-i partman-auto/choose_recipe select atomic\n" +
+				"d-i partman/default_filesystem string xfs\n" +
+				partmanTail +
+				"d-i grub-installer/bootdev string /dev/sda\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := translate(t, c.src); got != c.want {
+				t.Errorf("got:\n%s\nwant:\n%s", got, c.want)
+			}
+		})
+	}
+}
+
+// TestTranslateDebianConfigDiskCoherence: checks fire ONLY when a disk block
+// is present (I4/design §6.5) — no disk block at all is valid and emits no
+// partman lines (already pinned by TestTranslateDebianConfigMinimal).
+func TestTranslateDebianConfigDiskCoherence(t *testing.T) {
+	reject := []struct{ name, src string }{
+		{"no-devices", "disk:\n  layout: plain\n"},
+		{"bad-layout", "disk:\n  devices: [/dev/sda]\n  layout: zfsish\n"},
+		{"bad-filesystem", "disk:\n  devices: [/dev/sda]\n  filesystem: btrfs\n"},
+		{"bad-raid", "disk:\n  devices: [/dev/sda]\n  raid: raid5\n"},
+	}
+	for _, c := range reject {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := translateDebianConfig([]byte(c.src)); err == nil {
+				t.Errorf("%s must be rejected", c.name)
+			}
+		})
+	}
+}

@@ -25,6 +25,7 @@ type debianConfigSpec struct {
 	Network  *debianNetwork  `yaml:"network"`
 	Accounts *debianAccounts `yaml:"accounts"`
 	Packages []string        `yaml:"packages"`
+	Disk     *debianDisk     `yaml:"disk"`
 }
 
 // debianMirror is override-only apt mirror selection; the suite/codename comes
@@ -62,6 +63,49 @@ type debianUser struct {
 	PasswordHash string `yaml:"password_hash"`
 }
 
+// debianDisk is the curated disk model (design §6): native partman primitives
+// only. Defaults WITHIN a present disk block: layout=plain, filesystem=ext4,
+// raid=none. No disk block at all -> no partman lines (I4).
+type debianDisk struct {
+	Devices    []string `yaml:"devices"`
+	RAID       string   `yaml:"raid"`       // "" (=none) | none | mirror
+	Layout     string   `yaml:"layout"`     // "" (=plain) | plain | lvm
+	Filesystem string   `yaml:"filesystem"` // "" (=ext4) | ext4 | xfs
+}
+
+// diskView is the disk half of the emission view.
+type diskView struct {
+	Devices    string // space-joined
+	Method     string // regular | lvm
+	LVM        bool
+	Filesystem string
+}
+
+// buildDiskView validates disk coherence (design §6.5 — only called when a
+// disk block is present) and derives the disk emission view.
+func buildDiskView(d *debianDisk) (*diskView, error) {
+	layout := cmp.Or(d.Layout, "plain")
+	fs := cmp.Or(d.Filesystem, "ext4")
+	raid := cmp.Or(d.RAID, "none")
+	if layout != "plain" && layout != "lvm" {
+		return nil, fmt.Errorf("http: debianconfig: invalid disk.layout %q (want plain|lvm)", d.Layout)
+	}
+	if fs != "ext4" && fs != "xfs" {
+		return nil, fmt.Errorf("http: debianconfig: invalid disk.filesystem %q (want ext4|xfs)", d.Filesystem)
+	}
+	if raid != "none" {
+		return nil, fmt.Errorf("http: debianconfig: invalid disk.raid %q (want none)", d.RAID)
+	}
+	if len(d.Devices) == 0 {
+		return nil, errors.New("http: debianconfig: disk.devices requires at least one device")
+	}
+	v := &diskView{Devices: strings.Join(d.Devices, " "), Filesystem: fs, LVM: layout == "lvm", Method: "regular"}
+	if v.LVM {
+		v.Method = "lvm"
+	}
+	return v, nil
+}
+
 // preseedView is the flattened emission view derived from a validated spec so
 // the template below stays linear formatting — presence checks only, no logic.
 type preseedView struct {
@@ -78,6 +122,7 @@ type preseedView struct {
 	HasUser                                     bool
 	UserFullname, Username, UserHash            string
 	Packages                                    string
+	Disk                                        *diskView
 }
 
 // buildPreseedView validates spec coherence and derives the emission view.
@@ -119,6 +164,13 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 			v.UserFullname = cmp.Or(u.Fullname, u.Username)
 		}
 	}
+	if spec.Disk != nil {
+		dv, err := buildDiskView(spec.Disk)
+		if err != nil {
+			return preseedView{}, err
+		}
+		v.Disk = dv
+	}
 	return v, nil
 }
 
@@ -149,7 +201,20 @@ d-i passwd/root-password-crypted password {{ .RootHash }}
 d-i passwd/user-fullname string {{ .UserFullname }}
 d-i passwd/username string {{ .Username }}
 d-i passwd/user-password-crypted password {{ .UserHash }}
-{{ end }}{{ end }}{{ if .Packages }}d-i pkgsel/include string {{ .Packages }}
+{{ end }}{{ end }}{{ if .Disk }}d-i partman-auto/disk string {{ .Disk.Devices }}
+d-i partman-auto/method string {{ .Disk.Method }}
+{{ if .Disk.LVM }}d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-auto-lvm/guided_size string max
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+{{ end }}d-i partman-auto/choose_recipe select atomic
+d-i partman/default_filesystem string {{ .Disk.Filesystem }}
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+d-i grub-installer/bootdev string {{ .Disk.Devices }}
+{{ end }}{{ if .Packages }}d-i pkgsel/include string {{ .Packages }}
 {{ end }}`
 
 var preseedTmpl = template.Must(template.New("debianpreseed").Parse(preseedTemplateText))
