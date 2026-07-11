@@ -5,15 +5,24 @@ import (
 	"testing"
 )
 
-func TestConfigKindForFamily(t *testing.T) {
-	cases := map[string]string{
-		"ignition":      "butane", // the only non-identity mapping
-		"machineconfig": "machineconfig",
-		"preseed":       "preseed",
+func TestFamilyAllowsKind(t *testing.T) {
+	cases := []struct {
+		family, kind string
+		want         bool
+	}{
+		{"ignition", "butane", true}, // author butane, serve ignition
+		{"ignition", "ignition", false},
+		{"ignition", "preseed", false},
+		{"machineconfig", "machineconfig", true},
+		{"machineconfig", "butane", false},
+		{"preseed", "preseed", true},      // raw preseed still allowed
+		{"preseed", "debianconfig", true}, // the only 1:many entry
+		{"preseed", "butane", false},
+		{"machineconfig", "debianconfig", false},
 	}
-	for family, want := range cases {
-		if got := configKindForFamily(family); got != want {
-			t.Errorf("configKindForFamily(%q) = %q, want %q", family, got, want)
+	for _, c := range cases {
+		if got := familyAllowsKind(c.family, c.kind); got != c.want {
+			t.Errorf("familyAllowsKind(%q, %q) = %v, want %v", c.family, c.kind, got, c.want)
 		}
 	}
 }

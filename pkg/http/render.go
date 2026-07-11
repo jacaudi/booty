@@ -28,15 +28,18 @@ type TemplateVars struct {
 	Schematic      string
 }
 
-// configKindForFamily maps an OS family's ConfigKind (the boot-config-URL
-// mechanism: ignition|machineconfig|preseed) to the config source dialect the
-// operator authors (butane|machineconfig|preseed). Single source of the
-// family<->kind relationship (design §3.1); only ignition↔butane differs.
-func configKindForFamily(familyConfigKind string) string {
-	if familyConfigKind == "ignition" {
-		return "butane"
+// familyAllowsKind reports whether an authored config kind may serve a host of
+// the given family (family ConfigKind == serving mechanism). One contract, three
+// consumers; the preseed family is the only 1:many case.
+func familyAllowsKind(familyConfigKind, kind string) bool {
+	switch familyConfigKind {
+	case "ignition":
+		return kind == "butane" // author butane, serve ignition
+	case "preseed":
+		return kind == "preseed" || kind == "debianconfig"
+	default:
+		return kind == familyConfigKind // machineconfig, ...
 	}
-	return familyConfigKind
 }
 
 // renderConfig executes source as a text/template against vars, then translates
