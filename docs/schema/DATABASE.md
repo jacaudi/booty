@@ -63,7 +63,8 @@ more (`configs`, `config_revisions`, `roles`, `host_roles`) plus a `hosts.config
 one additive migration — re-running it is a no-op. P5 (migration `0004`) extends `configs.kind` to
 admit `'schematic'` and adds `config_revisions.derived_schematic_id` — see below. P6 (migration
 `0005`) adds `clusters` and `cluster_node_configs`, three nullable `hosts` membership columns, and
-extends `configs.kind` to admit `'taloscluster'` — see below.
+extends `configs.kind` to admit `'taloscluster'` — see below. Migration `0006` extends `configs.kind`
+once more to admit `'debianconfig'` (the curated Debian preseed authoring kind) — see below.
 
 ### `targets`
 `id`, `os`, `arch`, `params` (JSON TEXT), `mode` (`discovery`|`manual`),
