@@ -262,6 +262,10 @@ disk:
                               # on a surviving disk)
   # expert_recipe: |          # raw partman recipe; REPLACES the curated disk
   #   ...                     # recipe entirely (devices/boot_degraded still apply)
+  #                           # booty always emits `partman-auto/method string regular`
+  #                           # alongside expert_recipe; a recipe needing RAID/LVM must
+  #                           # set its own `partman-auto/method` via raw_preseed
+  #                           # (appended LAST, so it overrides the curated line).
 late_command: |
   in-target systemctl enable ssh
 raw_preseed: |

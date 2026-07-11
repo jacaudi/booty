@@ -74,11 +74,11 @@ func renderConfig(kind string, source []byte, vars TemplateVars) (out []byte, co
 		// Curated Debian authoring: the post-template source is a structured
 		// YAML booty translates into a flat d-i preseed (debiangen.go). Same
 		// serve surface as raw preseed: text/plain, served at /preseed.
-		out, terr := translateDebianConfig(rendered)
+		body, terr := translateDebianConfig(rendered)
 		if terr != nil {
 			return nil, "", "", terr
 		}
-		return out, "text/plain", "", nil
+		return body, "text/plain", "", nil
 	default:
 		return nil, "", "", fmt.Errorf("http: unknown config kind %q", kind)
 	}
