@@ -28,8 +28,8 @@ func TestMigrate_CreatesTablesAndSetsUserVersion(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 5 {
-		t.Errorf("user_version = %d, want 5 after all migrations", uv)
+	if uv != 6 {
+		t.Errorf("user_version = %d, want 6 after all migrations", uv)
 	}
 }
 
@@ -52,8 +52,8 @@ func TestMigrate_IsIdempotentAcrossReopen(t *testing.T) {
 	if err := s2.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 5 {
-		t.Errorf("user_version = %d after reopen, want 5", uv)
+	if uv != 6 {
+		t.Errorf("user_version = %d after reopen, want 6", uv)
 	}
 }
 
@@ -65,8 +65,8 @@ func TestMigration0003ConfigsRoles(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if uv != 5 {
-		t.Fatalf("user_version = %d, want 5", uv)
+	if uv != 6 {
+		t.Fatalf("user_version = %d, want 6", uv)
 	}
 
 	// The four new tables + the hosts.config_id column exist.
@@ -287,5 +287,83 @@ func TestMigration0005PreservesP5Data(t *testing.T) {
 	}
 	if _, err := s.CreateConfig("tc-check", "taloscluster"); err != nil {
 		t.Fatalf("kind='taloscluster' rejected on an upgraded DB: %v", err)
+	}
+}
+
+func TestMigration0006DebianConfig(t *testing.T) {
+	s := newTestStore(t) // Open() runs every migration, incl. 0006
+
+	var uv int
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
+		t.Fatalf("user_version: %v", err)
+	}
+	if uv != 6 {
+		t.Fatalf("user_version = %d, want 6", uv)
+	}
+
+	// The rebuilt kind CHECK admits 'debianconfig' and still rejects junk.
+	if _, err := s.db.Exec(`INSERT INTO configs (name, kind) VALUES ('dc', 'debianconfig')`); err != nil {
+		t.Errorf("kind='debianconfig' rejected after 0006: %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO configs (name, kind) VALUES ('bad6', 'bogus')`); err == nil {
+		t.Error("kind='bogus' accepted; the rebuilt CHECK is missing")
+	}
+}
+
+func TestMigration0006PreservesData(t *testing.T) {
+	// Build a v5 database BY HAND (raw handle, foreign_keys ON like production),
+	// seed rows, close, then Open() so ONLY 0006 runs — proving the third
+	// configs rebuild preserves configs/config_revisions/roles across the
+	// upgrade instead of cascade-wiping them via DROP TABLE's implicit DELETE.
+	path := filepath.Join(t.TempDir(), "upgrade6.db")
+	raw, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	for _, m := range []string{"0001_init.sql", "0002_cache_entries.sql", "0003_configs_roles.sql", "0004_schematic_id.sql", "0005_clusters.sql"} {
+		stmt, rerr := migrationsFS.ReadFile("migrations/" + m)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if _, err := raw.Exec(string(stmt)); err != nil {
+			t.Fatalf("apply %s: %v", m, err)
+		}
+	}
+	for _, stmt := range []string{
+		`PRAGMA user_version = 5`,
+		`INSERT INTO configs (name, kind) VALUES ('ps', 'preseed')`,
+		`INSERT INTO config_revisions (config_id, revision, source_b64, source_sha256) VALUES (1, 1, 'djE=', 'h1')`,
+		`UPDATE configs SET active_revision_id = 1 WHERE id = 1`,
+		`INSERT INTO roles (name, default_config_id) VALUES ('deb', 1)`,
+	} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path) // applies only 0006
+	if err != nil {
+		t.Fatalf("Open at v5: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	c, err := s.GetConfig(1)
+	if err != nil || c.Name != "ps" || c.Kind != "preseed" || !c.ActiveRevisionID.Valid || c.ActiveRevisionID.Int64 != 1 {
+		t.Fatalf("config after rebuild = %+v, err %v", c, err)
+	}
+	rev, err := s.GetActiveRevision(1)
+	if err != nil || rev.SourceB64 != "djE=" {
+		t.Fatalf("revision after rebuild = %+v, err %v", rev, err)
+	}
+	r, err := s.GetRole(1)
+	if err != nil || !r.DefaultConfigID.Valid || r.DefaultConfigID.Int64 != 1 {
+		t.Fatalf("role after rebuild = %+v, err %v", r, err)
+	}
+	if _, err := s.CreateConfig("dc-check", "debianconfig"); err != nil {
+		t.Fatalf("kind='debianconfig' rejected on an upgraded DB: %v", err)
 	}
 }
