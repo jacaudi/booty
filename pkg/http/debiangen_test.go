@@ -407,6 +407,46 @@ func TestTranslateDebianConfigSSHKeyQuoteRejected(t *testing.T) {
 	}
 }
 
+// TestTranslateDebianConfigSSHKeyDoubleQuoteRejected: each key is interpolated
+// as a DOUBLE-quoted printf argument (sshLateCommand) — a '"' in the key
+// closes that argument early and injects shell syntax. Reject it.
+func TestTranslateDebianConfigSSHKeyDoubleQuoteRejected(t *testing.T) {
+	src := "accounts:\n  user:\n    username: ops\n    password_hash: $6$h\n    ssh_authorized_keys: ['bad\"key']\n"
+	if _, err := translateDebianConfig([]byte(src)); err == nil {
+		t.Error("key containing a double quote must be rejected")
+	}
+}
+
+// TestTranslateDebianConfigSSHKeyCommandSubstitutionRejected: '$' triggers
+// shell expansion inside the double-quoted printf argument — a key like
+// "$(touch /tmp/pwned)" would execute arbitrary commands as root during
+// install (in-target). Reject it.
+func TestTranslateDebianConfigSSHKeyCommandSubstitutionRejected(t *testing.T) {
+	src := "accounts:\n  user:\n    username: ops\n    password_hash: $6$h\n    ssh_authorized_keys: ['$(touch /tmp/pwned)']\n"
+	if _, err := translateDebianConfig([]byte(src)); err == nil {
+		t.Error("key containing $(...) command substitution must be rejected")
+	}
+}
+
+// TestTranslateDebianConfigSSHKeyBacktickRejected: backticks are legacy
+// command substitution syntax, live inside a double-quoted shell argument
+// just like $(...). Reject it.
+func TestTranslateDebianConfigSSHKeyBacktickRejected(t *testing.T) {
+	src := "accounts:\n  user:\n    username: ops\n    password_hash: $6$h\n    ssh_authorized_keys: ['`id`']\n"
+	if _, err := translateDebianConfig([]byte(src)); err == nil {
+		t.Error("key containing backticks must be rejected")
+	}
+}
+
+// TestTranslateDebianConfigSSHKeyEmptyRejected: an empty/whitespace-only key
+// would printf a blank line into authorized_keys — reject it.
+func TestTranslateDebianConfigSSHKeyEmptyRejected(t *testing.T) {
+	src := "accounts:\n  user:\n    username: ops\n    password_hash: $6$h\n    ssh_authorized_keys: ['']\n"
+	if _, err := translateDebianConfig([]byte(src)); err == nil {
+		t.Error("empty key must be rejected")
+	}
+}
+
 // TestTranslateDebianConfigSSHThenESPSyncOrder pins the 2-source late_command
 // order for a UEFI mirror with ssh keys: the ssh block comes FIRST, then the
 // ESP-sync (' ; '-joined onto ONE d-i late_command line). Task 7 appends the

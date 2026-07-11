@@ -172,11 +172,40 @@ func espSyncLateCommand(devices []string) string {
 	return strings.Join(cmds, " ; ")
 }
 
+// sshKeyShellMetacharacters are the characters that are live shell syntax in
+// the context sshLateCommand interpolates each key into: a double-quoted
+// printf argument NESTED inside a single-quoted `sh -c '...'` string. Inside
+// that double-quoted context, '"' closes the argument early, '$' and '`'
+// trigger expansion/substitution, and '\' can shift quoting — any one of
+// these turns a "key" into injected shell syntax. A leading single quote
+// would additionally break out of the outer sh -c string.
+const sshKeyShellMetacharacters = `'"$` + "`" + `\`
+
+// validateSSHAuthorizedKey rejects a key that cannot be safely interpolated
+// into sshLateCommand's double-quoted-inside-single-quoted shell context, and
+// rejects an empty/whitespace-only key (which would printf a blank line into
+// authorized_keys). A real `type base64 [comment]` authorized_keys line never
+// legitimately contains any of these characters.
+func validateSSHAuthorizedKey(k string) error {
+	if strings.TrimSpace(k) == "" {
+		return errors.New("http: debianconfig: ssh_authorized_keys entries must not be empty")
+	}
+	if strings.ContainsAny(k, sshKeyShellMetacharacters) {
+		return errors.New("http: debianconfig: ssh_authorized_keys must not contain shell metacharacters ('\"$`\\)")
+	}
+	for _, r := range k {
+		if r < 0x20 {
+			return errors.New("http: debianconfig: ssh_authorized_keys must not contain control characters")
+		}
+	}
+	return nil
+}
+
 // sshLateCommand lowers ssh_authorized_keys to an in-target late_command
 // fragment (M3): d-i has no native preseed directive for authorized keys.
 // The printf "%s\n" runs at install time inside the target; each key is a
 // double-quoted argument inside the single-quoted sh -c string (keys are
-// validated to contain no single quotes).
+// validated by validateSSHAuthorizedKey to contain no shell metacharacters).
 func sshLateCommand(username string, keys []string) string {
 	home := "/home/" + username
 	quoted := make([]string, len(keys))
@@ -270,8 +299,8 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 			v.UserFullname = cmp.Or(u.Fullname, u.Username)
 			if len(u.SSHAuthorizedKeys) > 0 {
 				for _, k := range u.SSHAuthorizedKeys {
-					if strings.Contains(k, "'") {
-						return preseedView{}, errors.New("http: debianconfig: ssh_authorized_keys must not contain single quotes")
+					if err := validateSSHAuthorizedKey(k); err != nil {
+						return preseedView{}, err
 					}
 				}
 				sshCmd = sshLateCommand(u.Username, u.SSHAuthorizedKeys)
