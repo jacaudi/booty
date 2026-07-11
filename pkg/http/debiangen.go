@@ -26,6 +26,9 @@ type debianConfigSpec struct {
 	Accounts *debianAccounts `yaml:"accounts"`
 	Packages []string        `yaml:"packages"`
 	Disk     *debianDisk     `yaml:"disk"`
+
+	LateCommand string `yaml:"late_command"` // raw d-i late_command, verbatim intent
+	RawPreseed  string `yaml:"raw_preseed"`  // verbatim preseed lines, appended LAST
 }
 
 // debianMirror is override-only apt mirror selection; the suite/codename comes
@@ -73,6 +76,7 @@ type debianDisk struct {
 	Layout       string   `yaml:"layout"`        // "" (=plain) | plain | lvm
 	Filesystem   string   `yaml:"filesystem"`    // "" (=ext4) | ext4 | xfs
 	BootDegraded *bool    `yaml:"boot_degraded"` // mirror only; default true
+	ExpertRecipe string   `yaml:"expert_recipe"` // raw partman override; replaces the curated recipe
 }
 
 // diskView is the disk half of the emission view. UEFI mirror recipes are
@@ -85,17 +89,36 @@ type diskView struct {
 	LVM        bool
 	Filesystem string
 	// mirror only:
-	Mirror       bool
-	DevCount     int
-	BootParts    string // md /boot members, e.g. /dev/sda2#/dev/sdb2
-	RootParts    string // md root members, e.g. /dev/sda3#/dev/sdb3
-	BootDegraded bool
-	ESPSyncCmd   string // ESP-sync late_command source (mirror only), composed into preseedView.LateCommand
+	Mirror          bool
+	DevCount        int
+	BootParts       string // md /boot members, e.g. /dev/sda2#/dev/sdb2
+	RootParts       string // md root members, e.g. /dev/sda3#/dev/sdb3
+	BootDegraded    bool
+	ESPSyncCmd      string // ESP-sync late_command source (mirror only), composed into preseedView.LateCommand
+	ExpertRecipe    string // raw partman override (curated knobs bypassed)
+	BootDegradedSet bool   // expert path: emit boot_degraded only when the operator set it
 }
 
 // buildDiskView validates disk coherence (design §6.5 — only called when a
 // disk block is present) and derives the disk emission view.
 func buildDiskView(d *debianDisk) (*diskView, error) {
+	if d.ExpertRecipe != "" {
+		if len(d.Devices) == 0 {
+			return nil, errors.New("http: debianconfig: disk.devices requires at least one device")
+		}
+		// B1: a multi-line partman-auto/expert_recipe debconf value needs a
+		// trailing `\` on every non-final physical line — which an operator's
+		// YAML block scalar lacks, so debconf would parse line 2 as a bogus
+		// directive and drop the whole recipe. Flatten to ONE physical line:
+		// partman recipes are whitespace-delimited, so collapsing all runs of
+		// whitespace to single spaces is lossless (the ` . ` entry separators
+		// survive as tokens).
+		v := &diskView{Devices: strings.Join(d.Devices, " "), ExpertRecipe: strings.Join(strings.Fields(d.ExpertRecipe), " ")}
+		if d.BootDegraded != nil {
+			v.BootDegradedSet, v.BootDegraded = true, *d.BootDegraded
+		}
+		return v, nil
+	}
 	layout := cmp.Or(d.Layout, "plain")
 	fs := cmp.Or(d.Filesystem, "ext4")
 	raid := cmp.Or(d.RAID, "none")
@@ -219,6 +242,19 @@ func sshLateCommand(username string, keys []string) string {
 		"in-target chmod 600 " + home + "/.ssh/authorized_keys"
 }
 
+// flattenLateCommand flattens a (possibly multiline) operator late_command to
+// the single debconf line d-i expects: lines trimmed, empties dropped,
+// "; "-joined. Commands must therefore be independently sequenceable.
+func flattenLateCommand(raw string) string {
+	var lines []string
+	for line := range strings.SplitSeq(raw, "\n") {
+		if l := strings.TrimSpace(line); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	return strings.Join(lines, " ; ")
+}
+
 // partitionName returns device's nth partition node, inserting the "p"
 // separator udev uses when the device name ends in a digit
 // (/dev/nvme0n1 -> /dev/nvme0n1p1); classic /dev/sdX concatenates.
@@ -257,6 +293,7 @@ type preseedView struct {
 	Packages                                    string
 	Disk                                        *diskView
 	LateCommand                                 string
+	RawPreseed                                  string
 }
 
 // buildPreseedView validates spec coherence and derives the emission view.
@@ -314,9 +351,9 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		}
 		v.Disk = dv
 	}
-	// Compose the single d-i late_command line from ordered sources: ssh block
-	// FIRST (source 1), then the ESP-sync (source 2, UEFI mirror). Task 7
-	// appends the operator's late_command (source 3).
+	// Compose ONE late_command from ordered sources (design §4, M3): the ssh
+	// fragment FIRST, then the ESP-sync (UEFI mirror), then the operator's own
+	// commands — all run, ordering/ownership deterministic.
 	var lateParts []string
 	if sshCmd != "" {
 		lateParts = append(lateParts, sshCmd)
@@ -324,7 +361,13 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 	if v.Disk != nil && v.Disk.ESPSyncCmd != "" {
 		lateParts = append(lateParts, v.Disk.ESPSyncCmd)
 	}
+	if op := flattenLateCommand(spec.LateCommand); op != "" {
+		lateParts = append(lateParts, op)
+	}
 	v.LateCommand = strings.Join(lateParts, " ; ")
+	// raw_preseed is appended LAST (design §4): later duplicate debconf answers
+	// win, so the hatch can always override a curated line.
+	v.RawPreseed = strings.TrimRight(spec.RawPreseed, "\n")
 	return v, nil
 }
 
@@ -356,7 +399,10 @@ d-i passwd/user-fullname string {{ .UserFullname }}
 d-i passwd/username string {{ .Username }}
 d-i passwd/user-password-crypted password {{ .UserHash }}
 {{ end }}{{ end }}{{ if .Disk }}d-i partman-auto/disk string {{ .Disk.Devices }}
-d-i partman-auto/method string {{ .Disk.Method }}
+{{ if .Disk.ExpertRecipe }}d-i partman-auto/method string regular
+d-i partman-auto/expert_recipe string {{ .Disk.ExpertRecipe }}
+{{ if .Disk.BootDegradedSet }}d-i mdadm/boot_degraded boolean {{ .Disk.BootDegraded }}
+{{ end }}{{ else }}d-i partman-auto/method string {{ .Disk.Method }}
 {{ if .Disk.Mirror }}d-i partman-efi/non_efi_system boolean true
 d-i partman-md/device_remove_md boolean true
 {{ end }}{{ if .Disk.LVM }}d-i partman-lvm/device_remove_lvm boolean true
@@ -377,13 +423,14 @@ d-i partman-md/confirm boolean true
 d-i partman-md/confirm_nooverwrite boolean true
 {{ else }}d-i partman-auto/choose_recipe select atomic
 d-i partman/default_filesystem string {{ .Disk.Filesystem }}
-{{ end }}d-i partman-partitioning/confirm_write_new_label boolean true
+{{ end }}{{ end }}d-i partman-partitioning/confirm_write_new_label boolean true
 d-i partman/choose_partition select finish
 d-i partman/confirm boolean true
 d-i partman/confirm_nooverwrite boolean true
 d-i grub-installer/bootdev string {{ .Disk.Devices }}
 {{ end }}{{ if .Packages }}d-i pkgsel/include string {{ .Packages }}
 {{ end }}{{ if .LateCommand }}d-i preseed/late_command string {{ .LateCommand }}
+{{ end }}{{ if .RawPreseed }}{{ .RawPreseed }}
 {{ end }}`
 
 var preseedTmpl = template.Must(template.New("debianpreseed").Parse(preseedTemplateText))

@@ -469,3 +469,164 @@ disk:
 		t.Errorf("ssh-then-ESP-sync order not pinned:\ngot:\n%s\nwant late line:\n%s", got, wantLate)
 	}
 }
+
+// TestTranslateDebianConfigEscapeHatchOrdering pins the composition contract:
+// curated lines, then ONE composed late_command (ssh fragment before the
+// operator's, "; "-joined, operator newlines flattened), then raw_preseed
+// verbatim LAST (later duplicate debconf answers win — the hatch can always
+// override a curated line).
+func TestTranslateDebianConfigEscapeHatchOrdering(t *testing.T) {
+	src := `hostname: node1
+accounts:
+  user:
+    username: ops
+    password_hash: $6$h
+    ssh_authorized_keys: [ssh-ed25519 AAAA k1]
+late_command: |
+  in-target systemctl enable ssh
+  in-target apt-get clean
+raw_preseed: |
+  d-i debian-installer/allow_unauthenticated boolean true
+  d-i netcfg/get_hostname string overridden
+`
+	got := translate(t, src)
+	want := `d-i netcfg/get_hostname string node1
+d-i passwd/root-login boolean false
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string ops
+d-i passwd/username string ops
+d-i passwd/user-password-crypted password $6$h
+d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys ; in-target systemctl enable ssh ; in-target apt-get clean
+d-i debian-installer/allow_unauthenticated boolean true
+d-i netcfg/get_hostname string overridden
+`
+	if got != want {
+		t.Errorf("ordering:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigLateCommandAlone: an operator late_command with no
+// ssh keys still emits (flattened to one line).
+func TestTranslateDebianConfigLateCommandAlone(t *testing.T) {
+	got := translate(t, "late_command: |\n  in-target systemctl enable ssh\n")
+	want := "d-i preseed/late_command string in-target systemctl enable ssh\n"
+	if got != want {
+		t.Errorf("late alone:\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
+// TestTranslateDebianConfigExpertRecipeReplacesCuratedDisk: expert_recipe is
+// emitted verbatim and REPLACES the curated recipe (design §6.4) — the
+// layout/filesystem/raid knobs are ignored AND bypass curated-knob validation;
+// devices and boot_degraded still apply.
+func TestTranslateDebianConfigExpertRecipeReplacesCuratedDisk(t *testing.T) {
+	src := `disk:
+  devices: [/dev/sda]
+  layout: bogus-ignored
+  boot_degraded: true
+  expert_recipe: |
+    boot-root ::
+    512 512 512 ext4 $primary{ } method{ format } format{ } use_filesystem{ } filesystem{ ext4 } mountpoint{ /boot } .
+`
+	got := translate(t, src)
+	want := `d-i partman-auto/disk string /dev/sda
+d-i partman-auto/method string regular
+d-i partman-auto/expert_recipe string boot-root :: 512 512 512 ext4 $primary{ } method{ format } format{ } use_filesystem{ } filesystem{ ext4 } mountpoint{ /boot } .
+d-i mdadm/boot_degraded boolean true
+` + partmanTail + "d-i grub-installer/bootdev string /dev/sda\n"
+	if got != want {
+		t.Errorf("expert recipe:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigExpertRecipeStillNeedsDevices: the one check that
+// survives the expert bypass.
+func TestTranslateDebianConfigExpertRecipeStillNeedsDevices(t *testing.T) {
+	if _, err := translateDebianConfig([]byte("disk:\n  expert_recipe: |\n    x .\n")); err == nil {
+		t.Error("expert_recipe without devices must be rejected")
+	}
+}
+
+// TestTranslateDebianConfigCombinedEndToEnd pins the WHOLE emission-order
+// contract in one golden (I3): network(static) + mirror (with the B2
+// mirror/country manual line) + accounts(root+user+ssh) + packages + a UEFI
+// raid: mirror disk + the full 3-source composed late_command (ssh -> ESP-sync
+// -> operator) + raw_preseed LAST. The disk is deliberately a UEFI mirror so
+// all three late_command sources are pinned together in order. This is the
+// single place the cross-section ordering is asserted end-to-end.
+func TestTranslateDebianConfigCombinedEndToEnd(t *testing.T) {
+	src := `hostname: node1
+domain: cluster.local
+locale: en_US.UTF-8
+timezone: Etc/UTC
+keyboard: us
+mirror:
+  hostname: deb.debian.org
+  directory: /debian
+network:
+  interface: auto
+  static:
+    address: 10.0.0.10
+    netmask: 255.255.255.0
+    gateway: 10.0.0.1
+    nameservers: [10.0.0.1]
+accounts:
+  root_password_hash: $6$root
+  user:
+    username: ops
+    password_hash: $6$user
+    ssh_authorized_keys: [ssh-ed25519 AAAA k1]
+packages: [openssh-server]
+disk:
+  devices: [/dev/sda, /dev/sdb]
+  raid: mirror
+late_command: |
+  in-target systemctl enable ssh
+raw_preseed: |
+  d-i debian-installer/allow_unauthenticated boolean true
+`
+	want := `d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+d-i netcfg/choose_interface select auto
+d-i netcfg/disable_autoconfig boolean true
+d-i netcfg/get_ipaddress string 10.0.0.10
+d-i netcfg/get_netmask string 255.255.255.0
+d-i netcfg/get_gateway string 10.0.0.1
+d-i netcfg/get_nameservers string 10.0.0.1
+d-i netcfg/confirm_static boolean true
+d-i netcfg/get_hostname string node1
+d-i netcfg/get_domain string cluster.local
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i time/zone string Etc/UTC
+d-i passwd/root-login boolean true
+d-i passwd/root-password-crypted password $6$root
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string ops
+d-i passwd/username string ops
+d-i passwd/user-password-crypted password $6$user
+d-i partman-auto/disk string /dev/sda /dev/sdb
+d-i partman-auto/method string raid
+d-i partman-efi/non_efi_system boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-auto/expert_recipe string \
+    multiraid :: \
+    512 512 640 free $bootable{ } method{ efi } format{ } . \
+    512 512 512 raid $primary{ } method{ raid } . \
+    1000 10000 -1 raid $primary{ } method{ raid } .
+d-i partman-auto-raid/recipe string \
+    1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
+    1 2 0 ext4 / /dev/sda3#/dev/sdb3 .
+d-i mdadm/boot_degraded boolean true
+d-i partman-md/confirm boolean true
+d-i partman-md/confirm_nooverwrite boolean true
+` + partmanTail + `d-i grub-installer/bootdev string /dev/sda /dev/sdb
+d-i pkgsel/include string openssh-server
+d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys ; in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label "debian (disk 2)" --loader \EFI\debian\shimx64.efi ; in-target systemctl enable ssh
+d-i debian-installer/allow_unauthenticated boolean true
+`
+	if got := translate(t, src); got != want {
+		t.Errorf("combined:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
