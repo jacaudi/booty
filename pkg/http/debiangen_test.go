@@ -258,13 +258,16 @@ func TestTranslateDebianConfigDiskCoherence(t *testing.T) {
 
 // espSyncSdaSdb is the ESP-sync late_command line emitted for a 2-disk
 // /dev/sda + /dev/sdb UEFI mirror: mkfs the secondary ESP, clone the primary
-// ESP onto it, and register a fallback UEFI boot entry so the node still boots
+// ESP onto it, and make /boot/efi's fstab entry nofail so the node still boots
 // if the primary disk dies (Task 5 composes this as the sole late_command
-// source; Tasks 6/7 prepend ssh / append operator). Trailing newline: it is
-// the last emitted line for these accounts-less specs. Interpreted string:
-// \" -> ", \\ -> \, so the loader path is \EFI\debian\shimx64.efi, single-quoted
-// so the backslashes survive d-i's `sh -c` execution of late_command.
-const espSyncSdaSdb = "d-i preseed/late_command string in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label \"debian (disk 2)\" --loader '\\EFI\\debian\\shimx64.efi'\n"
+// source; Tasks 6/7 prepend ssh / append operator). No efibootmgr/NVRAM entry:
+// lab-validated, `in-target efibootmgr` fails at late_command time (no EFI
+// variable access inside the d-i chroot); the removable-media fallback (see
+// force-efi-extra-removable in the mirror preseed) is what boots a surviving
+// disk instead. Trailing newline: it is the last emitted line for these
+// accounts-less specs.
+const espSyncSdaSdb = `d-i preseed/late_command string in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target sed -i -E '\| /boot/efi |s|(vfat[[:space:]]+)([^[:space:]]+)|\1\2,nofail,x-systemd.device-timeout=1|' /etc/fstab
+`
 
 // TestTranslateDebianConfigMirror golden-pins the four raid:mirror combos —
 // UEFI-native (target nodes are UEFI). Each member disk gets its OWN small ESP
@@ -305,6 +308,7 @@ d-i partman-auto-raid/recipe string \
     1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
     1 2 0 ext4 / /dev/sda3#/dev/sdb3 .
 d-i mdadm/boot_degraded boolean true
+d-i grub-installer/force-efi-extra-removable boolean true
 d-i partman-md/confirm boolean true
 d-i partman-md/confirm_nooverwrite boolean true
 ` + partmanTail + "d-i grub-installer/bootdev string /dev/sda /dev/sdb\n" + espSyncSdaSdb,
@@ -325,6 +329,7 @@ d-i partman-auto-raid/recipe string \
     1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
     1 2 0 xfs / /dev/sda3#/dev/sdb3 .
 d-i mdadm/boot_degraded boolean true
+d-i grub-installer/force-efi-extra-removable boolean true
 d-i partman-md/confirm boolean true
 d-i partman-md/confirm_nooverwrite boolean true
 ` + partmanTail + "d-i grub-installer/bootdev string /dev/sda /dev/sdb\n" + espSyncSdaSdb,
@@ -346,6 +351,7 @@ d-i partman-auto-raid/recipe string \
     1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
     1 2 0 lvm - /dev/sda3#/dev/sdb3 .
 d-i mdadm/boot_degraded boolean true
+d-i grub-installer/force-efi-extra-removable boolean true
 d-i partman-md/confirm boolean true
 d-i partman-md/confirm_nooverwrite boolean true
 ` + partmanTail + "d-i grub-installer/bootdev string /dev/sda /dev/sdb\n" + espSyncSdaSdb,
@@ -367,6 +373,7 @@ d-i partman-auto-raid/recipe string \
     1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
     1 2 0 lvm - /dev/sda3#/dev/sdb3 .
 d-i mdadm/boot_degraded boolean true
+d-i grub-installer/force-efi-extra-removable boolean true
 d-i partman-md/confirm boolean true
 d-i partman-md/confirm_nooverwrite boolean true
 ` + partmanTail + "d-i grub-installer/bootdev string /dev/sda /dev/sdb\n" + espSyncSdaSdb,
@@ -500,7 +507,7 @@ disk:
 `
 	got := translate(t, src)
 	sshFrag := "in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf \"%s\\n\" \"ssh-ed25519 AAAA k1\" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys"
-	espFrag := "in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label \"debian (disk 2)\" --loader '\\EFI\\debian\\shimx64.efi'"
+	espFrag := `in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target sed -i -E '\| /boot/efi |s|(vfat[[:space:]]+)([^[:space:]]+)|\1\2,nofail,x-systemd.device-timeout=1|' /etc/fstab`
 	wantLate := "d-i preseed/late_command string " + sshFrag + " ; " + espFrag + "\n"
 	if !strings.Contains(got, wantLate) {
 		t.Errorf("ssh-then-ESP-sync order not pinned:\ngot:\n%s\nwant late line:\n%s", got, wantLate)
@@ -656,11 +663,12 @@ d-i partman-auto-raid/recipe string \
     1 2 0 ext4 /boot /dev/sda2#/dev/sdb2 . \
     1 2 0 ext4 / /dev/sda3#/dev/sdb3 .
 d-i mdadm/boot_degraded boolean true
+d-i grub-installer/force-efi-extra-removable boolean true
 d-i partman-md/confirm boolean true
 d-i partman-md/confirm_nooverwrite boolean true
 ` + partmanTail + `d-i grub-installer/bootdev string /dev/sda /dev/sdb
 d-i pkgsel/include string openssh-server
-d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys ; in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target efibootmgr --create --disk /dev/sdb --part 1 --label "debian (disk 2)" --loader '\EFI\debian\shimx64.efi' ; in-target systemctl enable ssh
+d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys ; in-target sh -c 'mkfs.vfat -F32 /dev/sdb1' ; in-target sh -c 'mount /dev/sdb1 /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt' ; in-target sed -i -E '\| /boot/efi |s|(vfat[[:space:]]+)([^[:space:]]+)|\1\2,nofail,x-systemd.device-timeout=1|' /etc/fstab ; in-target systemctl enable ssh
 d-i debian-installer/allow_unauthenticated boolean true
 `
 	if got := translate(t, src); got != want {

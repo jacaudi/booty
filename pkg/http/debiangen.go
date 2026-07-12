@@ -159,7 +159,8 @@ func buildDiskView(d *debianDisk) (*diskView, error) {
 		// M3: $bootable{ } is carried on the per-disk ESP entry (per the
 		// reference) and intentionally OMITTED on the md /boot/root raid members;
 		// grub-efi installs to every member's ESP (grub-installer + the ESP-sync
-		// efibootmgr entry), so no MBR boot flag is needed.
+		// clone below, plus the removable-media fallback entry force-efi-extra-
+		// removable writes onto each), so no MBR boot flag is needed.
 		v.Mirror = true
 		v.Method = "raid"
 		v.DevCount = len(d.Devices)
@@ -177,25 +178,32 @@ func buildDiskView(d *debianDisk) (*diskView, error) {
 // espSyncLateCommand builds the redundancy-critical ESP-sync fragment: the ESP
 // CANNOT be mirrored (§ buildDiskView comment), so after install we clone the
 // primary disk's ESP (device 0, partition 1) onto every OTHER member's ESP and
-// register a fallback UEFI boot entry, so the node still UEFI-boots if the
-// primary disk dies. Grounded in std.rocks/gnulinux_mdadm_uefi.html (clone ESP
-// + efibootmgr --create for the secondary disk). Runs inside the target during
-// preseed/late_command; /boot/efi is the mounted primary ESP at that point.
-// The efibootmgr loader path uses literal backslashes (\EFI\debian\shimx64.efi),
-// single-quoted so they survive d-i's `sh -c` execution of late_command — d-i
-// runs preseed/late_command through /bin/sh, which strips unquoted backslashes.
+// make /boot/efi's fstab entry nofail, so the node still boots if the primary
+// disk dies. The actual fallback boot path is the UEFI removable-media entry
+// (\EFI\boot\bootx64.efi) that grub-installer writes onto every ESP when d-i
+// grub-installer/force-efi-extra-removable is set (see the mirror branch of
+// preseedTemplateText) — NOT an efibootmgr/NVRAM boot entry: lab-validated,
+// `in-target efibootmgr` fails at late_command time (no EFI variable access
+// inside the d-i chroot) and efibootmgr isn't installed outside it either, so
+// an NVRAM entry can never actually be created here. Runs inside the target
+// during preseed/late_command; /boot/efi is the mounted primary ESP at that
+// point, and /etc/fstab (already written by d-i) still references the PRIMARY
+// ESP by UUID — the fstab edit below makes that mount nofail so degraded boot
+// (primary disk dead) doesn't time out into emergency mode.
 func espSyncLateCommand(devices []string) string {
 	var cmds []string
 	for i := 1; i < len(devices); i++ {
-		dev := devices[i]
-		esp := partitionName(dev, 1)
-		label := fmt.Sprintf("debian (disk %d)", i+1)
+		esp := partitionName(devices[i], 1)
 		cmds = append(cmds,
 			"in-target sh -c 'mkfs.vfat -F32 "+esp+"'",
 			"in-target sh -c 'mount "+esp+" /mnt && cp -a /boot/efi/. /mnt/ && umount /mnt'",
-			`in-target efibootmgr --create --disk `+dev+` --part 1 --label "`+label+`" --loader '\EFI\debian\shimx64.efi'`,
 		)
 	}
+	// Make /boot/efi nofail: fstab references the PRIMARY ESP by UUID, so if that disk dies,
+	// degraded boot must not time out and drop to emergency. (The removable-media fallback,
+	// enabled via grub-installer/force-efi-extra-removable and cloned onto every ESP above,
+	// is what actually boots a surviving disk — no efibootmgr/NVRAM entry is needed.)
+	cmds = append(cmds, `in-target sed -i -E '\| /boot/efi |s|(vfat[[:space:]]+)([^[:space:]]+)|\1\2,nofail,x-systemd.device-timeout=1|' /etc/fstab`)
 	return strings.Join(cmds, " ; ")
 }
 
@@ -450,6 +458,7 @@ d-i partman-auto-raid/recipe string \
     1 {{ .Disk.DevCount }} 0 ext4 /boot {{ .Disk.BootParts }} . \
     1 {{ .Disk.DevCount }} 0 {{ if .Disk.LVM }}lvm -{{ else }}{{ .Disk.Filesystem }} /{{ end }} {{ .Disk.RootParts }} .
 d-i mdadm/boot_degraded boolean {{ .Disk.BootDegraded }}
+d-i grub-installer/force-efi-extra-removable boolean true
 d-i partman-md/confirm boolean true
 d-i partman-md/confirm_nooverwrite boolean true
 {{ else }}d-i partman-auto/choose_recipe select atomic
