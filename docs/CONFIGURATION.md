@@ -255,7 +255,7 @@ packages: [openssh-server, qemu-guest-agent]
 disk:
   devices: [/dev/sda, /dev/sdb]
   raid: mirror                # none (default) | mirror (UEFI mdadm RAID1 +
-                              # per-disk ESP + ESP-sync late_command)
+                              # per-disk ESP + removable-media fallback on each)
   layout: lvm                 # plain (default) | lvm
   filesystem: ext4            # ext4 (default) | xfs
   boot_degraded: true         # mirror only; default true (a node still boots
@@ -284,18 +284,32 @@ raw_preseed: |
 
 `raid: mirror` requires ≥ 2 `devices`; `/boot` stays ext4 on md in all mirror
 combos; the curated mirror recipes carry no swap (add one via `expert_recipe`
-if needed).
+if needed). Whenever a `disk:` block is present booty emits
+`partman-basicfilesystems/no_swap boolean false`, so a swapless recipe installs
+unattended instead of stopping at d-i's "no swap space — continue?" prompt (it's
+a harmless no-op when a recipe does have swap).
 
 > **UEFI mirror — how redundancy works.** The EFI System Partition **cannot be
 > mirrored** (firmware writes to it directly before mdadm assembles; d-i refuses
 > `/boot/efi` on md). So each member disk gets its **own** ESP (partition 1,
-> `method{ efi }`, not raid'd), and only `/boot` + root are on md. booty then
-> emits an **ESP-sync `late_command`** that, after install, clones the primary
-> ESP onto every other member and registers a fallback UEFI boot entry with
-> `efibootmgr`, so the node still UEFI-boots if the primary disk dies. For a
-> **BIOS/legacy** mirror instead, use `disk.expert_recipe` (curated BIOS mirror
-> is a planned follow-up). Single-disk (`raid: none`) installs let d-i's guided
-> recipe create the ESP itself.
+> `method{ efi }`, not raid'd), and only `/boot` + root are on md. To make a
+> surviving disk bootable, booty:
+> 1. enables `grub-installer/force-efi-extra-removable`, so grub also installs
+>    the **removable-media** bootloader (`\EFI\BOOT\BOOT<ARCH>.EFI`) to the ESP —
+>    firmware boots this with **no NVRAM boot entry**, and it is automatically the
+>    right architecture;
+> 2. emits an **ESP-sync `late_command`** that clones the primary ESP (including
+>    that removable bootloader) onto every other member's ESP after install;
+> 3. marks `/boot/efi` **`nofail`** in `/etc/fstab` (fstab can only reference one
+>    ESP by UUID) so a dead primary ESP doesn't stall boot in emergency mode.
+>
+> Result: if the primary disk dies, the node still UEFI-boots off a surviving
+> member via its removable-media fallback and the degraded md array (validated in
+> the netboot lab: lone-disk boot → login). booty does **not** use `efibootmgr` —
+> it can't reach EFI variables inside the d-i chroot at `late_command` time, and
+> the removable-media path needs no NVRAM entry. For a **BIOS/legacy** mirror
+> instead, use `disk.expert_recipe` (curated BIOS mirror is a planned follow-up).
+> Single-disk (`raid: none`) installs let d-i's guided recipe create the ESP itself.
 
 Your `late_command` is **flattened to a single `;`-joined debconf line**, so
 each line must be **independently sequenceable** — no multi-line shell
