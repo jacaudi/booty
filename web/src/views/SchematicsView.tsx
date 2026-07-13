@@ -116,6 +116,15 @@ export default function SchematicsView() {
       ),
     },
     { title: 'Updated', dataIndex: 'updatedAt', key: 'updatedAt' },
+    {
+      title: 'Actions',
+      key: 'actions',
+      render: () => (
+        <Tooltip title="available after authentication (P10)">
+          <Button size="small" danger disabled>Delete</Button>
+        </Tooltip>
+      ),
+    },
   ]
 
   return (

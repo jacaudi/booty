@@ -25,6 +25,14 @@ describe('schematicYaml', () => {
     )
   })
 
+  it('omits the overlay when only overlayName is set (both-or-neither rule)', () => {
+    expect(buildCustomization({ extensions: [], overlayName: 'rpi_generic' })).toBe('customization: {}\n')
+  })
+
+  it('omits the overlay when only overlayImage is set (both-or-neither rule)', () => {
+    expect(buildCustomization({ extensions: [], overlayImage: 'siderolabs/sbc-raspberrypi' })).toBe('customization: {}\n')
+  })
+
   it('builds an overlay-only schematic (no extensions) with a valid empty customization', () => {
     expect(buildCustomization({ extensions: [], overlayName: 'rpi_generic', overlayImage: 'siderolabs/sbc-raspberrypi' })).toBe(
       'customization: {}\noverlay:\n  name: rpi_generic\n  image: siderolabs/sbc-raspberrypi\n',

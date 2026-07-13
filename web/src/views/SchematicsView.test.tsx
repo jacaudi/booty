@@ -71,4 +71,12 @@ describe('SchematicsView list screen', () => {
     expect(await screen.findByText(/64 lowercase hex/)).toBeInTheDocument()
     expect(client.bindSchematic).not.toHaveBeenCalled()
   })
+
+  it('renders a disabled Delete button (available after authentication (P10))', async () => {
+    vi.mocked(configs.listConfigs).mockResolvedValue([cfg({ id: 1, name: 'iscsi' })])
+    vi.mocked(configs.getConfig).mockResolvedValue(detail({ id: 1 }))
+    renderView()
+    const del = await screen.findByRole('button', { name: 'Delete' })
+    expect(del).toBeDisabled()
+  })
 })
