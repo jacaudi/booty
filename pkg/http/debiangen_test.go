@@ -107,11 +107,13 @@ d-i passwd/user-password-crypted password $6$h
 	}
 }
 
-// TestTranslateDebianConfigUserRequiresUsernameAndHash: coherence — a present
-// user block without username or password_hash is rejected (422 upstream).
-func TestTranslateDebianConfigUserRequiresUsernameAndHash(t *testing.T) {
+// TestTranslateDebianConfigUserRejectsUnreachableAndNoUsername: under D1 a user
+// with neither password_hash NOR ssh_authorized_keys is unreachable (422), and a
+// user with no username is still rejected. (Was UserRequiresUsernameAndHash —
+// renamed because password_hash alone is no longer required, F2.)
+func TestTranslateDebianConfigUserRejectsUnreachableAndNoUsername(t *testing.T) {
 	if _, err := translateDebianConfig([]byte("accounts:\n  user:\n    username: ops\n")); err == nil {
-		t.Error("user without password_hash must be rejected")
+		t.Error("user with no password_hash and no ssh keys must be rejected")
 	}
 	if _, err := translateDebianConfig([]byte("accounts:\n  user:\n    password_hash: $6$h\n")); err == nil {
 		t.Error("user without username must be rejected")
@@ -732,5 +734,29 @@ func TestTranslateDebianConfigLateCommandListEqualsBlock(t *testing.T) {
 	}
 	if list != want {
 		t.Errorf("list form:\ngot:\n%s\nwant:\n%s", list, want)
+	}
+}
+
+// TestTranslateDebianConfigPasswordOmittedLocksAndRequiresKey: an omitted
+// password_hash WITH ssh keys is a valid key-only account -> the crypt field is
+// the locked sentinel '*' (deterministic, design D1). Contains (not full-equals)
+// because Task 5 (D4) later adds an openssh-server package line.
+func TestTranslateDebianConfigPasswordOmittedLocksAndRequiresKey(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\n")
+	if !strings.Contains(got, "d-i passwd/user-password-crypted password *\n") {
+		t.Errorf("locked password sentinel not emitted:\n%s", got)
+	}
+}
+
+// TestTranslateDebianConfigUserRequiresPasswordOrKey: omitting password_hash
+// WITHOUT ssh keys leaves the account unreachable -> 422 with the reworded
+// message naming the actual rule (F2).
+func TestTranslateDebianConfigUserRequiresPasswordOrKey(t *testing.T) {
+	_, err := translateDebianConfig([]byte("accounts:\n  user:\n    username: svc\n"))
+	if err == nil {
+		t.Fatal("password-less, key-less user must be rejected")
+	}
+	if !strings.Contains(err.Error(), "password_hash or ssh_authorized_keys") {
+		t.Errorf("message %q should name 'password_hash or ssh_authorized_keys'", err.Error())
 	}
 }

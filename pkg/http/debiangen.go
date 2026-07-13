@@ -300,7 +300,7 @@ var usernameRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]*$`)
 // this just names the reason).
 func validateUsername(u string) error {
 	if u == "" {
-		return errors.New("http: debianconfig: accounts.user requires username and password_hash")
+		return errors.New("http: debianconfig: accounts.user requires a username")
 	}
 	if len(u) > 32 || !usernameRE.MatchString(u) {
 		return fmt.Errorf("http: debianconfig: invalid accounts.user.username %q (must match %s, max 32 chars)", u, usernameRE.String())
@@ -439,17 +439,20 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		v.HasAccounts = true
 		v.RootHash = a.RootPasswordHash
 		if u := a.User; u != nil {
-			if u.PasswordHash == "" {
-				return preseedView{}, errors.New("http: debianconfig: accounts.user requires username and password_hash")
-			}
+			// F5 validation order: (1) username, (2) reachability (D1),
+			// (3) sudo coherence [added in Task 4].
 			if err := validateUsername(u.Username); err != nil {
 				return preseedView{}, err
 			}
+			hasKeys := len(u.SSHAuthorizedKeys) > 0
+			if u.PasswordHash == "" && !hasKeys {
+				return preseedView{}, errors.New("http: debianconfig: accounts.user requires password_hash or ssh_authorized_keys")
+			}
 			v.HasUser = true
 			v.Username = u.Username
-			v.UserHash = u.PasswordHash
+			v.UserHash = cmp.Or(u.PasswordHash, "*") // D1: omitted -> locked sentinel
 			v.UserFullname = cmp.Or(u.Fullname, u.Username)
-			if len(u.SSHAuthorizedKeys) > 0 {
+			if hasKeys {
 				for _, k := range u.SSHAuthorizedKeys {
 					if err := validateSSHAuthorizedKey(k); err != nil {
 						return preseedView{}, err
