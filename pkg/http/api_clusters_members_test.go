@@ -1,6 +1,7 @@
 package http
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,6 +149,127 @@ func TestReBindReusesPersistedHostPatch(t *testing.T) {
 
 // bytesContains is a tiny helper (avoids importing bytes for one call per test).
 func bytesContains(b []byte, sub string) bool { return strings.Contains(string(b), sub) }
+
+// talosManualVersions returns the manual-source pinned versions on the talos
+// cache target whose schematic param equals `schematic`.
+func talosManualVersions(t *testing.T, deps APIDeps, schematic string) []string {
+	t.Helper()
+	targets, err := deps.Store.ListTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tg := range targets {
+		if tg.OS == "talos" && strings.Contains(tg.Params, schematic) {
+			vs, err := deps.Store.ListTargetVersions(tg.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out []string
+			for _, v := range vs {
+				if v.Source == "manual" {
+					out = append(out, v.Version)
+				}
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+// TestAddMemberPinsClusterVersionManually (I5): adding a member pins the
+// cluster's talos_version as a MANUAL target version so the reconciler fetches
+// it even when it is below the discovery window (closes the D-F back-fetch gap).
+func TestAddMemberPinsClusterVersionManually(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/clusters", map[string]any{
+		"name": "pinver", "endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.11.0", "k8sVersion": "v1.34.0",
+	})
+	const mac, schematic = "aa:bb:cc:dd:ee:e0", "schempin"
+	hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos"})
+	if resp := api.Post("/api/v1/clusters/1/members", map[string]any{
+		"mac": mac, "machineType": "controlplane", "schematic": schematic,
+	}); resp.Code != 200 {
+		t.Fatalf("add member = %d: %s", resp.Code, resp.Body.String())
+	}
+	if got := talosManualVersions(t, deps, schematic); !slices.Contains(got, "v1.11.0") {
+		t.Fatalf("cluster version not pinned as manual: %v", got)
+	}
+}
+
+// TestVersionBumpPinsNewVersionManually (I4+I5): a version-bump PUT pins the NEW
+// version as a manual target version for every member (and, per I4, does so
+// before committing the bump).
+func TestVersionBumpPinsNewVersionManually(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/clusters", map[string]any{
+		"name": "bumppin", "endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.13.5", "k8sVersion": "v1.34.0",
+	})
+	const mac, schematic = "aa:bb:cc:dd:ee:e1", "schembump"
+	hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos"})
+	api.Post("/api/v1/clusters/1/members", map[string]any{"mac": mac, "machineType": "controlplane", "schematic": schematic})
+
+	if resp := api.Put("/api/v1/clusters/1", map[string]any{
+		"endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.13.9", "k8sVersion": "v1.34.0",
+	}); resp.Code != 200 {
+		t.Fatalf("version bump = %d: %s", resp.Code, resp.Body.String())
+	}
+	if got := talosManualVersions(t, deps, schematic); !slices.Contains(got, "v1.13.9") {
+		t.Fatalf("bumped version not pinned as manual: %v", got)
+	}
+}
+
+// TestVersionBumpPrecacheFailureDoesNotCommit (I4 atomicity): if the pre-cache
+// step fails during a version-bump PUT, the version must NOT be advanced (it runs
+// before UpdateCluster), so the live netboot pin stays put and the op is retryable.
+func TestVersionBumpPrecacheFailureDoesNotCommit(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/clusters", map[string]any{
+		"name": "atomic", "endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.13.5", "k8sVersion": "v1.34.0",
+	})
+	const mac = "aa:bb:cc:dd:ee:e4"
+	hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos"})
+	api.Post("/api/v1/clusters/1/members", map[string]any{"mac": mac, "machineType": "controlplane", "schematic": "validschem"})
+	// Corrupt the member's schematic to a non-path-safe value so the version-bump
+	// pre-cache (EnsureSchematicTarget → ValidatePathParam) fails.
+	if err := deps.Store.SetHostSchematic(mac, "bad/slash"); err != nil {
+		t.Fatal(err)
+	}
+	if resp := api.Put("/api/v1/clusters/1", map[string]any{
+		"endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.13.9", "k8sVersion": "v1.34.0",
+	}); resp.Code == 200 {
+		t.Fatalf("version bump with failing pre-cache = 200, want failure")
+	}
+	// The bump must NOT have committed — retryable.
+	if c, _ := deps.Store.GetCluster(1); c.TalosVersion != "v1.13.5" {
+		t.Fatalf("version advanced despite pre-cache failure: %s", c.TalosVersion)
+	}
+}
+
+// TestReBindRejectsMachineTypeChange (M4): re-binding an existing member with a
+// different machineType is refused (remove + re-add is the explicit path).
+func TestReBindRejectsMachineTypeChange(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	api.Post("/api/v1/clusters", map[string]any{
+		"name": "mtchange", "endpoint": "https://10.0.0.10:6443", "talosVersion": "v1.13.5", "k8sVersion": "v1.34.0",
+	})
+	const mac = "aa:bb:cc:dd:ee:e2"
+	hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos"})
+	if resp := api.Post("/api/v1/clusters/1/members", map[string]any{"mac": mac, "machineType": "controlplane"}); resp.Code != 200 {
+		t.Fatalf("first bind = %d: %s", resp.Code, resp.Body.String())
+	}
+	// Re-bind with the SAME type is allowed (regenerate path).
+	if resp := api.Post("/api/v1/clusters/1/members", map[string]any{"mac": mac, "machineType": "controlplane"}); resp.Code != 200 {
+		t.Fatalf("same-type re-bind = %d: %s", resp.Code, resp.Body.String())
+	}
+	// Re-bind changing the type is refused.
+	if resp := api.Post("/api/v1/clusters/1/members", map[string]any{"mac": mac, "machineType": "worker"}); resp.Code != 422 {
+		t.Fatalf("machineType change on re-bind = %d, want 422", resp.Code)
+	}
+}
 
 func TestAddMemberRejectsForeignClusterHost(t *testing.T) {
 	deps := clustersTestSetup(t)

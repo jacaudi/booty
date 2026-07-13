@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -216,20 +217,23 @@ func registerClusters(api huma.API, deps APIDeps) {
 			}
 		}
 		versionBumped := c.TalosVersion != in.Body.TalosVersion
-		if err := deps.Store.UpdateCluster(in.ID, in.Body.Endpoint, in.Body.TalosVersion, in.Body.K8sVersion, specConfigID); err != nil {
-			return nil, huma.Error500InternalServerError("update cluster", err)
-		}
-		// I1 desync guard (Important #1): the tftp netboot pin reads the LIVE
-		// cluster.talos_version, but frozen configs lag until explicit re-bind
-		// (D-C). So a version bump immediately advances every member's netboot
-		// pin — pre-cache the new (schematic, version) targets and kick a
-		// reconcile NOW so a member rebooting in the pre-re-bind window can fetch
-		// the new boot kernel instead of 404ing. (It still installs the old frozen
-		// image until re-bound — a self-healing skew, documented in CONFIGURATION.)
+		// I4 atomicity + I1 desync guard: on a version bump, ensure + manually pin
+		// every member's new-version cache targets and kick a reconcile BEFORE
+		// committing the bump. The tftp netboot pin reads the LIVE
+		// cluster.talos_version, so committing first would advance the pin even if
+		// pre-caching then failed — and a retry would see versionBumped==false and
+		// silently skip the guard forever. Pre-caching first means a failure leaves
+		// the version (and the pin) unchanged and a retry re-runs the guard. Frozen
+		// configs still lag until explicit re-bind (D-C): a member rebooting in the
+		// pre-re-bind window netboots the new pinned kernel but installs the old
+		// frozen image until re-bound — a self-healing skew, documented in CONFIGURATION.
 		if versionBumped {
-			if err := ensureClusterMemberTargets(deps, in.ID); err != nil {
+			if err := ensureClusterMemberTargets(deps, in.ID, in.Body.TalosVersion); err != nil {
 				return nil, err
 			}
+		}
+		if err := deps.Store.UpdateCluster(in.ID, in.Body.Endpoint, in.Body.TalosVersion, in.Body.K8sVersion, specConfigID); err != nil {
+			return nil, huma.Error500InternalServerError("update cluster", err)
 		}
 		return clusterDTOResp(deps.Store, in.ID)
 	})
@@ -302,7 +306,7 @@ func clusterDTOResp(store *db.Store, id int64) (*struct{ Body ClusterDTO }, erro
 // the new pinned kernel. A member with no explicit schematic resolves to the
 // --talosSchematic default (the SAME resolution the tftp non-member path and
 // clusterPins use — Minor: schematic-default parity).
-func ensureClusterMemberTargets(deps APIDeps, clusterID int64) error {
+func ensureClusterMemberTargets(deps APIDeps, clusterID int64, talosVersion string) error {
 	members, err := deps.Store.ListClusterMembers(clusterID)
 	if err != nil {
 		return huma.Error500InternalServerError("list members", err)
@@ -313,11 +317,47 @@ func ensureClusterMemberTargets(deps APIDeps, clusterID int64) error {
 		if schematic == "" {
 			schematic = def
 		}
-		if err := cache.EnsureSchematicTarget(deps.Store, schematic); err != nil {
-			return huma.Error422UnprocessableEntity("ensure member cache target: "+err.Error(), err)
+		if err := pinClusterMemberVersion(deps, schematic, talosVersion); err != nil {
+			return err
 		}
 	}
 	deps.Trigger()
+	return nil
+}
+
+// pinClusterMemberVersion ensures the member's schematic discovery target exists
+// AND pins the cluster's talos version as a MANUAL target version, so the
+// reconciler fetches those boot assets even when the version is already below
+// the discovery window (closes the D-F back-fetch gap, I5) and never prunes it
+// (manual rows are retained). It does NOT Trigger — callers batch the reconcile.
+// Auto-created pins are not removed on remove-member (DELETE version is 403
+// until P10); they accumulate like frozen revisions do, to be cleaned up at P10.
+func pinClusterMemberVersion(deps APIDeps, schematic, talosVersion string) error {
+	if schematic == "" {
+		return nil
+	}
+	if err := cache.EnsureSchematicTarget(deps.Store, schematic); err != nil {
+		return huma.Error422UnprocessableEntity("ensure schematic cache target: "+err.Error(), err)
+	}
+	if talosVersion == "" {
+		return nil
+	}
+	targets, err := deps.Store.ListTargets()
+	if err != nil {
+		return huma.Error500InternalServerError("list targets", err)
+	}
+	for _, t := range targets {
+		if t.OS != "talos" {
+			continue
+		}
+		var p map[string]string
+		if json.Unmarshal([]byte(t.Params), &p) == nil && p["schematic"] == schematic {
+			if err := deps.Store.PinManualVersion(t.ID, talosVersion); err != nil {
+				return huma.Error500InternalServerError("pin cluster version", err)
+			}
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -377,7 +417,7 @@ func addMember(deps APIDeps, cluster *db.Cluster, mac, machineType, schematic, h
 	// hostPatch is persisted on the frozen revision so a later re-bind that omits
 	// it can reuse it (Fold 3 / §1.1 durable inputs). Generated members store the
 	// effective patch; imported members store "" (their bytes are verbatim).
-	if err := freezeAndBind(deps, cluster.ID, mac, machineType, schematic, produced, "generated", hostPatch); err != nil {
+	if err := freezeAndBind(deps, cluster.ID, mac, machineType, schematic, cluster.TalosVersion, produced, "generated", hostPatch); err != nil {
 		return err
 	}
 	return nil
@@ -405,7 +445,7 @@ func effectiveHostPatch(deps APIDeps, host *hardware.Host, requestPatch string) 
 // imported/patch-less), pre-caches the member's schematic assets, and writes
 // the host membership columns (schematic via P5's setter, cluster/type/
 // node-config via P6's). It is the shared tail of both generate and import.
-func freezeAndBind(deps APIDeps, clusterID int64, mac, machineType, schematic string, produced []byte, source, hostPatch string) error {
+func freezeAndBind(deps APIDeps, clusterID int64, mac, machineType, schematic, talosVersion string, produced []byte, source, hostPatch string) error {
 	enc, err := encryptSecrets(produced)
 	if err != nil {
 		if errors.Is(err, config.ErrNoSecretsKey) {
@@ -422,8 +462,8 @@ func freezeAndBind(deps APIDeps, clusterID int64, mac, machineType, schematic st
 	// reconcile. Failure is non-fatal (self-heals next tick) — log via Trigger's
 	// own path; here a target error is surfaced only if EnsureSchematicTarget fails.
 	if schematic != "" {
-		if err := cache.EnsureSchematicTarget(deps.Store, schematic); err != nil {
-			return huma.Error422UnprocessableEntity("ensure schematic cache target: "+err.Error(), err)
+		if err := pinClusterMemberVersion(deps, schematic, talosVersion); err != nil {
+			return err
 		}
 		deps.Trigger()
 	}
@@ -498,6 +538,13 @@ func registerClusterMembers(api huma.API, deps APIDeps) {
 		// (re-binding to the SAME cluster is allowed — that is the regenerate path).
 		if h.ClusterID != nil && *h.ClusterID != in.ID {
 			return nil, huma.Error422UnprocessableEntity("host already belongs to another cluster")
+		}
+		// M4: a re-bind (same cluster) regenerates the member's frozen config but
+		// must not silently change its role — a controlplane<->worker switch changes
+		// the generated config type and leaves stale opposite-role revisions. Remove
+		// the member and add it again to change the machine type.
+		if h.ClusterID != nil && h.MachineType != "" && h.MachineType != in.Body.MachineType {
+			return nil, huma.Error422UnprocessableEntity("cannot change machineType on re-bind; remove the member and add it again")
 		}
 		// Resolve the member's schematic: explicit config/raw, else the host's
 		// current schematic, else the operator's configured --talosSchematic
@@ -640,7 +687,7 @@ func registerClusterMembers(api huma.API, deps APIDeps) {
 		// freezeAndBind so the host is wired exactly like a generated member.
 		// Imported bytes are verbatim; there is no separate per-host patch, so
 		// host_patch is "" (Fold 3).
-		if err := freezeAndBind(deps, cluster.ID, h.MAC, "controlplane", schematic, []byte(in.Body.Controlplane), "imported", ""); err != nil {
+		if err := freezeAndBind(deps, cluster.ID, h.MAC, "controlplane", schematic, cluster.TalosVersion, []byte(in.Body.Controlplane), "imported", ""); err != nil {
 			return nil, err
 		}
 		return clusterDTOResp(deps.Store, cid)
