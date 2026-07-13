@@ -43,4 +43,58 @@ describe('ClustersView', () => {
       expect.objectContaining({ name: 'newc', endpoint: 'https://10.0.0.10:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0' }),
     ))
   })
+
+  it('Export shows the returned secrets yaml', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([
+      { id: 1, name: 'prod', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', members: [], updatedAt: '' },
+    ])
+    vi.mocked(clustersApi.exportClusterSecrets).mockResolvedValue({ secretsYaml: 'SECRET-BUNDLE-YAML' })
+    render(<ClustersView />)
+    await screen.findByText('prod')
+    await userEvent.click(screen.getByRole('button', { name: 'Export' }))
+    expect(await screen.findByDisplayValue('SECRET-BUNDLE-YAML')).toBeInTheDocument()
+  })
+
+  it('Edit PUTs the updated pinned inputs without a specConfigId', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([
+      { id: 1, name: 'prod', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', members: [], updatedAt: '' },
+    ])
+    vi.mocked(clustersApi.updateCluster).mockResolvedValue(undefined)
+    render(<ClustersView />)
+    await screen.findByText('prod')
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    const version = screen.getByLabelText('Talos version')
+    await userEvent.clear(version)
+    await userEvent.type(version, 'v1.13.6')
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(clustersApi.updateCluster).toHaveBeenCalledWith(1, {
+      endpoint: 'https://e:6443', talosVersion: 'v1.13.6', k8sVersion: 'v1.34.0',
+    }))
+  })
+
+  it('Edit surfaces an error and does not claim success when updateCluster fails', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([
+      { id: 1, name: 'prod', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', members: [], updatedAt: '' },
+    ])
+    vi.mocked(clustersApi.updateCluster).mockRejectedValue(new Error('422: pin failed'))
+    render(<ClustersView />)
+    await screen.findByText('prod')
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(clustersApi.updateCluster).toHaveBeenCalled())
+    expect(await screen.findByText('422: pin failed')).toBeInTheDocument()
+    // The modal must stay open on failure — closing it would misrepresent the update as done.
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+  })
+
+  it('Export surfaces an error when exportClusterSecrets fails', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([
+      { id: 1, name: 'prod', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', members: [], updatedAt: '' },
+    ])
+    vi.mocked(clustersApi.exportClusterSecrets).mockRejectedValue(new Error('422: export requires --secretsKey (fail-closed)'))
+    render(<ClustersView />)
+    await screen.findByText('prod')
+    await userEvent.click(screen.getByRole('button', { name: 'Export' }))
+    expect(await screen.findByText('422: export requires --secretsKey (fail-closed)')).toBeInTheDocument()
+  })
 })

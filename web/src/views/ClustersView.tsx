@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { Alert, Button, Form, Input, Modal, Space, Table, Tag, message } from 'antd'
 import type { Cluster } from '../api/clusters'
-import { addMember, createCluster, importCluster, listClusters, removeMember } from '../api/clusters'
+import { addMember, createCluster, exportClusterSecrets, importCluster, listClusters, removeMember, updateCluster } from '../api/clusters'
 
 export default function ClustersView() {
   const [clusters, setClusters] = useState<Cluster[]>([])
@@ -12,6 +12,10 @@ export default function ClustersView() {
   const [importOpen, setImportOpen] = useState(false)
   const [createForm] = Form.useForm()
   const [importForm] = Form.useForm()
+  const [exportYaml, setExportYaml] = useState<string | null>(null)
+  const [editing, setEditing] = useState<Cluster | null>(null)
+  const [editForm] = Form.useForm()
+  const [saving, setSaving] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -50,12 +54,55 @@ export default function ClustersView() {
     }
   }
 
+  const doExport = async (c: Cluster) => {
+    try {
+      const res = await exportClusterSecrets(c.id)
+      setExportYaml(res?.secretsYaml ?? '')
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'export failed')
+    }
+  }
+
+  const openEdit = (c: Cluster) => {
+    editForm.setFieldsValue({ endpoint: c.endpoint, talosVersion: c.talosVersion, k8sVersion: c.k8sVersion })
+    setEditing(c)
+  }
+
+  const submitEdit = async () => {
+    if (!editing) return
+    const v = await editForm.validateFields()
+    setSaving(true)
+    try {
+      // A Talos-version bump ensures + pins every member's cache targets BEFORE
+      // committing, then kicks an async reconcile — so this can 422, but it does
+      // NOT block on downloads (SGE I4). specConfigId is intentionally omitted —
+      // PUT preserves the existing binding; sending empty would not clear it.
+      await updateCluster(editing.id, { endpoint: v.endpoint, talosVersion: v.talosVersion, k8sVersion: v.k8sVersion })
+      message.success(`Updated ${editing.name}`)
+      setEditing(null)
+      await load()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'update failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const columns = [
     { title: 'Name', dataIndex: 'name', key: 'name' },
     { title: 'Endpoint', dataIndex: 'endpoint', key: 'endpoint' },
     { title: 'Talos', dataIndex: 'talosVersion', key: 'talos' },
     { title: 'Kubernetes', dataIndex: 'k8sVersion', key: 'k8s' },
     { title: 'Members', key: 'members', render: (_: unknown, c: Cluster) => c.members?.length ?? 0 },
+    {
+      title: 'Actions', key: 'actions',
+      render: (_: unknown, c: Cluster) => (
+        <Space>
+          <Button size="small" onClick={() => openEdit(c)}>Edit</Button>
+          <Button size="small" onClick={() => doExport(c)}>Export</Button>
+        </Space>
+      ),
+    },
   ]
 
   const memberColumns = (clusterId: number) => [
@@ -113,6 +160,40 @@ export default function ClustersView() {
           <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="controlplaneMac" label="Control-plane host MAC" rules={[{ required: true }]}><Input placeholder="aa:bb:cc:dd:ee:ff" /></Form.Item>
           <Form.Item name="controlplane" label="controlplane.yaml" rules={[{ required: true }]}><Input.TextArea rows={10} /></Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Cluster Secrets"
+        open={exportYaml !== null}
+        onCancel={() => setExportYaml(null)}
+        footer={<Button onClick={() => setExportYaml(null)}>Close</Button>}
+        destroyOnHidden
+      >
+        <Input.TextArea rows={16} value={exportYaml ?? ''} readOnly />
+      </Modal>
+
+      <Modal
+        title="Edit Cluster"
+        open={editing !== null}
+        onOk={submitEdit}
+        onCancel={() => setEditing(null)}
+        okText="Save"
+        okButtonProps={{ loading: saving }}
+        cancelButtonProps={{ disabled: saving }}
+        destroyOnHidden
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item name="endpoint" label="Endpoint" rules={[{ required: true }]}><Input placeholder="https://10.0.0.10:6443" /></Form.Item>
+          <Form.Item
+            name="talosVersion"
+            label="Talos version"
+            rules={[{ required: true }]}
+            extra="A version change pins new boot assets for every member before saving; caching then happens in the background."
+          >
+            <Input placeholder="v1.13.5" />
+          </Form.Item>
+          <Form.Item name="k8sVersion" label="Kubernetes version" rules={[{ required: true }]}><Input placeholder="v1.34.0" /></Form.Item>
         </Form>
       </Modal>
     </Space>
