@@ -181,7 +181,7 @@ describe('BootConfigsView', () => {
       expect(configsApi.createConfig).toHaveBeenCalledWith({
         name: 'sbc',
         kind: 'schematic',
-        source: 'customization:\n  overlay:\n    name: rpi_generic\n    image: siderolabs/sbc-raspberrypi\n',
+        source: 'customization: {}\noverlay:\n  name: rpi_generic\n  image: siderolabs/sbc-raspberrypi\n',
       }),
     )
   })

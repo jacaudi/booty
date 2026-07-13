@@ -12,25 +12,27 @@ export interface SchematicFields {
 }
 
 export function buildCustomization(f: SchematicFields): string {
-  const lines = ['customization:']
+  // `customization` and `overlay` are SIBLINGS in the Factory schematic schema —
+  // overlay is NOT a child of customization (it was, wrongly, until this fix).
+  const cust = ['customization:']
   if (f.extensions.length > 0) {
-    lines.push('  systemExtensions:', '    officialExtensions:')
-    for (const e of f.extensions) lines.push(`      - ${e}`)
+    cust.push('  systemExtensions:', '    officialExtensions:')
+    for (const e of f.extensions) cust.push(`      - ${e}`)
   }
+  const lines = cust.length === 1 ? ['customization: {}'] : cust
   if (f.overlayName && f.overlayImage) {
-    lines.push('  overlay:', `    name: ${f.overlayName}`, `    image: ${f.overlayImage}`)
+    lines.push('overlay:', `  name: ${f.overlayName}`, `  image: ${f.overlayImage}`)
   }
-  if (lines.length === 1) return 'customization: {}\n'
   return lines.join('\n') + '\n'
 }
 
 export function parseCustomization(source: string): SchematicFields | null {
-  if (source.trim() === 'customization: {}') return { extensions: [] }
   const extensions = [...source.matchAll(/^ {6}- (.+)$/gm)].map((m) => m[1].trim())
-  const overlayName = source.match(/^ {4}name: (.+)$/m)?.[1]?.trim()
-  const overlayImage = source.match(/^ {4}image: (.+)$/m)?.[1]?.trim()
+  const overlayName = source.match(/^ {2}name: (.+)$/m)?.[1]?.trim()
+  const overlayImage = source.match(/^ {2}image: (.+)$/m)?.[1]?.trim()
   const fields: SchematicFields = { extensions, overlayName, overlayImage }
   // Round-trip guard: anything our builder would not emit byte-identically is
-  // outside the subset (hand-edited, unknown keys) -> null.
+  // outside the subset (hand-edited, unknown keys, or the OLD nested overlay
+  // shape) -> null -> the edit UI shows the raw source read-only.
   return buildCustomization(fields) === source ? fields : null
 }

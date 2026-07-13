@@ -6,7 +6,7 @@ describe('schematicYaml', () => {
     expect(buildCustomization({ extensions: [] })).toBe('customization: {}\n')
   })
 
-  it('builds extensions + overlay in the Factory shape', () => {
+  it('builds extensions with overlay at the TOP LEVEL (Factory schema)', () => {
     expect(
       buildCustomization({
         extensions: ['siderolabs/iscsi-tools', 'siderolabs/util-linux-tools'],
@@ -19,10 +19,21 @@ describe('schematicYaml', () => {
         '    officialExtensions:\n' +
         '      - siderolabs/iscsi-tools\n' +
         '      - siderolabs/util-linux-tools\n' +
-        '  overlay:\n' +
-        '    name: rpi_generic\n' +
-        '    image: siderolabs/sbc-raspberrypi\n',
+        'overlay:\n' +
+        '  name: rpi_generic\n' +
+        '  image: siderolabs/sbc-raspberrypi\n',
     )
+  })
+
+  it('builds an overlay-only schematic (no extensions) with a valid empty customization', () => {
+    expect(buildCustomization({ extensions: [], overlayName: 'rpi_generic', overlayImage: 'siderolabs/sbc-raspberrypi' })).toBe(
+      'customization: {}\noverlay:\n  name: rpi_generic\n  image: siderolabs/sbc-raspberrypi\n',
+    )
+  })
+
+  it('no longer round-trips the OLD nested overlay shape (falls back to read-only raw)', () => {
+    const legacy = 'customization:\n  overlay:\n    name: rpi_generic\n    image: siderolabs/sbc-raspberrypi\n'
+    expect(parseCustomization(legacy)).toBeNull()
   })
 
   it('round-trips build -> parse for every field combination', () => {
