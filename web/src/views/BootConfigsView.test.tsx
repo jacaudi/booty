@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { message } from 'antd'
 import BootConfigsView from './BootConfigsView'
 import * as configsApi from '../api/configs'
 import type { Config } from '../api/configs'
@@ -155,12 +156,10 @@ describe('BootConfigsView', () => {
     // switch to Roles tab
     await userEvent.click(screen.getByRole('tab', { name: 'Roles' }))
     await screen.findByText('cp')
-    // Find the select wrapper by aria-label
-    const selectWrapper = document.querySelector('[aria-label="default config for cp"]') as HTMLElement
-    expect(selectWrapper).toBeInTheDocument()
-    // Find the clickable selector div inside
-    const selector = selectWrapper?.querySelector('.ant-select-selector') as HTMLElement
-    expect(selector).toBeInTheDocument()
+    // AntD forwards aria-label to both the wrapper div and the inner combobox
+    // input, so plain getByLabelText is ambiguous (matches both). Scoping to
+    // role=combobox makes it unique and is the accessible way to reach it.
+    const selector = screen.getByRole('combobox', { name: 'default config for cp' })
     await userEvent.click(selector)
     // Wait for the dropdown to render
     await waitFor(() => {
@@ -172,5 +171,36 @@ describe('BootConfigsView', () => {
     await userEvent.click(webInDropdown)
     // Verify the API was called
     await waitFor(() => expect(rolesApi.updateRole).toHaveBeenCalledWith(1, { name: 'cp', defaultConfigId: 7 }))
+  })
+
+  it('a rejected inline default-config update surfaces an error and does not show the attempted value as saved', async () => {
+    const errorSpy = vi.spyOn(message, 'error')
+    const successSpy = vi.spyOn(message, 'success')
+    try {
+      vi.mocked(rolesApi.listRoles).mockResolvedValue([{ id: 1, name: 'cp', defaultConfigId: undefined, hostCount: 0 }])
+      vi.mocked(configsApi.listConfigs).mockResolvedValue([
+        { id: 7, name: 'web', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+      ])
+      vi.mocked(rolesApi.updateRole).mockRejectedValue(new Error('PUT /roles/1 failed: 500: db error'))
+      render(<BootConfigsView />)
+      await userEvent.click(screen.getByRole('tab', { name: 'Roles' }))
+      await screen.findByText('cp')
+      const selector = screen.getByRole('combobox', { name: 'default config for cp' })
+      await userEvent.click(selector)
+      await waitFor(() => {
+        expect(document.querySelector('.ant-select-item-option-content')).toBeInTheDocument()
+      })
+      const webInDropdown = await screen.findByText('web', { selector: '.ant-select-item-option-content' })
+      await userEvent.click(webInDropdown)
+      await waitFor(() => expect(rolesApi.updateRole).toHaveBeenCalledWith(1, { name: 'cp', defaultConfigId: 7 }))
+      await waitFor(() => expect(errorSpy).toHaveBeenCalledWith('PUT /roles/1 failed: 500: db error'))
+      expect(successSpy).not.toHaveBeenCalled()
+      // The role list was never reloaded (act() only calls load() on success), so the
+      // Select must still reflect the unchanged (empty) value, not the attempted "web".
+      expect(screen.getByRole('combobox', { name: 'default config for cp' })).toHaveValue('')
+    } finally {
+      errorSpy.mockRestore()
+      successSpy.mockRestore()
+    }
   })
 })

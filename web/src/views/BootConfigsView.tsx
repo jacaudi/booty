@@ -367,7 +367,6 @@ function RolesTab() {
       key: 'defaultConfigId',
       render: (_, r) => (
         <Select
-          allowClear
           style={{ minWidth: 180 }}
           aria-label={`default config for ${r.name}`}
           placeholder="—"
