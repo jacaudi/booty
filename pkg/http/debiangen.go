@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -326,6 +327,34 @@ func sshLateCommand(username string, keys []string) string {
 		"in-target chmod 600 " + home + "/.ssh/authorized_keys"
 }
 
+// sudoLateCommand builds the sudo-setup late_command fragment (design D2). Both
+// modes add the user to the sudo group (path-uniform, F7). nopasswd ALSO writes
+// a 440 /etc/sudoers.d/<user> NOPASSWD drop-in via POSIX printf (NOT a bashism —
+// the '<<<' here-string fails under d-i's sh) then chmod 440. <username> is the
+// already-validateUsername-validated name (^[a-z_][a-z0-9_-]*$), so it is
+// injection-safe in the shell context AND is never a filename sudo ignores
+// (the charset excludes '.' and '~').
+func sudoLateCommand(mode sudoMode, username string) string {
+	group := "in-target usermod -aG sudo " + username
+	if mode != sudoNopasswd {
+		return group
+	}
+	drop := "/etc/sudoers.d/" + username
+	return group + " ; " +
+		`in-target sh -c 'printf "%s\n" "` + username + ` ALL=(ALL) NOPASSWD:ALL" > ` + drop + `' ; ` +
+		"in-target chmod 440 " + drop
+}
+
+// appendIfAbsent appends name to pkgs only when want is true and name is not
+// already present (D4/D2 auto-add + dedup, F1). The operator's list order is
+// preserved; auto-adds land at the end.
+func appendIfAbsent(pkgs []string, name string, want bool) []string {
+	if !want || slices.Contains(pkgs, name) {
+		return pkgs
+	}
+	return append(pkgs, name)
+}
+
 // stringOrList lets late_command be authored as either a YAML block scalar (the
 // original form) or a YAML sequence of commands (D3). A sequence joins with
 // "\n" so it feeds flattenLateCommand identically to a multi-line block —
@@ -417,9 +446,9 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		Hostname: spec.Hostname,
 		Domain:   spec.Domain,
 		Timezone: spec.Timezone,
-		Packages: strings.Join(spec.Packages, " "),
 	}
-	var sshCmd string
+	var sshCmd, sudoCmd string
+	var needSudo bool
 	if n := spec.Network; n != nil {
 		v.Iface = n.Interface
 		if s := n.Static; s != nil {
@@ -440,13 +469,16 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		v.RootHash = a.RootPasswordHash
 		if u := a.User; u != nil {
 			// F5 validation order: (1) username, (2) reachability (D1),
-			// (3) sudo coherence [added in Task 4].
+			// (3) sudo coherence.
 			if err := validateUsername(u.Username); err != nil {
 				return preseedView{}, err
 			}
 			hasKeys := len(u.SSHAuthorizedKeys) > 0
 			if u.PasswordHash == "" && !hasKeys {
 				return preseedView{}, errors.New("http: debianconfig: accounts.user requires password_hash or ssh_authorized_keys")
+			}
+			if u.Sudo == sudoPassword && u.PasswordHash == "" {
+				return preseedView{}, errors.New("http: debianconfig: sudo: password requires accounts.user.password_hash")
 			}
 			v.HasUser = true
 			v.Username = u.Username
@@ -459,6 +491,10 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 					}
 				}
 				sshCmd = sshLateCommand(u.Username, u.SSHAuthorizedKeys)
+			}
+			if u.Sudo != sudoNone {
+				sudoCmd = sudoLateCommand(u.Sudo, u.Username)
+				needSudo = true
 			}
 		}
 	}
@@ -476,6 +512,9 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 	if sshCmd != "" {
 		lateParts = append(lateParts, sshCmd)
 	}
+	if sudoCmd != "" {
+		lateParts = append(lateParts, sudoCmd)
+	}
 	if v.Disk != nil && v.Disk.ESPSyncCmd != "" {
 		lateParts = append(lateParts, v.Disk.ESPSyncCmd)
 	}
@@ -486,6 +525,9 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 	// raw_preseed is appended LAST (design §4): later duplicate debconf answers
 	// win, so the hatch can always override a curated line.
 	v.RawPreseed = strings.TrimRight(spec.RawPreseed, "\n")
+	pkgs := slices.Clone(spec.Packages)
+	pkgs = appendIfAbsent(pkgs, "sudo", needSudo)
+	v.Packages = strings.Join(pkgs, " ")
 	return v, nil
 }
 

@@ -760,3 +760,50 @@ func TestTranslateDebianConfigUserRequiresPasswordOrKey(t *testing.T) {
 		t.Errorf("message %q should name 'password_hash or ssh_authorized_keys'", err.Error())
 	}
 }
+
+// TestTranslateDebianConfigSudoPassword: sudo: password adds the sudo package and
+// a single usermod (group membership; interactive password sudo) — no drop-in.
+func TestTranslateDebianConfigSudoPassword(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n    sudo: password\n")
+	want := `d-i passwd/root-login boolean false
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string svc
+d-i passwd/username string svc
+d-i passwd/user-password-crypted password $6$h
+d-i pkgsel/include string sudo
+d-i preseed/late_command string in-target usermod -aG sudo svc
+`
+	if got != want {
+		t.Errorf("sudo:password:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigSudoNopasswd: sudo: nopasswd adds the sudo package,
+// the usermod, a 440 /etc/sudoers.d/<user> NOPASSWD drop-in written via POSIX
+// printf (no bashism), and a separate chmod 440.
+func TestTranslateDebianConfigSudoNopasswd(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n    sudo: nopasswd\n")
+	want := `d-i passwd/root-login boolean false
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string svc
+d-i passwd/username string svc
+d-i passwd/user-password-crypted password $6$h
+d-i pkgsel/include string sudo
+d-i preseed/late_command string in-target usermod -aG sudo svc ; in-target sh -c 'printf "%s\n" "svc ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/svc' ; in-target chmod 440 /etc/sudoers.d/svc
+`
+	if got != want {
+		t.Errorf("sudo:nopasswd:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigSudoPasswordRequiresHash: sudo: password on a locked
+// (password-omitted) account can never authenticate sudo -> 422 (D2 coherence).
+func TestTranslateDebianConfigSudoPasswordRequiresHash(t *testing.T) {
+	_, err := translateDebianConfig([]byte("accounts:\n  user:\n    username: svc\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\n    sudo: password\n"))
+	if err == nil {
+		t.Fatal("sudo:password without password_hash must be rejected")
+	}
+	if !strings.Contains(err.Error(), "sudo: password requires") {
+		t.Errorf("message %q should explain sudo:password needs a password_hash", err.Error())
+	}
+}
