@@ -370,7 +370,7 @@ function RolesTab() {
           style={{ minWidth: 180 }}
           aria-label={`default config for ${r.name}`}
           placeholder="—"
-          value={r.defaultConfigId}
+          value={r.defaultConfigId ?? null}
           options={configOptions}
           onChange={(value) => act(() => updateRole(r.id, { name: r.name, defaultConfigId: value }), `Updated ${r.name}`)}
         />

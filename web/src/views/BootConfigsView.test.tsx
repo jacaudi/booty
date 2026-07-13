@@ -197,7 +197,11 @@ describe('BootConfigsView', () => {
       expect(successSpy).not.toHaveBeenCalled()
       // The role list was never reloaded (act() only calls load() on success), so the
       // Select must still reflect the unchanged (empty) value, not the attempted "web".
-      expect(screen.getByRole('combobox', { name: 'default config for cp' })).toHaveValue('')
+      // AntD's single (non-search) combobox <input> always has DOM value "" regardless
+      // of selection, so asserting on it proves nothing; the actual selected label (if
+      // any) renders in a sibling `.ant-select-selection-item`. Assert that is absent.
+      const selectRoot = screen.getByRole('combobox', { name: 'default config for cp' }).closest('.ant-select')
+      expect(selectRoot?.querySelector('.ant-select-selection-item')).not.toBeInTheDocument()
     } finally {
       errorSpy.mockRestore()
       successSpy.mockRestore()
