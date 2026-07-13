@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, Button, Drawer, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Collapse, Drawer, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { Config, Preview, Revision } from '../api/configs'
 import { createConfig, getConfig, listConfigs, listRevisions, previewConfig, rollbackConfig, updateConfig } from '../api/configs'
@@ -28,6 +28,8 @@ function ConfigsTab() {
   const [revisionsFor, setRevisionsFor] = useState<Config | null>(null)
   const [revisions, setRevisions] = useState<Revision[]>([])
   const [revisionsLoading, setRevisionsLoading] = useState(false)
+
+  const [validating, setValidating] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -120,6 +122,27 @@ function ConfigsTab() {
     setRevisionsFor(null)
   }
 
+  const validate = async (c: Config) => {
+    setValidating(c.id)
+    try {
+      const preview = await previewConfig(c.id)
+      // A resolved preview is NOT proof of validity: the server returns 200 and
+      // folds a render failure into `report` (api_configs.go:236-240). Inspect the
+      // body — an empty `rendered` means the render failed (SGE B1).
+      if (!preview?.rendered) {
+        message.error(preview?.report || `${c.name} is invalid`)
+      } else {
+        message.success(`${c.name} is valid`)
+      }
+    } catch (e) {
+      // Real rejections: non-renderable kind, no active revision, transport. Task 1
+      // preserved the response body, so this message is actually useful.
+      message.error(e instanceof Error ? e.message : `${c.name} is invalid`)
+    } finally {
+      setValidating(null)
+    }
+  }
+
   const columns: ColumnsType<Config> = [
     { title: 'Name', dataIndex: 'name', key: 'name' },
     { title: 'Kind', dataIndex: 'kind', key: 'kind', render: (k: string) => <Tag>{k}</Tag> },
@@ -133,6 +156,16 @@ function ConfigsTab() {
           <Button size="small" onClick={() => openEdit(c)}>Edit</Button>
           <Button size="small" onClick={() => openPreview(c)}>Preview</Button>
           <Button size="small" onClick={() => openRevisions(c)}>Revisions</Button>
+          <Tooltip title={c.kind === 'taloscluster' ? 'cluster specs are not renderable' : undefined}>
+            <Button
+              size="small"
+              loading={validating === c.id}
+              disabled={c.kind === 'taloscluster'}
+              onClick={() => validate(c)}
+            >
+              Validate
+            </Button>
+          </Tooltip>
           <Tooltip title="available after authentication (P10)">
             <Button size="small" danger disabled>Delete</Button>
           </Tooltip>
@@ -165,6 +198,34 @@ function ConfigsTab() {
       </Space>
       <Table rowKey="id" loading={loading} columns={columns} dataSource={configs} pagination={false} />
 
+      <Collapse
+        items={[{
+          key: 'vars',
+          label: 'Template variables',
+          children: (
+            <Typography>
+              <Typography.Paragraph>Available in every rendered config:</Typography.Paragraph>
+              <ul>
+                <li><Typography.Text code>{'{{ .MAC }}'}</Typography.Text> — host MAC</li>
+                <li><Typography.Text code>{'{{ .Hostname }}'}</Typography.Text> — host name</li>
+                <li><Typography.Text code>{'{{ .IP }}'}</Typography.Text> — observed IP</li>
+                <li><Typography.Text code>{'{{ .UUID }}'}</Typography.Text> — hardware UUID</li>
+                <li><Typography.Text code>{'{{ .Serial }}'}</Typography.Text> — hardware serial</li>
+                <li><Typography.Text code>{'{{ .ServerIP }}'}</Typography.Text> — booty server IP</li>
+                <li><Typography.Text code>{'{{ .ServerHTTPPort }}'}</Typography.Text> — booty HTTP port</li>
+                <li><Typography.Text code>{'{{ .JoinString }}'}</Typography.Text> — join string</li>
+              </ul>
+              <Typography.Paragraph>Populated for the machineconfig family only:</Typography.Paragraph>
+              <ul>
+                <li><Typography.Text code>{'{{ .TalosVersion }}'}</Typography.Text></li>
+                <li><Typography.Text code>{'{{ .Schematic }}'}</Typography.Text></li>
+                <li><Typography.Text code>{'{{ .Roles }}'}</Typography.Text></li>
+              </ul>
+            </Typography>
+          ),
+        }]}
+      />
+
       <Modal title="Create Config" open={createOpen} onOk={submitCreate} onCancel={() => setCreateOpen(false)} destroyOnHidden>
         <Form form={createForm} layout="vertical">
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
@@ -172,6 +233,19 @@ function ConfigsTab() {
           </Form.Item>
           <Form.Item name="kind" label="Kind" rules={[{ required: true }]}>
             <Select options={CONFIG_KINDS.map((k) => ({ value: k, label: k }))} />
+          </Form.Item>
+          <Form.Item label="Upload a file (optional)">
+            <Upload.Dragger
+              beforeUpload={(file) => {
+                const reader = new FileReader()
+                reader.onload = () => createForm.setFieldValue('source', String(reader.result ?? ''))
+                reader.readAsText(file)
+                return false // prevent auto-upload; we only read the text locally
+              }}
+              maxCount={1}
+            >
+              <p className="ant-upload-text">Drag a config file here, or click to select</p>
+            </Upload.Dragger>
           </Form.Item>
           <Form.Item name="source" label="Source" rules={[{ required: true }]}>
             <Input.TextArea rows={8} />

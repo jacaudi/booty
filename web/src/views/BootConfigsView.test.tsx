@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import BootConfigsView from './BootConfigsView'
 import * as configsApi from '../api/configs'
+import type { Config } from '../api/configs'
 import * as rolesApi from '../api/roles'
 
 vi.mock('../api/configs')
@@ -96,4 +97,51 @@ describe('BootConfigsView', () => {
   // NOT reimplemented by the stub builder in this task — Task 9 rebuilds that
   // form and its coverage (including the both-or-neither rule) lands in
   // SchematicBuilder.test.tsx there.
+
+  const cfgRow = (o: Partial<Config> = {}): Config => ({
+    id: 1, name: 'web', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '', ...o,
+  })
+
+  it('Validate reports valid when preview returns rendered output', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([cfgRow()])
+    vi.mocked(configsApi.previewConfig).mockResolvedValue({ rendered: 'variant: fcos', contentType: 'text/plain', report: '' })
+    render(<BootConfigsView />)
+    await screen.findByText('web')
+    await userEvent.click(screen.getAllByRole('button', { name: 'Validate' })[0])
+    // Matcher must be specific: /valid/i also matches the "Validate" button label.
+    expect(await screen.findByText(/is valid/)).toBeInTheDocument()
+  })
+
+  it('Validate reports INVALID when preview 200s with the error folded into report', async () => {
+    // This is the real backend behavior (api_configs.go:236-240) — a bad config is
+    // NOT a rejection. Awaiting the promise is not a validity check (SGE B1).
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([cfgRow()])
+    vi.mocked(configsApi.previewConfig).mockResolvedValue({
+      rendered: '',
+      contentType: '',
+      report: 'render failed | butane: line 3: unknown key "storag"',
+    })
+    render(<BootConfigsView />)
+    await screen.findByText('web')
+    await userEvent.click(screen.getAllByRole('button', { name: 'Validate' })[0])
+    expect(await screen.findByText(/unknown key/)).toBeInTheDocument()
+  })
+
+  it('Validate surfaces the error body when preview rejects (422 non-renderable / no revision)', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([cfgRow()])
+    vi.mocked(configsApi.previewConfig).mockRejectedValue(
+      new Error('POST /configs/1/preview failed: 422: config has no active revision'),
+    )
+    render(<BootConfigsView />)
+    await screen.findByText('web')
+    await userEvent.click(screen.getAllByRole('button', { name: 'Validate' })[0])
+    expect(await screen.findByText(/no active revision/)).toBeInTheDocument()
+  })
+
+  it('Validate is disabled for taloscluster configs (not renderable)', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([cfgRow({ id: 2, name: 'prod-spec', kind: 'taloscluster' })])
+    render(<BootConfigsView />)
+    await screen.findByText('prod-spec')
+    expect(screen.getByRole('button', { name: 'Validate' })).toBeDisabled()
+  })
 })
