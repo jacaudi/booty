@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	yaml "go.yaml.in/yaml/v4"
 )
 
 // translate is a test convenience: translateDebianConfig over a YAML source.
@@ -105,11 +107,13 @@ d-i passwd/user-password-crypted password $6$h
 	}
 }
 
-// TestTranslateDebianConfigUserRequiresUsernameAndHash: coherence — a present
-// user block without username or password_hash is rejected (422 upstream).
-func TestTranslateDebianConfigUserRequiresUsernameAndHash(t *testing.T) {
+// TestTranslateDebianConfigUserRejectsUnreachableAndNoUsername: under D1 a user
+// with neither password_hash NOR ssh_authorized_keys is unreachable (422), and a
+// user with no username is still rejected. (Was UserRequiresUsernameAndHash —
+// renamed because password_hash alone is no longer required, F2.)
+func TestTranslateDebianConfigUserRejectsUnreachableAndNoUsername(t *testing.T) {
 	if _, err := translateDebianConfig([]byte("accounts:\n  user:\n    username: ops\n")); err == nil {
-		t.Error("user without password_hash must be rejected")
+		t.Error("user with no password_hash and no ssh keys must be rejected")
 	}
 	if _, err := translateDebianConfig([]byte("accounts:\n  user:\n    password_hash: $6$h\n")); err == nil {
 		t.Error("user without username must be rejected")
@@ -435,6 +439,7 @@ d-i passwd/make-user boolean true
 d-i passwd/user-fullname string ops
 d-i passwd/username string ops
 d-i passwd/user-password-crypted password $6$h
+d-i pkgsel/include string openssh-server
 d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA key1" "ssh-ed25519 BBBB key2" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys
 `
 	if got != want {
@@ -540,6 +545,7 @@ d-i passwd/make-user boolean true
 d-i passwd/user-fullname string ops
 d-i passwd/username string ops
 d-i passwd/user-password-crypted password $6$h
+d-i pkgsel/include string openssh-server
 d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys ; in-target systemctl enable ssh ; in-target apt-get clean
 d-i debian-installer/allow_unauthenticated boolean true
 d-i netcfg/get_hostname string overridden
@@ -673,5 +679,214 @@ d-i debian-installer/allow_unauthenticated boolean true
 `
 	if got := translate(t, src); got != want {
 		t.Errorf("combined:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigSudoUnmarshalMatrix pins the fully-closed sudo:
+// input matrix (design D2/F3): absent/null/false -> none, true -> nopasswd,
+// nopasswd/password -> as named, everything else -> error.
+func TestTranslateDebianConfigSudoUnmarshalMatrix(t *testing.T) {
+	base := "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n"
+	cases := []struct {
+		name    string
+		line    string // appended under the user block (already indented 4 spaces) or ""
+		want    sudoMode
+		wantErr bool
+	}{
+		{"absent", "", sudoNone, false},
+		{"null", "    sudo:\n", sudoNone, false},
+		{"tilde", "    sudo: ~\n", sudoNone, false},
+		{"false", "    sudo: false\n", sudoNone, false},
+		{"true", "    sudo: true\n", sudoNopasswd, false},
+		{"nopasswd", "    sudo: nopasswd\n", sudoNopasswd, false},
+		{"password", "    sudo: password\n", sudoPassword, false},
+		{"empty-string", "    sudo: \"\"\n", sudoNone, true},
+		{"number", "    sudo: 3\n", sudoNone, true},
+		{"sequence", "    sudo: [a, b]\n", sudoNone, true},
+		{"mapping", "    sudo: {a: b}\n", sudoNone, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var spec debianConfigSpec
+			err := yaml.Unmarshal([]byte(base+c.line), &spec)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("sudo=%q: want unmarshal error, got none", c.line)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("sudo=%q: unexpected error: %v", c.line, err)
+			}
+			if got := spec.Accounts.User.Sudo; got != c.want {
+				t.Errorf("sudo=%q: got mode %d, want %d", c.line, got, c.want)
+			}
+		})
+	}
+}
+
+// TestTranslateDebianConfigLateCommandListEqualsBlock: a late_command YAML list
+// normalizes to the SAME ';'-joined line as the equivalent block scalar (D3),
+// and both match the pre-existing block-only output (back-compat).
+func TestTranslateDebianConfigLateCommandListEqualsBlock(t *testing.T) {
+	block := translate(t, "late_command: |\n  in-target systemctl enable ssh\n  in-target apt-get clean\n")
+	list := translate(t, "late_command:\n  - in-target systemctl enable ssh\n  - in-target apt-get clean\n")
+	want := "d-i preseed/late_command string in-target systemctl enable ssh ; in-target apt-get clean\n"
+	if block != want {
+		t.Errorf("block form:\ngot:\n%s\nwant:\n%s", block, want)
+	}
+	if list != want {
+		t.Errorf("list form:\ngot:\n%s\nwant:\n%s", list, want)
+	}
+}
+
+// TestTranslateDebianConfigPasswordOmittedLocksAndRequiresKey: an omitted
+// password_hash WITH ssh keys is a valid key-only account -> the crypt field is
+// the locked sentinel '*' (deterministic, design D1). Contains (not full-equals)
+// because Task 5 (D4) later adds an openssh-server package line.
+func TestTranslateDebianConfigPasswordOmittedLocksAndRequiresKey(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\n")
+	if !strings.Contains(got, "d-i passwd/user-password-crypted password *\n") {
+		t.Errorf("locked password sentinel not emitted:\n%s", got)
+	}
+}
+
+// TestTranslateDebianConfigUserRequiresPasswordOrKey: omitting password_hash
+// WITHOUT ssh keys leaves the account unreachable -> 422 with the reworded
+// message naming the actual rule (F2).
+func TestTranslateDebianConfigUserRequiresPasswordOrKey(t *testing.T) {
+	_, err := translateDebianConfig([]byte("accounts:\n  user:\n    username: svc\n"))
+	if err == nil {
+		t.Fatal("password-less, key-less user must be rejected")
+	}
+	if !strings.Contains(err.Error(), "password_hash or ssh_authorized_keys") {
+		t.Errorf("message %q should name 'password_hash or ssh_authorized_keys'", err.Error())
+	}
+}
+
+// TestTranslateDebianConfigSudoPassword: sudo: password adds the sudo package and
+// a single usermod (group membership; interactive password sudo) — no drop-in.
+func TestTranslateDebianConfigSudoPassword(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n    sudo: password\n")
+	want := `d-i passwd/root-login boolean false
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string svc
+d-i passwd/username string svc
+d-i passwd/user-password-crypted password $6$h
+d-i pkgsel/include string sudo
+d-i preseed/late_command string in-target usermod -aG sudo svc
+`
+	if got != want {
+		t.Errorf("sudo:password:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigSudoNopasswd: sudo: nopasswd adds the sudo package,
+// the usermod, a 440 /etc/sudoers.d/<user> NOPASSWD drop-in written via POSIX
+// printf (no bashism), and a separate chmod 440.
+func TestTranslateDebianConfigSudoNopasswd(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n    sudo: nopasswd\n")
+	want := `d-i passwd/root-login boolean false
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string svc
+d-i passwd/username string svc
+d-i passwd/user-password-crypted password $6$h
+d-i pkgsel/include string sudo
+d-i preseed/late_command string in-target usermod -aG sudo svc ; in-target sh -c 'printf "%s\n" "svc ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/svc' ; in-target chmod 440 /etc/sudoers.d/svc
+`
+	if got != want {
+		t.Errorf("sudo:nopasswd:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigSudoPasswordRequiresHash: sudo: password on a locked
+// (password-omitted) account can never authenticate sudo -> 422 (D2 coherence).
+func TestTranslateDebianConfigSudoPasswordRequiresHash(t *testing.T) {
+	_, err := translateDebianConfig([]byte("accounts:\n  user:\n    username: svc\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\n    sudo: password\n"))
+	if err == nil {
+		t.Fatal("sudo:password without password_hash must be rejected")
+	}
+	if !strings.Contains(err.Error(), "sudo: password requires") {
+		t.Errorf("message %q should explain sudo:password needs a password_hash", err.Error())
+	}
+}
+
+// TestTranslateDebianConfigServiceAccount is the flagship: a key-only sudo
+// service account (no password_hash, ssh key, sudo: nopasswd) — locked '*',
+// openssh-server + sudo auto-added (F1 order), and the composed late_command in
+// D5 order (ssh-keys -> sudo-setup; no disk/operator commands here).
+func TestTranslateDebianConfigServiceAccount(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\n    sudo: nopasswd\n")
+	want := `d-i passwd/root-login boolean false
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string svc
+d-i passwd/username string svc
+d-i passwd/user-password-crypted password *
+d-i pkgsel/include string openssh-server sudo
+d-i preseed/late_command string in-target mkdir -p /home/svc/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/svc/.ssh/authorized_keys' ; in-target chown -R svc:svc /home/svc/.ssh ; in-target chmod 700 /home/svc/.ssh ; in-target chmod 600 /home/svc/.ssh/authorized_keys ; in-target usermod -aG sudo svc ; in-target sh -c 'printf "%s\n" "svc ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/svc' ; in-target chmod 440 /etc/sudoers.d/svc
+`
+	if got != want {
+		t.Errorf("service account:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigOpenSSHAutoAdded: a user with ssh keys but no
+// packages gets a brand-new pkgsel/include line with just openssh-server (D4).
+func TestTranslateDebianConfigOpenSSHAutoAdded(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\n")
+	if !strings.Contains(got, "d-i pkgsel/include string openssh-server\n") {
+		t.Errorf("openssh-server not auto-added:\n%s", got)
+	}
+}
+
+// TestTranslateDebianConfigOpenSSHDedup: when the operator already lists
+// openssh-server, D4 does not duplicate it; operator order is preserved.
+func TestTranslateDebianConfigOpenSSHDedup(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\npackages: [openssh-server, qemu-guest-agent]\n")
+	if !strings.Contains(got, "d-i pkgsel/include string openssh-server qemu-guest-agent\n") {
+		t.Errorf("openssh-server should appear once, operator order preserved:\n%s", got)
+	}
+}
+
+// TestTranslateDebianConfigD5FourSourceOrder pins the full D5 late_command
+// composition order (buildPreseedView: ssh -> sudo -> ESP-sync -> operator)
+// with all four sources present at once. No existing golden exercises
+// ssh-keys + sudo + ESP-sync (UEFI mirror) + an operator late_command
+// together, so the sudo-before-ESP-sync segment previously rested on
+// code-reading alone. Asserted via marker indices into the single
+// late_command line (not a byte-equal golden), since the ESP-sync fragment is
+// long and device-derived.
+func TestTranslateDebianConfigD5FourSourceOrder(t *testing.T) {
+	src := `accounts:
+  user:
+    username: svc
+    ssh_authorized_keys: [ssh-ed25519 AAAA k1]
+    sudo: nopasswd
+disk:
+  devices: [/dev/sda, /dev/sdb]
+  raid: mirror
+late_command: |
+  in-target systemctl enable ssh
+`
+	got := translate(t, src)
+	var lateLine string
+	for line := range strings.SplitSeq(got, "\n") {
+		if strings.HasPrefix(line, "d-i preseed/late_command string ") {
+			lateLine = line
+			break
+		}
+	}
+	if lateLine == "" {
+		t.Fatalf("no late_command line found:\n%s", got)
+	}
+	sshIdx := strings.Index(lateLine, "mkdir -p /home/svc/.ssh")
+	sudoIdx := strings.Index(lateLine, "usermod -aG sudo svc")
+	espIdx := strings.Index(lateLine, "mkfs.vfat")
+	opIdx := strings.Index(lateLine, "systemctl enable ssh")
+	if sshIdx < 0 || sudoIdx < 0 || espIdx < 0 || opIdx < 0 {
+		t.Fatalf("missing marker(s): ssh=%d sudo=%d esp=%d op=%d\nline: %s", sshIdx, sudoIdx, espIdx, opIdx, lateLine)
+	}
+	if !(sshIdx < sudoIdx && sudoIdx < espIdx && espIdx < opIdx) {
+		t.Errorf("D5 four-source order violated: ssh=%d sudo=%d esp=%d op=%d\nline: %s", sshIdx, sudoIdx, espIdx, opIdx, lateLine)
 	}
 }

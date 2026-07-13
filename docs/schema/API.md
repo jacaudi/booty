@@ -220,7 +220,15 @@ create/update validate by a stub-var render (coherence violations 422),
 preview works, and a bound host serves the translated preseed at `/preseed`.
 It coexists with raw `preseed` — the family guard (`familyAllowsKind`) makes
 the preseed family the only 1:many family: `{preseed, debianconfig}`. The
-`--preseedFile` server default remains raw preseed. See
+`--preseedFile` server default remains raw preseed. `accounts.user.password_hash`
+is optional (a key-only account emits a locked `*` and requires an
+`ssh_authorized_keys` entry); `accounts.user.sudo` is a tri-state
+(`nopasswd`|`password`|`false`, `true` as a `nopasswd` alias); `late_command`
+accepts a block scalar or a YAML list; `openssh-server`/`sudo` are auto-added
+to `packages` (deduped) when keys/sudo are present. Coherence violations — no
+password and no key, `sudo: password` without a `password_hash`, or an invalid
+`sudo:` value — return **422** via `validateConfigSource`'s default arm (the
+renderable-kinds render-and-report path); no new route or response shape. See
 `CONFIGURATION.md` § "Debian structured authoring" for the full schema.
 
 ### Roles (P4)

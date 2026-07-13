@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -28,8 +29,8 @@ type debianConfigSpec struct {
 	Packages []string        `yaml:"packages"`
 	Disk     *debianDisk     `yaml:"disk"`
 
-	LateCommand string `yaml:"late_command"` // raw d-i late_command, verbatim intent
-	RawPreseed  string `yaml:"raw_preseed"`  // verbatim preseed lines, appended LAST
+	LateCommand stringOrList `yaml:"late_command"` // block scalar OR a YAML list (D3)
+	RawPreseed  string       `yaml:"raw_preseed"`  // verbatim preseed lines, appended LAST
 }
 
 // debianMirror is override-only apt mirror selection; the suite/codename comes
@@ -66,6 +67,54 @@ type debianUser struct {
 	Username          string   `yaml:"username"`
 	PasswordHash      string   `yaml:"password_hash"`
 	SSHAuthorizedKeys []string `yaml:"ssh_authorized_keys"` // lowered to late_command (M3)
+	Sudo              sudoMode `yaml:"sudo"`                // none | password | nopasswd (D2)
+}
+
+// sudoMode is the per-user sudo authorization level (design D2). The zero value
+// sudoNone means "no sudo" so an ABSENT sudo: field (UnmarshalYAML never called)
+// is correctly none. nopasswd -> passwordless sudo via a NOPASSWD drop-in;
+// password -> sudo group only (interactive, prompts for the user's password).
+type sudoMode int
+
+const (
+	sudoNone sudoMode = iota
+	sudoPassword
+	sudoNopasswd
+)
+
+// UnmarshalYAML closes the sudo: input matrix (F3): a YAML string
+// (nopasswd|password) or bool (false->none, true->nopasswd, a friendly alias),
+// plus null/absent -> none; everything else (empty string, number, sequence,
+// mapping) is a validation error surfaced as 422 upstream.
+func (m *sudoMode) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Tag {
+	case "!!null":
+		*m = sudoNone
+		return nil
+	case "!!bool":
+		var b bool
+		if err := node.Decode(&b); err != nil {
+			return err
+		}
+		if b {
+			*m = sudoNopasswd
+		} else {
+			*m = sudoNone
+		}
+		return nil
+	case "!!str":
+		switch node.Value {
+		case "nopasswd":
+			*m = sudoNopasswd
+		case "password":
+			*m = sudoPassword
+		default:
+			return fmt.Errorf("http: debianconfig: invalid accounts.user.sudo %q (want nopasswd|password|false|true)", node.Value)
+		}
+		return nil
+	default:
+		return errors.New("http: debianconfig: accounts.user.sudo must be a string (nopasswd|password) or a bool")
+	}
 }
 
 // debianDisk is the curated disk model (design §6): native partman primitives
@@ -252,7 +301,7 @@ var usernameRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]*$`)
 // this just names the reason).
 func validateUsername(u string) error {
 	if u == "" {
-		return errors.New("http: debianconfig: accounts.user requires username and password_hash")
+		return errors.New("http: debianconfig: accounts.user requires a username")
 	}
 	if len(u) > 32 || !usernameRE.MatchString(u) {
 		return fmt.Errorf("http: debianconfig: invalid accounts.user.username %q (must match %s, max 32 chars)", u, usernameRE.String())
@@ -276,6 +325,62 @@ func sshLateCommand(username string, keys []string) string {
 		"in-target chown -R " + username + ":" + username + " " + home + "/.ssh ; " +
 		"in-target chmod 700 " + home + "/.ssh ; " +
 		"in-target chmod 600 " + home + "/.ssh/authorized_keys"
+}
+
+// sudoLateCommand builds the sudo-setup late_command fragment (design D2). Both
+// modes add the user to the sudo group (path-uniform, F7). nopasswd ALSO writes
+// a 440 /etc/sudoers.d/<user> NOPASSWD drop-in via POSIX printf (NOT a bashism —
+// the '<<<' here-string fails under d-i's sh) then chmod 440. <username> is the
+// already-validateUsername-validated name (^[a-z_][a-z0-9_-]*$), so it is
+// injection-safe in the shell context AND is never a filename sudo ignores
+// (the charset excludes '.' and '~').
+func sudoLateCommand(mode sudoMode, username string) string {
+	group := "in-target usermod -aG sudo " + username
+	if mode != sudoNopasswd {
+		return group
+	}
+	drop := "/etc/sudoers.d/" + username
+	return group + " ; " +
+		`in-target sh -c 'printf "%s\n" "` + username + ` ALL=(ALL) NOPASSWD:ALL" > ` + drop + `' ; ` +
+		"in-target chmod 440 " + drop
+}
+
+// appendIfAbsent appends name to pkgs only when want is true and name is not
+// already present (D4/D2 auto-add + dedup, F1). The operator's list order is
+// preserved; auto-adds land at the end.
+func appendIfAbsent(pkgs []string, name string, want bool) []string {
+	if !want || slices.Contains(pkgs, name) {
+		return pkgs
+	}
+	return append(pkgs, name)
+}
+
+// stringOrList lets late_command be authored as either a YAML block scalar (the
+// original form) or a YAML sequence of commands (D3). A sequence joins with
+// "\n" so it feeds flattenLateCommand identically to a multi-line block —
+// flattenLateCommand stays the single ';'-joining normalizer (DRY). null/absent
+// -> "" (back-compat: an absent late_command emits no line).
+type stringOrList string
+
+func (s *stringOrList) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var str string
+		if err := node.Decode(&str); err != nil { // null decodes to ""
+			return err
+		}
+		*s = stringOrList(str)
+		return nil
+	case yaml.SequenceNode:
+		var items []string
+		if err := node.Decode(&items); err != nil {
+			return err
+		}
+		*s = stringOrList(strings.Join(items, "\n"))
+		return nil
+	default:
+		return errors.New("http: debianconfig: late_command must be a string or a list of strings")
+	}
 }
 
 // flattenLateCommand flattens a (possibly multiline) operator late_command to
@@ -341,9 +446,9 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		Hostname: spec.Hostname,
 		Domain:   spec.Domain,
 		Timezone: spec.Timezone,
-		Packages: strings.Join(spec.Packages, " "),
 	}
-	var sshCmd string
+	var sshCmd, sudoCmd string
+	var needOpenSSH, needSudo bool
 	if n := spec.Network; n != nil {
 		v.Iface = n.Interface
 		if s := n.Static; s != nil {
@@ -363,23 +468,34 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		v.HasAccounts = true
 		v.RootHash = a.RootPasswordHash
 		if u := a.User; u != nil {
-			if u.PasswordHash == "" {
-				return preseedView{}, errors.New("http: debianconfig: accounts.user requires username and password_hash")
-			}
+			// F5 validation order: (1) username, (2) reachability (D1),
+			// (3) sudo coherence.
 			if err := validateUsername(u.Username); err != nil {
 				return preseedView{}, err
 			}
+			hasKeys := len(u.SSHAuthorizedKeys) > 0
+			if u.PasswordHash == "" && !hasKeys {
+				return preseedView{}, errors.New("http: debianconfig: accounts.user requires password_hash or ssh_authorized_keys")
+			}
+			if u.Sudo == sudoPassword && u.PasswordHash == "" {
+				return preseedView{}, errors.New("http: debianconfig: sudo: password requires accounts.user.password_hash")
+			}
 			v.HasUser = true
 			v.Username = u.Username
-			v.UserHash = u.PasswordHash
+			v.UserHash = cmp.Or(u.PasswordHash, "*") // D1: omitted -> locked sentinel
 			v.UserFullname = cmp.Or(u.Fullname, u.Username)
-			if len(u.SSHAuthorizedKeys) > 0 {
+			if hasKeys {
 				for _, k := range u.SSHAuthorizedKeys {
 					if err := validateSSHAuthorizedKey(k); err != nil {
 						return preseedView{}, err
 					}
 				}
 				sshCmd = sshLateCommand(u.Username, u.SSHAuthorizedKeys)
+				needOpenSSH = true
+			}
+			if u.Sudo != sudoNone {
+				sudoCmd = sudoLateCommand(u.Sudo, u.Username)
+				needSudo = true
 			}
 		}
 	}
@@ -397,16 +513,23 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 	if sshCmd != "" {
 		lateParts = append(lateParts, sshCmd)
 	}
+	if sudoCmd != "" {
+		lateParts = append(lateParts, sudoCmd)
+	}
 	if v.Disk != nil && v.Disk.ESPSyncCmd != "" {
 		lateParts = append(lateParts, v.Disk.ESPSyncCmd)
 	}
-	if op := flattenLateCommand(spec.LateCommand); op != "" {
+	if op := flattenLateCommand(string(spec.LateCommand)); op != "" {
 		lateParts = append(lateParts, op)
 	}
 	v.LateCommand = strings.Join(lateParts, " ; ")
 	// raw_preseed is appended LAST (design §4): later duplicate debconf answers
 	// win, so the hatch can always override a curated line.
 	v.RawPreseed = strings.TrimRight(spec.RawPreseed, "\n")
+	pkgs := slices.Clone(spec.Packages)
+	pkgs = appendIfAbsent(pkgs, "openssh-server", needOpenSSH) // F1: openssh-server first
+	pkgs = appendIfAbsent(pkgs, "sudo", needSudo)              // then sudo
+	v.Packages = strings.Join(pkgs, " ")
 	return v, nil
 }
 
