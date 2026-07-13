@@ -46,7 +46,7 @@ export function importCluster(input: { name: string; controlplane: string; contr
 
 export function updateCluster(
   id: number,
-  input: { endpoint: string; talosVersion: string; k8sVersion: string; specConfigId?: number },
+  input: { endpoint: string; talosVersion: string; k8sVersion: string },
 ): Promise<Cluster | undefined> {
   return request<Cluster>(`/clusters/${id}`, {
     method: 'PUT',

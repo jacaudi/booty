@@ -125,6 +125,21 @@ export default function CacheView() {
   )
   const selected = useMemo(() => entries.find((e) => e.id === selectedId) ?? null, [entries, selectedId])
 
+  // A filter change can make previously-selected rows disappear from view. Keep
+  // selection state honest with what's actually visible instead of letting a
+  // stale id silently outlive its row: the bulk buttons must not stay enabled
+  // (and "Pin all" must not act) on entries the user can no longer see, and the
+  // detail pane's selectedId must not linger once its row is gone (final-review
+  // Minor 2 / Minor 3).
+  useEffect(() => {
+    const visibleIds = new Set(visible.map((e) => e.id))
+    setSelectedRows((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+    setSelectedId((prev) => (prev !== null && !visibleIds.has(prev) ? null : prev))
+  }, [visible])
+
   // Collapse must be CONTROLLED here: `defaultActiveKey` is only read on the
   // component's initial mount, but groups don't exist yet on that first render
   // (listCache() resolves asynchronously) — so an uncontrolled Collapse's panels

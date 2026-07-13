@@ -139,6 +139,58 @@ describe('CacheView', () => {
     await waitFor(() => expect(api.listCache).toHaveBeenCalledWith({ state: 'in-cycle' }))
   })
 
+  it('the Pinned segmented filter re-queries the server with pinned=true', async () => {
+    vi.mocked(api.listCache).mockResolvedValue([entry({ id: 1, version: 'v1.9.0', pinned: true })])
+    render(<CacheView />)
+    await waitFor(() => screen.getByText('v1.9.0'))
+    await userEvent.click(segmented('Pinned'))
+    await waitFor(() => expect(api.listCache).toHaveBeenCalledWith({ pinned: true }))
+  })
+
+  it('clears stale row/detail selections when an OS filter change hides the selected entries', async () => {
+    // Regression: switching filters must not leave selectedRows/selectedId
+    // pointing at entries the user can no longer see — otherwise the bulk
+    // buttons stay enabled and act on invisible rows, and the detail pane
+    // silently shows "No selection" while selectedId is still set underneath
+    // (final-review Minor 2 / Minor 3).
+    vi.mocked(api.listCache).mockImplementation(async (f) =>
+      f?.os === 'flatcar'
+        ? [entry({ id: 3, os: 'flatcar', version: 'v1.0.0' })]
+        : [
+            entry({ id: 1, os: 'talos', version: 'v1.9.0' }),
+            entry({ id: 2, os: 'talos', version: 'v1.8.0', inWindow: false, state: 'archived' }),
+            entry({ id: 3, os: 'flatcar', version: 'v1.0.0' }),
+          ],
+    )
+    render(<CacheView />)
+    await waitFor(() => screen.getByText('v1.9.0'))
+
+    // Capture the row references BEFORE selecting one — once the detail pane
+    // shows a version, its Card title duplicates the row's text, making a plain
+    // getByText ambiguous.
+    const row1 = screen.getByText('v1.9.0').closest('tr')!
+    const row2 = screen.getByText('v1.8.0').closest('tr')!
+
+    await userEvent.click(within(row1).getByText('v1.9.0'))
+    expect(within(screen.getByTestId('cache-detail')).getByText('v1.9.0')).toBeInTheDocument()
+
+    await userEvent.click(within(row1).getByRole('checkbox'))
+    await userEvent.click(within(row2).getByRole('checkbox'))
+    expect(screen.getByRole('button', { name: 'Pin all' })).toBeEnabled()
+
+    // Switch the OS filter to flatcar — the talos rows (and the selection state
+    // they carried) vanish from view.
+    await userEvent.click(screen.getByRole('combobox'))
+    await waitFor(() => expect(document.querySelector('.ant-select-item-option-content')).toBeInTheDocument())
+    await userEvent.click(await screen.findByText('flatcar', { selector: '.ant-select-item-option-content' }))
+
+    await waitFor(() => expect(screen.queryByText('v1.9.0')).not.toBeInTheDocument())
+    // Bulk buttons must not stay enabled on rows the user can no longer see.
+    expect(screen.getByRole('button', { name: 'Pin all' })).toBeDisabled()
+    // The detail pane must not keep pointing at a now-hidden row.
+    expect(screen.getByTestId('cache-detail')).toHaveTextContent('No selection')
+  })
+
   it('the summary strip stays whole-cache while a server filter is active', async () => {
     // Unfiltered snapshot drives the strip; the filtered list drives the table.
     vi.mocked(api.listCache).mockImplementation(async (f) =>

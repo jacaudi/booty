@@ -33,13 +33,22 @@ export default function SchematicBuilder({
   const [hw, setHw] = useState(initial.hw ?? 'metal')
   const [arch, setArch] = useState(initial.arch ?? 'amd64')
   const [version, setVersion] = useState(initial.version ?? '')
-  const [extensions, setExtensions] = useState<string[]>(initial.ext)
+  // In edit mode the extensions MUST come from the stored config, never from the
+  // URL — a leftover ?ext= from a previous builder session must not leak into an
+  // existing record's saved body (final-review Critical finding).
+  const [extensions, setExtensions] = useState<string[]>(config ? [] : initial.ext)
   const [overlayName, setOverlayName] = useState('')
   const [overlayImage, setOverlayImage] = useState('')
   const [rawSource, setRawSource] = useState<string | null>(null) // non-null = outside the generated subset
   const [savedId, setSavedId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [overlayError, setOverlayError] = useState<string | null>(null)
+  // Edit mode starts NOT loaded (new-schematic mode has nothing to load, so it
+  // starts loaded). Save must stay disabled until the detail fetch settles, and
+  // must STAY disabled if it fails — otherwise Save can write an empty/partial
+  // body over a real config while looking successful (final-review Critical).
+  const [detailLoaded, setDetailLoaded] = useState(config === null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   // Adopted after a successful create so a SECOND Generate updates the same
   // record instead of creating a duplicate schematic (SGE review Important 1).
   const [activeConfig, setActiveConfig] = useState<Config | null>(config)
@@ -62,8 +71,15 @@ export default function SchematicBuilder({
         } else {
           setRawSource(detail.source)
         }
+        setDetailLoaded(true)
       })
-      .catch((e) => message.error(e instanceof Error ? e.message : 'failed to load schematic'))
+      .catch((e) => {
+        if (cancelled) return
+        const msg = e instanceof Error ? e.message : 'failed to load schematic'
+        message.error(msg)
+        setLoadError(msg)
+        setDetailLoaded(true)
+      })
     return () => {
       cancelled = true
     }
@@ -248,6 +264,14 @@ export default function SchematicBuilder({
         />
       )}
 
+      {loadError && (
+        <Alert
+          type="error"
+          showIcon
+          message={`Failed to load this schematic's stored source (${loadError}); Save is disabled to avoid overwriting it.`}
+        />
+      )}
+
       <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <Tabs
@@ -273,7 +297,7 @@ export default function SchematicBuilder({
       </div>
 
       <Space>
-        <Button type="primary" loading={saving} disabled={rawSource !== null} onClick={save}>
+        <Button type="primary" loading={saving} disabled={rawSource !== null || !detailLoaded || !!loadError} onClick={save}>
           {activeConfig ? 'Save' : 'Generate'}
         </Button>
         <Button onClick={onBack}>Cancel</Button>

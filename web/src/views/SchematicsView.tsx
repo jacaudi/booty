@@ -10,7 +10,7 @@ import type { Host } from '../api/types'
 import SchematicBuilder from './SchematicBuilder'
 
 function shortId(id?: string): string {
-  return id && id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : (id ?? '—')
+  return id && id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : (id ?? 'Not built')
 }
 
 type Mode = { screen: 'list' } | { screen: 'builder'; config: Config | null }

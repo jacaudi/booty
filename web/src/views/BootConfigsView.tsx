@@ -369,7 +369,7 @@ function RolesTab() {
         <Select
           style={{ minWidth: 180 }}
           aria-label={`default config for ${r.name}`}
-          placeholder="—"
+          placeholder="None"
           value={r.defaultConfigId ?? null}
           options={configOptions}
           onChange={(value) => act(() => updateRole(r.id, { name: r.name, defaultConfigId: value }), `Updated ${r.name}`)}

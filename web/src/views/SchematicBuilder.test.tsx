@@ -196,6 +196,61 @@ describe('SchematicBuilder', () => {
     expect(configs.createConfig).not.toHaveBeenCalled()
   })
 
+  it('disables Save while the edit-mode detail fetch is still pending', async () => {
+    const cfg = {
+      id: 5, name: 'iscsi', kind: 'schematic' as const, activeRevision: 1, revisionCount: 1,
+      derivedSchematicId: 'abc', updatedAt: '',
+    }
+    vi.mocked(configs.getConfig).mockReturnValue(new Promise(() => {})) // never settles
+    renderBuilder({ config: cfg })
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(configs.updateConfig).not.toHaveBeenCalled()
+  })
+
+  it('disables Save and never calls updateConfig when the edit-mode detail fetch rejects', async () => {
+    // Without this gate, a failed load left extensions/overlay at their initial
+    // (empty) state while Save stayed enabled — clicking it would silently
+    // overwrite the real config with a vanilla body (final-review Critical).
+    const cfg = {
+      id: 5, name: 'iscsi', kind: 'schematic' as const, activeRevision: 1, revisionCount: 1,
+      derivedSchematicId: 'abc', updatedAt: '',
+    }
+    vi.mocked(configs.getConfig).mockRejectedValue(new Error('network blip'))
+    renderBuilder({ config: cfg })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled())
+    expect(configs.updateConfig).not.toHaveBeenCalled()
+  })
+
+  it('edit mode ignores a stale ?ext= URL param: the loaded config wins and the URL value never reaches the saved body', async () => {
+    const cfg = {
+      id: 5, name: 'iscsi', kind: 'schematic' as const, activeRevision: 1, revisionCount: 1,
+      derivedSchematicId: 'abc', updatedAt: '',
+    }
+    vi.mocked(configs.getConfig).mockResolvedValue({
+      ...cfg,
+      source: 'customization:\n  systemExtensions:\n    officialExtensions:\n      - siderolabs/iscsi-tools\n',
+    })
+    vi.mocked(configs.updateConfig).mockResolvedValue({ ...cfg, derivedSchematicId: 'updated123' })
+    renderBuilder({ config: cfg }, ['/?ext=siderolabs%2Ftailscale'])
+
+    // Synchronously, before the getConfig() microtask has resolved: old code
+    // seeded `extensions` from the URL unconditionally on mount, so the stale
+    // tailscale tag would already be painted on the very first render, before
+    // the real config data ever arrives. This is the window where a fast Save
+    // click could leak the URL's extensions into the saved body.
+    expect(screen.queryByText(/siderolabs\/tailscale — /)).not.toBeInTheDocument()
+
+    expect(await screen.findByText(/siderolabs\/iscsi-tools — /)).toBeInTheDocument()
+    expect(screen.queryByText(/siderolabs\/tailscale — /)).not.toBeInTheDocument()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled())
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(configs.updateConfig).toHaveBeenCalledWith(
+      5,
+      'customization:\n  systemExtensions:\n    officialExtensions:\n      - siderolabs/iscsi-tools\n',
+    ))
+  })
+
   it('edit mode falls back to read-only raw source for a legacy shape that does not round-trip', async () => {
     // The legacy nested-overlay shape (overlay UNDER customization, pre-Task-6)
     // does not round-trip through parseCustomization/buildCustomization — this
