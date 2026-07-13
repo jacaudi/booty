@@ -448,7 +448,7 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		Timezone: spec.Timezone,
 	}
 	var sshCmd, sudoCmd string
-	var needSudo bool
+	var needOpenSSH, needSudo bool
 	if n := spec.Network; n != nil {
 		v.Iface = n.Interface
 		if s := n.Static; s != nil {
@@ -491,6 +491,7 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 					}
 				}
 				sshCmd = sshLateCommand(u.Username, u.SSHAuthorizedKeys)
+				needOpenSSH = true
 			}
 			if u.Sudo != sudoNone {
 				sudoCmd = sudoLateCommand(u.Sudo, u.Username)
@@ -526,7 +527,8 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 	// win, so the hatch can always override a curated line.
 	v.RawPreseed = strings.TrimRight(spec.RawPreseed, "\n")
 	pkgs := slices.Clone(spec.Packages)
-	pkgs = appendIfAbsent(pkgs, "sudo", needSudo)
+	pkgs = appendIfAbsent(pkgs, "openssh-server", needOpenSSH) // F1: openssh-server first
+	pkgs = appendIfAbsent(pkgs, "sudo", needSudo)              // then sudo
 	v.Packages = strings.Join(pkgs, " ")
 	return v, nil
 }

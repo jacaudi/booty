@@ -439,6 +439,7 @@ d-i passwd/make-user boolean true
 d-i passwd/user-fullname string ops
 d-i passwd/username string ops
 d-i passwd/user-password-crypted password $6$h
+d-i pkgsel/include string openssh-server
 d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA key1" "ssh-ed25519 BBBB key2" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys
 `
 	if got != want {
@@ -544,6 +545,7 @@ d-i passwd/make-user boolean true
 d-i passwd/user-fullname string ops
 d-i passwd/username string ops
 d-i passwd/user-password-crypted password $6$h
+d-i pkgsel/include string openssh-server
 d-i preseed/late_command string in-target mkdir -p /home/ops/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/ops/.ssh/authorized_keys' ; in-target chown -R ops:ops /home/ops/.ssh ; in-target chmod 700 /home/ops/.ssh ; in-target chmod 600 /home/ops/.ssh/authorized_keys ; in-target systemctl enable ssh ; in-target apt-get clean
 d-i debian-installer/allow_unauthenticated boolean true
 d-i netcfg/get_hostname string overridden
@@ -805,5 +807,42 @@ func TestTranslateDebianConfigSudoPasswordRequiresHash(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sudo: password requires") {
 		t.Errorf("message %q should explain sudo:password needs a password_hash", err.Error())
+	}
+}
+
+// TestTranslateDebianConfigServiceAccount is the flagship: a key-only sudo
+// service account (no password_hash, ssh key, sudo: nopasswd) — locked '*',
+// openssh-server + sudo auto-added (F1 order), and the composed late_command in
+// D5 order (ssh-keys -> sudo-setup; no disk/operator commands here).
+func TestTranslateDebianConfigServiceAccount(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\n    sudo: nopasswd\n")
+	want := `d-i passwd/root-login boolean false
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string svc
+d-i passwd/username string svc
+d-i passwd/user-password-crypted password *
+d-i pkgsel/include string openssh-server sudo
+d-i preseed/late_command string in-target mkdir -p /home/svc/.ssh ; in-target sh -c 'printf "%s\n" "ssh-ed25519 AAAA k1" >> /home/svc/.ssh/authorized_keys' ; in-target chown -R svc:svc /home/svc/.ssh ; in-target chmod 700 /home/svc/.ssh ; in-target chmod 600 /home/svc/.ssh/authorized_keys ; in-target usermod -aG sudo svc ; in-target sh -c 'printf "%s\n" "svc ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/svc' ; in-target chmod 440 /etc/sudoers.d/svc
+`
+	if got != want {
+		t.Errorf("service account:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigOpenSSHAutoAdded: a user with ssh keys but no
+// packages gets a brand-new pkgsel/include line with just openssh-server (D4).
+func TestTranslateDebianConfigOpenSSHAutoAdded(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\n")
+	if !strings.Contains(got, "d-i pkgsel/include string openssh-server\n") {
+		t.Errorf("openssh-server not auto-added:\n%s", got)
+	}
+}
+
+// TestTranslateDebianConfigOpenSSHDedup: when the operator already lists
+// openssh-server, D4 does not duplicate it; operator order is preserved.
+func TestTranslateDebianConfigOpenSSHDedup(t *testing.T) {
+	got := translate(t, "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\npackages: [openssh-server, qemu-guest-agent]\n")
+	if !strings.Contains(got, "d-i pkgsel/include string openssh-server qemu-guest-agent\n") {
+		t.Errorf("openssh-server should appear once, operator order preserved:\n%s", got)
 	}
 }
