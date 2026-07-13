@@ -35,7 +35,7 @@ func validateHostConfigRoles(store *db.Store, host *hardware.Host, configID *int
 			return huma.Error500InternalServerError("get config", err)
 		}
 		fam, ok := osFamily(host.OS)
-		if !ok || cfg.Kind != configKindForFamily(fam.ConfigKind) {
+		if !ok || !familyAllowsKind(fam.ConfigKind, cfg.Kind) {
 			return huma.Error422UnprocessableEntity("config kind does not match host OS family")
 		}
 	}

@@ -5,15 +5,24 @@ import (
 	"testing"
 )
 
-func TestConfigKindForFamily(t *testing.T) {
-	cases := map[string]string{
-		"ignition":      "butane", // the only non-identity mapping
-		"machineconfig": "machineconfig",
-		"preseed":       "preseed",
+func TestFamilyAllowsKind(t *testing.T) {
+	cases := []struct {
+		family, kind string
+		want         bool
+	}{
+		{"ignition", "butane", true}, // author butane, serve ignition
+		{"ignition", "ignition", false},
+		{"ignition", "preseed", false},
+		{"machineconfig", "machineconfig", true},
+		{"machineconfig", "butane", false},
+		{"preseed", "preseed", true},      // raw preseed still allowed
+		{"preseed", "debianconfig", true}, // the only 1:many entry
+		{"preseed", "butane", false},
+		{"machineconfig", "debianconfig", false},
 	}
-	for family, want := range cases {
-		if got := configKindForFamily(family); got != want {
-			t.Errorf("configKindForFamily(%q) = %q, want %q", family, got, want)
+	for _, c := range cases {
+		if got := familyAllowsKind(c.family, c.kind); got != c.want {
+			t.Errorf("familyAllowsKind(%q, %q) = %v, want %v", c.family, c.kind, got, c.want)
 		}
 	}
 }
@@ -89,5 +98,35 @@ func TestRenderConfigUnknownKindIsError(t *testing.T) {
 func TestRenderConfigTemplateParseErrorIsError(t *testing.T) {
 	if _, _, _, err := renderConfig("preseed", []byte("{{ .Bad "), TemplateVars{}); err == nil {
 		t.Fatal("malformed template must return an error")
+	}
+}
+
+// TestRenderConfigDebianConfigTranslates: the debianconfig arm — template
+// substitution runs FIRST (shared step), so {{ .Hostname }} lands in the spec
+// before translation, exactly as it does for butane (design §5).
+func TestRenderConfigDebianConfigTranslates(t *testing.T) {
+	src := []byte("hostname: \"{{ .Hostname }}\"\nlocale: en_US.UTF-8\n")
+	out, ct, report, err := renderConfig("debianconfig", src, TemplateVars{Hostname: "node1"})
+	if err != nil {
+		t.Fatalf("renderConfig(debianconfig): %v", err)
+	}
+	if ct != "text/plain" {
+		t.Errorf("contentType = %q, want text/plain", ct)
+	}
+	if report != "" {
+		t.Errorf("report = %q, want empty", report)
+	}
+	want := "d-i debian-installer/locale string en_US.UTF-8\nd-i netcfg/get_hostname string node1\n"
+	if string(out) != want {
+		t.Errorf("rendered:\ngot:  %q\nwant: %q", out, want)
+	}
+}
+
+// TestRenderConfigDebianConfigIncoherentIsError: coherence errors propagate
+// through the arm (validateConfigSource's default arm turns this into a 422).
+func TestRenderConfigDebianConfigIncoherentIsError(t *testing.T) {
+	src := []byte("disk:\n  devices: [/dev/sda]\n  raid: mirror\n")
+	if _, _, _, err := renderConfig("debianconfig", src, TemplateVars{}); err == nil {
+		t.Fatal("incoherent debianconfig must return an error")
 	}
 }

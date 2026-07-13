@@ -39,8 +39,8 @@ func bindSchematicKindConfig(t *testing.T, s *db.Store, mac string) {
 // Coverage note: these guards exercise resolveConfig directly plus the
 // machineconfig handler end-to-end. /ignition.json and /preseed are NOT tested
 // directly here and do not need to be — all three serving rungs share the one
-// resolveConfig gate, whose family-match check (configKindForFamily never
-// returns "schematic") is the single point that excludes schematic-kind
+// resolveConfig gate, whose family-match check (familyAllowsKind never
+// returns true for "schematic") is the single point that excludes schematic-kind
 // configs. TestResolveConfigNeverServesSchematicKind proves that gate; the
 // machineconfig test proves the fall-through wiring one handler exercises for
 // all three. A future reader: this is transitive coverage, not a hole.
@@ -91,7 +91,7 @@ func TestBindRejectsSchematicKindConfigID(t *testing.T) {
 	deps.Store.SetActiveRevision(cid, rid)
 
 	// The talos family's config kind is 'machineconfig'; 'schematic' can never
-	// match configKindForFamily, so /bind and /approve both 422.
+	// satisfy familyAllowsKind, so /bind and /approve both 422.
 	if resp := api.Post("/api/v1/hosts/"+mac+"/bind", map[string]any{"configId": cid}); resp.Code != 422 {
 		t.Fatalf("bind(schematic config) = %d, want 422: %s", resp.Code, resp.Body.String())
 	}

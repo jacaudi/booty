@@ -63,7 +63,8 @@ more (`configs`, `config_revisions`, `roles`, `host_roles`) plus a `hosts.config
 one additive migration — re-running it is a no-op. P5 (migration `0004`) extends `configs.kind` to
 admit `'schematic'` and adds `config_revisions.derived_schematic_id` — see below. P6 (migration
 `0005`) adds `clusters` and `cluster_node_configs`, three nullable `hosts` membership columns, and
-extends `configs.kind` to admit `'taloscluster'` — see below.
+extends `configs.kind` to admit `'taloscluster'` — see below. Migration `0006` extends `configs.kind`
+once more to admit `'debianconfig'` (the curated Debian preseed authoring kind) — see below.
 
 ### `targets`
 `id`, `os`, `arch`, `params` (JSON TEXT), `mode` (`discovery`|`manual`),
@@ -163,7 +164,7 @@ Boot-config identities (P4). The live source lives in the revision pointed at by
 |--------|------|---------|
 | `id` | INTEGER PK AUTOINCREMENT | Stable row ID used by the API (`/configs/{id}`). |
 | `name` | TEXT NOT NULL UNIQUE | Operator-chosen config name. |
-| `kind` | TEXT NOT NULL CHECK (`butane`\|`machineconfig`\|`preseed`\|`schematic`\|`taloscluster`) | The config source dialect the operator authors (`schematic` added in P5, `taloscluster` added in P6). See "`kind` vs family `ConfigKind`" below. |
+| `kind` | TEXT NOT NULL CHECK (`butane`\|`machineconfig`\|`preseed`\|`schematic`\|`taloscluster`\|`debianconfig`) | The config source dialect the operator authors (`schematic` added in P5, `taloscluster` added in P6, `debianconfig` added below). See "`kind` vs family `ConfigKind`" below. |
 | `active_revision_id` | INTEGER → `config_revisions(id)` | The currently-live revision. `NULL` until the first revision is added. |
 | `created_at`/`updated_at` | TEXT | Timestamps; `updated_at` bumps on every active-pointer move (create, edit, or rollback). |
 
@@ -191,6 +192,11 @@ Boot-config identities (P4). The live source lives in the revision pointed at by
 > (`pkg/db/migrate.go`) — the standing pattern the P5 note predicted. Rows and
 > IDs are copied verbatim; existing behavior for
 > `butane`/`machineconfig`/`preseed`/`schematic` configs is unchanged.
+
+- Migration **0006** rebuilds `configs` (copy → drop → rename, the 0004/0005
+  pattern, FK-off runner) to extend the `kind` CHECK with `'debianconfig'` —
+  the curated Debian authoring kind booty translates into a flat d-i preseed.
+  A `debianconfig` revision's `derived_schematic_id` is always NULL.
 
 ### `config_revisions`
 

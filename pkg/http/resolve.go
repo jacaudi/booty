@@ -14,8 +14,8 @@ import (
 // resolveConfig resolves a host's DB-bound boot config by precedence rungs 1–2
 // (design §5): explicit hosts.config_id, then the host's roles ordered by name
 // (first with a non-null default_config_id). It applies the family-match guard:
-// a resolved config's kind must equal configKindForFamily(fam.ConfigKind) for
-// the host's OS family. On no binding, a missing config/revision, a family
+// a resolved config's kind must satisfy familyAllowsKind(fam.ConfigKind, kind)
+// for the host's OS family. On no binding, a missing config/revision, a family
 // lookup miss, or a guard mismatch it returns ok=false — the caller then falls
 // through to the file path (rungs 3–4), preserving byte-identical unbound boot.
 func resolveConfig(store *db.Store, host *hardware.Host) (source []byte, kind string, ok bool) {
@@ -27,7 +27,7 @@ func resolveConfig(store *db.Store, host *hardware.Host) (source []byte, kind st
 	// Rung 1: explicit per-host override.
 	if host.ConfigID != nil {
 		if src, k, got := loadActive(store, *host.ConfigID); got {
-			if famOK && k == configKindForFamily(fam.ConfigKind) {
+			if famOK && familyAllowsKind(fam.ConfigKind, k) {
 				return src, k, true
 			}
 			// F4 / design §5: an EXPLICIT per-host binding whose kind mismatches the
@@ -62,7 +62,7 @@ func resolveConfig(store *db.Store, host *hardware.Host) (source []byte, kind st
 		if !got {
 			continue
 		}
-		if famOK && k == configKindForFamily(fam.ConfigKind) {
+		if famOK && familyAllowsKind(fam.ConfigKind, k) {
 			return src, k, true
 		}
 		if famOK {

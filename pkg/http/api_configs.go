@@ -72,7 +72,7 @@ func registerConfigs(api huma.API, deps APIDeps) {
 	}, func(ctx context.Context, in *struct {
 		Body struct {
 			Name   string `json:"name"`
-			Kind   string `json:"kind" enum:"butane,machineconfig,preseed,schematic,taloscluster"`
+			Kind   string `json:"kind" enum:"butane,machineconfig,preseed,schematic,taloscluster,debianconfig"`
 			Source string `json:"source"`
 		}
 	}) (*struct{ Body ConfigDTO }, error) {
@@ -317,10 +317,11 @@ func registerConfigs(api huma.API, deps APIDeps) {
 }
 
 // validateConfigSource is the per-kind validation gate shared by create-config
-// and update-config (SGE I3). Renderable kinds (butane/machineconfig/preseed)
-// validate by a stub-var render; 'schematic' validates by BUILDING against the
-// Image Factory — the Factory owns schematic validation (design §4) and the
-// returned content-addressed ID becomes the revision's derived_schematic_id.
+// and update-config (SGE I3). Renderable kinds (butane/machineconfig/preseed/
+// debianconfig) validate by a stub-var render; 'schematic' validates by
+// BUILDING against the Image Factory — the Factory owns schematic validation
+// (design §4) and the returned content-addressed ID becomes the revision's
+// derived_schematic_id.
 // P6's 'taloscluster' (the next non-renderable kind, validated by spec/patch
 // parse) slots in as a new case arm here — an additive change, not an edit to
 // the create/update handlers (No-Wall).
@@ -341,7 +342,7 @@ func validateConfigSource(ctx context.Context, kind, source string) (*string, er
 			return nil, huma.Error422UnprocessableEntity("taloscluster spec validation failed: "+err.Error(), err)
 		}
 		return nil, nil
-	default: // renderable kinds: butane | machineconfig | preseed
+	default: // renderable kinds: butane | machineconfig | preseed | debianconfig
 		if _, _, report, err := renderConfig(kind, []byte(source), stubVars()); err != nil {
 			return nil, huma.Error422UnprocessableEntity("config validation failed: "+report, err)
 		}
