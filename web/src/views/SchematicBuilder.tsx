@@ -61,7 +61,18 @@ export default function SchematicBuilder({
     let cancelled = false
     getConfig(config.id)
       .then((detail) => {
-        if (cancelled || !detail) return
+        if (cancelled) return
+        // request() resolves an empty response body as `undefined` — that is
+        // NOT the same as this load being superseded/cancelled. It's a real
+        // failure and must surface via the same loadError path as a rejected
+        // fetch, or Save is left silently (and permanently) disabled.
+        if (!detail) {
+          const msg = 'empty response loading schematic'
+          message.error(msg)
+          setLoadError(msg)
+          setDetailLoaded(true)
+          return
+        }
         const f = parseCustomization(detail.source)
         if (f) {
           setExtensions(f.extensions)

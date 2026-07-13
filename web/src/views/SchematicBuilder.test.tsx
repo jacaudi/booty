@@ -251,6 +251,24 @@ describe('SchematicBuilder', () => {
     ))
   })
 
+  it('surfaces a load error and keeps Save disabled when the edit-mode detail fetch resolves with an empty body', async () => {
+    // request() resolves an empty response body as `undefined` -- this must
+    // NOT be silently treated like "cancelled" (component unmounted / a newer
+    // load superseded this one). It's a real failure and must surface the
+    // same way a rejected fetch does, or Save is left dead with no
+    // explanation at all (final-review Minor finding).
+    const cfg = {
+      id: 5, name: 'iscsi', kind: 'schematic' as const, activeRevision: 1, revisionCount: 1,
+      derivedSchematicId: 'abc', updatedAt: '',
+    }
+    vi.mocked(configs.getConfig).mockResolvedValue(undefined)
+    renderBuilder({ config: cfg })
+    expect(await screen.findByText(/Failed to load this schematic's stored source/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(configs.updateConfig).not.toHaveBeenCalled()
+    expect(configs.createConfig).not.toHaveBeenCalled()
+  })
+
   it('edit mode falls back to read-only raw source for a legacy shape that does not round-trip', async () => {
     // The legacy nested-overlay shape (overlay UNDER customization, pre-Task-6)
     // does not round-trip through parseCustomization/buildCustomization — this
