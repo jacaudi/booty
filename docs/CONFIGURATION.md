@@ -245,12 +245,13 @@ network:
     nameservers: [10.0.0.1]
 accounts:                     # password HASHES only ($6$..., pre-computed crypt);
   root_password_hash: "$6$…"  # omit -> root login disabled (safe default)
-  user:                       # username + password_hash required if present
+  user:                       # username required if present
     fullname: Ops
     username: ops
-    password_hash: "$6$…"
+    password_hash: "$6$…"     # optional — see below
     ssh_authorized_keys: ["ssh-ed25519 …"]   # emitted via late_command (no
                                              # native preseed directive exists)
+    sudo: nopasswd             # optional — see below
 packages: [openssh-server, qemu-guest-agent]
 disk:
   devices: [/dev/sda, /dev/sdb]
@@ -270,6 +271,33 @@ late_command: |
   in-target systemctl enable ssh
 raw_preseed: |
   d-i debian-installer/allow_unauthenticated boolean true
+```
+
+- `accounts.user.password_hash` is **optional**. Omit it for a key-only service
+  account: booty emits a locked crypt sentinel (`*`) so password login is
+  disabled, and **requires** at least one `ssh_authorized_keys` entry (a
+  password-less, key-less account would be unreachable → rejected).
+- `accounts.user.sudo` (optional): `nopasswd` grants passwordless sudo (adds the
+  `sudo` package, the user to the `sudo` group, and a `440 /etc/sudoers.d/<user>`
+  `NOPASSWD:ALL` drop-in); `password` grants sudo that prompts for the user's
+  password (requires a `password_hash`); `false`/omitted grants no sudo. `true`
+  is a friendly alias for `nopasswd`.
+- `packages`: `openssh-server` is auto-added when any user declares
+  `ssh_authorized_keys`, and `sudo` when `sudo` is set — both deduped against
+  your list. Your own `packages` are emitted verbatim (order preserved).
+- `late_command` accepts either a block scalar or a YAML list of commands; both
+  are flattened to one `;`-joined d-i `late_command` line.
+
+Worked example — key-only service account (no password, passwordless sudo):
+
+```yaml
+accounts:
+  user:
+    username: svc
+    ssh_authorized_keys: ["ssh-ed25519 AAAA… ops@laptop"]
+    sudo: nopasswd
+late_command:
+  - in-target systemctl enable qemu-guest-agent
 ```
 
 **Disk matrix** — every curated combination is a native partman primitive
