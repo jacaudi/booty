@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	yaml "go.yaml.in/yaml/v4"
 )
 
 // translate is a test convenience: translateDebianConfig over a YAML source.
@@ -673,5 +675,47 @@ d-i debian-installer/allow_unauthenticated boolean true
 `
 	if got := translate(t, src); got != want {
 		t.Errorf("combined:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTranslateDebianConfigSudoUnmarshalMatrix pins the fully-closed sudo:
+// input matrix (design D2/F3): absent/null/false -> none, true -> nopasswd,
+// nopasswd/password -> as named, everything else -> error.
+func TestTranslateDebianConfigSudoUnmarshalMatrix(t *testing.T) {
+	base := "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n"
+	cases := []struct {
+		name    string
+		line    string // appended under the user block (already indented 4 spaces) or ""
+		want    sudoMode
+		wantErr bool
+	}{
+		{"absent", "", sudoNone, false},
+		{"null", "    sudo:\n", sudoNone, false},
+		{"tilde", "    sudo: ~\n", sudoNone, false},
+		{"false", "    sudo: false\n", sudoNone, false},
+		{"true", "    sudo: true\n", sudoNopasswd, false},
+		{"nopasswd", "    sudo: nopasswd\n", sudoNopasswd, false},
+		{"password", "    sudo: password\n", sudoPassword, false},
+		{"empty-string", "    sudo: \"\"\n", sudoNone, true},
+		{"number", "    sudo: 3\n", sudoNone, true},
+		{"sequence", "    sudo: [a, b]\n", sudoNone, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var spec debianConfigSpec
+			err := yaml.Unmarshal([]byte(base+c.line), &spec)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("sudo=%q: want unmarshal error, got none", c.line)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("sudo=%q: unexpected error: %v", c.line, err)
+			}
+			if got := spec.Accounts.User.Sudo; got != c.want {
+				t.Errorf("sudo=%q: got mode %d, want %d", c.line, got, c.want)
+			}
+		})
 	}
 }

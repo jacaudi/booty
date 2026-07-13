@@ -66,6 +66,54 @@ type debianUser struct {
 	Username          string   `yaml:"username"`
 	PasswordHash      string   `yaml:"password_hash"`
 	SSHAuthorizedKeys []string `yaml:"ssh_authorized_keys"` // lowered to late_command (M3)
+	Sudo              sudoMode `yaml:"sudo"`                // none | password | nopasswd (D2)
+}
+
+// sudoMode is the per-user sudo authorization level (design D2). The zero value
+// sudoNone means "no sudo" so an ABSENT sudo: field (UnmarshalYAML never called)
+// is correctly none. nopasswd -> passwordless sudo via a NOPASSWD drop-in;
+// password -> sudo group only (interactive, prompts for the user's password).
+type sudoMode int
+
+const (
+	sudoNone sudoMode = iota
+	sudoPassword
+	sudoNopasswd
+)
+
+// UnmarshalYAML closes the sudo: input matrix (F3): a YAML string
+// (nopasswd|password) or bool (false->none, true->nopasswd, a friendly alias),
+// plus null/absent -> none; everything else (empty string, number, sequence,
+// mapping) is a validation error surfaced as 422 upstream.
+func (m *sudoMode) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Tag {
+	case "!!null":
+		*m = sudoNone
+		return nil
+	case "!!bool":
+		var b bool
+		if err := node.Decode(&b); err != nil {
+			return err
+		}
+		if b {
+			*m = sudoNopasswd
+		} else {
+			*m = sudoNone
+		}
+		return nil
+	case "!!str":
+		switch node.Value {
+		case "nopasswd":
+			*m = sudoNopasswd
+		case "password":
+			*m = sudoPassword
+		default:
+			return fmt.Errorf("http: debianconfig: invalid accounts.user.sudo %q (want nopasswd|password|false|true)", node.Value)
+		}
+		return nil
+	default:
+		return errors.New("http: debianconfig: accounts.user.sudo must be a string (nopasswd|password) or a bool")
+	}
 }
 
 // debianDisk is the curated disk model (design §6): native partman primitives
