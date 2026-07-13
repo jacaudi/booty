@@ -3,7 +3,9 @@
 **Type:** design
 **Date:** 2026-07-13
 **Issues:** #31 (partial — frontend gaps), #32 (Schematics + Talhelper), #33 (Cache view)
-**Status:** approved (brainstorming), pending implementation plan
+**Status:** approved (brainstorming); SGE-reviewed (sr-go-engineer/Fable, verdict
+AMEND-BEFORE-PLANNING — all findings C1/C2/I1–I6/M1–M3 folded); pending user re-review, then
+implementation plan
 
 ## 1. Summary
 
@@ -54,11 +56,18 @@ delete is 403 until P10 auth).
 
 ### 4.1 Cache view (#33) — grouped master list + detail pane
 
-- **Summary strip:** disk used vs budget (`Progress`), and counts for in-cycle / archived /
-  pinned / failed (failed styled as an alert tile).
-- **Toolbar:** `Segmented` state filter (All / In cycle / Archived / Pinned / Failed) →
-  maps to the `state`/`pinned` query params; OS `Select` and version `Input.Search` →
-  `os`/`version`; **Scan now** button (`POST /cache/scan`, reports scanned/updated/orphans).
+- **Summary strip:** disk **used** (client-summed from `CacheEntryDTO.Size`) + counts for
+  in-cycle / archived / pinned / failed (failed styled as an alert tile). **No budget
+  denominator / `Progress` bar** — the byte budget is the server flag `--cacheMaxBytes`
+  (consumed at `pkg/cache/reconciler.go`) and is exposed by no endpoint (SGE C1). The
+  "nothing-evictable" state IS client-derivable (count of `archived && !pinned` == 0) and is
+  kept as a plain indicator; the over-budget comparison is deferred (see §7 #33).
+- **Toolbar:** `Segmented` state filter (All / In cycle / Archived / Pinned / Failed). Only
+  **In cycle / Archived** map to the `state` query param and **Pinned** to `pinned`
+  (`api_cache.go` accepts exactly `os/arch/state/pinned`); **All** and **Failed** are
+  **client-side** filters (Failed = `verified === false`) — there is no `version` or "failed"
+  query param (SGE I1). OS `Select` → `os`; version `Input.Search` filters **client-side**.
+  **Scan now** button (`POST /cache/scan`, reports scanned/updated/orphans).
 - **Master list (left):** collapsible section per target (`<os>/<channel>`), each with a
   rollup (version count + total size). Version rows show state `Tag`(s), a verify status icon,
   size (human-readable), and a selection checkbox. Selecting a row drives the detail pane.
@@ -76,21 +85,40 @@ delete is 403 until P10 auth).
 
 ### 4.2 Schematics (#32) — full-page builder
 
-- **List screen:** table (Name, Hardware, Talos, Arch, Ext count, Derived ID + copy) with
-  **New schematic** and **Import by ID**. Names/rows navigate into the builder.
+- **List screen:** table with **Name**, **Ext count** (derived from the stored customization
+  YAML), and **Derived ID + copy** — plus **New schematic** and **Import by ID**. **No
+  Hardware / Talos / Arch columns:** `ConfigDTO` doesn't carry them and the stored source is
+  the customization YAML only (extensions/overlay/secureboot), not the image-*path* params,
+  which live solely in the ephemeral builder URL (SGE C2). Persisting them would be a
+  backend/schema change (out of scope). Names/rows navigate into the builder.
 - **Builder screen (full width):** breadcrumb `‹ Schematics / <name>` (Back returns to the
   list), inner tabs **Builder / Raw YAML**. Builder form in factory-wizard order: Name →
   Hardware type (`Segmented` metal/cloud/sbc) → Talos version + Architecture (`Select`) →
-  System extensions (tag multi-select) → Extra kernel args (tag mode) → Advanced (overlay,
-  secureboot, collapsed). A **live YAML** pane renders the customization the client builds.
+  System extensions (tag multi-select) → Advanced (overlay, secureboot, collapsed). A
+  **live YAML** pane renders the customization the client builds via `buildCustomization`.
+  - **Extra kernel args are NOT exposed** (SGE I4): P5 design decision D5 (documented in
+    `web/src/api/schematicYaml.ts`) deliberately omits `extraKernelArgs`/`meta` because they
+    are Factory-ignored on booty's boot/install paths. The builder and deep-link honor D5 —
+    no `kargs` field, no `?kargs` param. (Revisit only if D5 is explicitly reversed.)
+  - **Overlay placement caveat (verify in planning, SGE I5):** the Factory `Schematic`
+    struct carries `overlay` at the top level (sibling of `customization`), but
+    `buildCustomization` currently nests it under `customization:`. Before building the
+    Advanced overlay UI, confirm with one Factory POST whether a nested overlay survives into
+    the derived ID; if not, fix `buildCustomization` (single site). Secureboot is fine —
+    `customization.secureboot` is a real Factory field.
 - **Generate/Save:** the client builds the customization YAML (existing
   `web/src/api/schematicYaml.ts` `buildCustomization`), `POST`/`PUT /configs` with
   `kind:"schematic"`; the **server** posts to the Factory and returns `derivedSchematicId`,
   shown in a success `Alert` with copy.
-- **Import by ID:** modal to paste a sha256 → opens the builder pre-populated from the
-  Factory's stored body.
-- **Deep-links:** builder URL carries `?hw&arch&version&ext&kargs&secureboot` matching
-  factory.talos.dev, so a schematic is shareable/bookmarkable.
+- **Import by ID:** modal to paste a sha256 → **binds the raw ID** (`POST /hosts/{mac}/schematic`
+  with `{schematic}`) **without builder pre-population** (SGE I2). Pre-populating from the
+  Factory's stored body isn't frontend-only: booty has no schematic-fetch proxy, the browser
+  doesn't know `--talosFactoryURL` (a server flag that supports private/air-gapped Factories),
+  and even a direct fetch would usually fail the `parseCustomization` round-trip guard
+  (Factory-normalized YAML rarely byte-matches `buildCustomization`), landing in the read-only
+  branch. Builder pre-population from a stored ID is deferred (see §7 #32).
+- **Deep-links:** builder URL carries `?hw&arch&version&ext&secureboot` matching
+  factory.talos.dev (no `kargs`, per D5), so a builder state is shareable/bookmarkable.
 - **Extension catalogue:** start with a small static list of common `siderolabs/*` extensions
   with descriptions; "fetch the live catalogue from the Factory" is a documented follow-up.
 - **API:** `web/src/api/configs.ts` (schematic kind) + `schematicYaml.ts` already cover the
@@ -100,15 +128,23 @@ delete is 403 until P10 auth).
 
 - Keep `ClustersView` as the top-level page. Wire the **already-existing** server endpoints
   that the frontend client omits: `export-cluster-secrets` and `update-cluster` into
-  `web/src/api/clusters.ts` + minimal UI (Export action, Edit form).
+  `web/src/api/clusters.ts` + minimal UI (Export action, Edit form). Two PUT semantics to
+  surface in the Edit UX (SGE M3, `api_clusters.go`): a Talos-version bump **synchronously
+  pre-caches** all member targets before committing (expect a slow response / possible 422 —
+  show a spinner + surface the error), and **omitting `specConfigId` preserves** the existing
+  binding (PUT cannot clear it — don't send an empty value expecting a clear).
 - **Defer:** the richer talhelper inner-tabs editor + Validate + Generate-Steps modal +
   stale detection (no `/clusters/{id}/validate` or `/generate` route exists).
 
 ### 4.4 #31 frontend gaps (only the backend-unblocked ones)
 
-- **Boot Configs → Configs:** add a **Validate** button (surfaces the create/update
-  validation errors structurally), a **template-variables cheat sheet** side panel, and a
-  drag-and-drop **`Upload.Dragger`** that pre-fills the new-config form.
+- **Boot Configs → Configs:** add a **Validate** button, a **template-variables cheat sheet**
+  side panel, and a drag-and-drop **`Upload.Dragger`** that pre-fills the new-config form.
+  "Validate" is **not** a dedicated endpoint (none exists) — it surfaces the **422 error body**
+  from the existing create/update/preview path structurally. This requires a small
+  frontend-only change: `web/src/api/client.ts` currently throws **status-only** and discards
+  the response body — it must be changed to preserve the error body so the message is
+  displayable (SGE I6).
 - **Boot Configs → Roles:** inline-editable **Default Config** `Select` in the row (replacing
   the edit-modal round-trip).
 - **Hosts:** restructure the stacked Pending/Approved `<div>`s into AntD **`Tabs`** with a
@@ -139,14 +175,29 @@ delete is 403 until P10 auth).
 
 Posted as a comment on each issue ("Remaining backend work to complete"):
 
-- **#31:** Host DTO/DB enrichment (roles, config_id, first_seen, last_seen, observed_ip,
-  note); bulk approve/delete routes; a host-driven resolved-config endpoint; **Token UX /
-  `X-Booty-Token` — blocked on P10 auth** (no server-side token check exists).
+- **#31** (corrected per SGE I3 — verified against the code):
+  - Already present, **not** gaps: `Host.ConfigID` is serialized (`pkg/hardware/mac.go`);
+    `first_seen`/`last_seen` are DB columns (`0001_init.sql`) needing only **DTO exposure**;
+    `ip` is already on the DTO.
+  - Genuinely missing: a **`note`** field (neither DB nor DTO); **roles on the Host DTO**
+    (the `host_roles` table + `ListHostRoles` exist, but `Host` carries no roles field);
+    **DTO exposure** of `first_seen`/`last_seen`; **bulk approve/delete** routes; a
+    **host-driven resolved-config** endpoint.
+  - **Token UX / `X-Booty-Token` — blocked on P10 auth** (no server-side token check exists).
 - **#32:** `/clusters/{id}/validate` + `/generate` routes (for the talhelper Validate /
-  Generate-Steps UI and stale detection); live extension-catalogue endpoint (interim: static list).
-- **#33:** surface per-file sha256 + `verify_kind` on `CacheEntryDTO` (backend computes them
-  internally in `pkg/cache/verify.go` but doesn't expose them); real bulk cache endpoints
-  (interim: client-side fan-out); `DELETE /cache/{id}` remains 403 until P10 auth.
+  Generate-Steps UI and stale detection); a **schematic-fetch proxy** (or an endpoint exposing
+  the Factory URL) so Import-by-ID can pre-populate the builder from a stored ID; live
+  extension-catalogue endpoint (interim: static list).
+- **#33:**
+  - **Cache byte-budget** read (e.g. a small `/cache/stats` or settings endpoint) so the UI
+    can show used-vs-budget and the true over-budget state — `--cacheMaxBytes` is a server
+    flag today, exposed nowhere (SGE C1).
+  - **Per-file sha256 + a verify-kind** on the cache record: per-artifact SHA256s are computed
+    **transiently** in `pkg/cache/verify.go` and never persisted; the DB stores only
+    `verified`/`verify_err` and there is **no `verify_kind` field anywhere**. This is a
+    **persistence + schema change**, not merely a DTO addition (SGE M1).
+  - Real **bulk cache endpoints** (interim: client-side fan-out); `DELETE /cache/{id}` remains
+    403 until P10 auth.
 
 ## 8. Non-goals
 
@@ -163,3 +214,8 @@ Posted as a comment on each issue ("Remaining backend work to complete"):
 - **Add:** `web/src/api/schematicUrl.ts` (deep-link params) if not folded into `schematicYaml.ts`;
   extension-catalogue constant; matching `*.test.tsx`/`*.test.ts` siblings.
 - **Add:** `web/src/api/clusters.ts` export/update wrappers.
+- **Modify (SGE-driven):** `web/src/api/client.ts` — preserve the response **error body** on
+  non-2xx (currently throws status-only) so Validate/422 messages are displayable (I6);
+  `web/src/api/configs.ts` — sync the stale `kind` union (currently
+  `butane|machineconfig|preseed|schematic`) to the server's six kinds incl. `taloscluster`
+  and `debianconfig` (M2).
