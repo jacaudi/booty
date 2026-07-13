@@ -365,7 +365,17 @@ function RolesTab() {
     {
       title: 'Default Config',
       key: 'defaultConfigId',
-      render: (_, r) => configs.find((c) => c.id === r.defaultConfigId)?.name ?? '—',
+      render: (_, r) => (
+        <Select
+          allowClear
+          style={{ minWidth: 180 }}
+          aria-label={`default config for ${r.name}`}
+          placeholder="—"
+          value={r.defaultConfigId}
+          options={configOptions}
+          onChange={(value) => act(() => updateRole(r.id, { name: r.name, defaultConfigId: value }), `Updated ${r.name}`)}
+        />
+      ),
     },
     { title: 'Host Count', dataIndex: 'hostCount', key: 'hostCount' },
     {

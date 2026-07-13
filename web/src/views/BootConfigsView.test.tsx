@@ -144,4 +144,33 @@ describe('BootConfigsView', () => {
     await screen.findByText('prod-spec')
     expect(screen.getByRole('button', { name: 'Validate' })).toBeDisabled()
   })
+
+  it('changing a role default config inline calls updateRole', async () => {
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([{ id: 1, name: 'cp', defaultConfigId: undefined, hostCount: 0 }])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 7, name: 'web', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    ])
+    vi.mocked(rolesApi.updateRole).mockResolvedValue(undefined)
+    render(<BootConfigsView />)
+    // switch to Roles tab
+    await userEvent.click(screen.getByRole('tab', { name: 'Roles' }))
+    await screen.findByText('cp')
+    // Find the select wrapper by aria-label
+    const selectWrapper = document.querySelector('[aria-label="default config for cp"]') as HTMLElement
+    expect(selectWrapper).toBeInTheDocument()
+    // Find the clickable selector div inside
+    const selector = selectWrapper?.querySelector('.ant-select-selector') as HTMLElement
+    expect(selector).toBeInTheDocument()
+    await userEvent.click(selector)
+    // Wait for the dropdown to render
+    await waitFor(() => {
+      const option = document.querySelector('.ant-select-item-option-content')
+      expect(option).toBeInTheDocument()
+    })
+    // Find and click the "web" option in the dropdown
+    const webInDropdown = await screen.findByText('web', { selector: '.ant-select-item-option-content' })
+    await userEvent.click(webInDropdown)
+    // Verify the API was called
+    await waitFor(() => expect(rolesApi.updateRole).toHaveBeenCalledWith(1, { name: 'cp', defaultConfigId: 7 }))
+  })
 })
