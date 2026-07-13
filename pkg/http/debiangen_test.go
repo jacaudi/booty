@@ -703,6 +703,7 @@ func TestTranslateDebianConfigSudoUnmarshalMatrix(t *testing.T) {
 		{"empty-string", "    sudo: \"\"\n", sudoNone, true},
 		{"number", "    sudo: 3\n", sudoNone, true},
 		{"sequence", "    sudo: [a, b]\n", sudoNone, true},
+		{"mapping", "    sudo: {a: b}\n", sudoNone, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -844,5 +845,48 @@ func TestTranslateDebianConfigOpenSSHDedup(t *testing.T) {
 	got := translate(t, "accounts:\n  user:\n    username: svc\n    password_hash: $6$h\n    ssh_authorized_keys: [ssh-ed25519 AAAA k1]\npackages: [openssh-server, qemu-guest-agent]\n")
 	if !strings.Contains(got, "d-i pkgsel/include string openssh-server qemu-guest-agent\n") {
 		t.Errorf("openssh-server should appear once, operator order preserved:\n%s", got)
+	}
+}
+
+// TestTranslateDebianConfigD5FourSourceOrder pins the full D5 late_command
+// composition order (buildPreseedView: ssh -> sudo -> ESP-sync -> operator)
+// with all four sources present at once. No existing golden exercises
+// ssh-keys + sudo + ESP-sync (UEFI mirror) + an operator late_command
+// together, so the sudo-before-ESP-sync segment previously rested on
+// code-reading alone. Asserted via marker indices into the single
+// late_command line (not a byte-equal golden), since the ESP-sync fragment is
+// long and device-derived.
+func TestTranslateDebianConfigD5FourSourceOrder(t *testing.T) {
+	src := `accounts:
+  user:
+    username: svc
+    ssh_authorized_keys: [ssh-ed25519 AAAA k1]
+    sudo: nopasswd
+disk:
+  devices: [/dev/sda, /dev/sdb]
+  raid: mirror
+late_command: |
+  in-target systemctl enable ssh
+`
+	got := translate(t, src)
+	var lateLine string
+	for line := range strings.SplitSeq(got, "\n") {
+		if strings.HasPrefix(line, "d-i preseed/late_command string ") {
+			lateLine = line
+			break
+		}
+	}
+	if lateLine == "" {
+		t.Fatalf("no late_command line found:\n%s", got)
+	}
+	sshIdx := strings.Index(lateLine, "mkdir -p /home/svc/.ssh")
+	sudoIdx := strings.Index(lateLine, "usermod -aG sudo svc")
+	espIdx := strings.Index(lateLine, "mkfs.vfat")
+	opIdx := strings.Index(lateLine, "systemctl enable ssh")
+	if sshIdx < 0 || sudoIdx < 0 || espIdx < 0 || opIdx < 0 {
+		t.Fatalf("missing marker(s): ssh=%d sudo=%d esp=%d op=%d\nline: %s", sshIdx, sudoIdx, espIdx, opIdx, lateLine)
+	}
+	if !(sshIdx < sudoIdx && sudoIdx < espIdx && espIdx < opIdx) {
+		t.Errorf("D5 four-source order violated: ssh=%d sudo=%d esp=%d op=%d\nline: %s", sshIdx, sudoIdx, espIdx, opIdx, lateLine)
 	}
 }

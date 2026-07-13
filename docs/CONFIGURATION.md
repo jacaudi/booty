@@ -282,7 +282,7 @@ raw_preseed: |
   `NOPASSWD:ALL` drop-in); `password` grants sudo that prompts for the user's
   password (requires a `password_hash`); `false`/omitted grants no sudo. `true`
   is a friendly alias for `nopasswd`.
-- `packages`: `openssh-server` is auto-added when any user declares
+- `packages`: `openssh-server` is auto-added when the user declares
   `ssh_authorized_keys`, and `sudo` when `sudo` is set — both deduped against
   your list. Your own `packages` are emitted verbatim (order preserved).
 - `late_command` accepts either a block scalar or a YAML list of commands; both
