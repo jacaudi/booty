@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Host } from '../api/types'
 import HostsView from './HostsView'
@@ -29,6 +29,7 @@ describe('HostsView', () => {
     ])
     render(<HostsView />)
     await waitFor(() => expect(screen.getByText('pending-mac')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('tab', { name: /Approved/ }))
     expect(screen.getByText('approved-mac')).toBeInTheDocument()
     expect(screen.getByText('talos')).toBeInTheDocument()
   })
@@ -50,6 +51,7 @@ describe('HostsView', () => {
     vi.mocked(client.listHosts).mockResolvedValue([host({ mac: 'a1', approved: true })])
     vi.mocked(client.revokeHost).mockResolvedValue(undefined)
     render(<HostsView />)
+    await userEvent.click(screen.getByRole('tab', { name: /Approved/ }))
     await waitFor(() => screen.getByText('a1'))
     await userEvent.click(screen.getByRole('button', { name: 'Revoke' }))
     expect(client.revokeHost).toHaveBeenCalledWith('a1')
@@ -93,5 +95,27 @@ describe('HostsView', () => {
     await userEvent.click(screen.getByRole('button', { name: /allow/i }))
     await screen.findByLabelText(/config/i)
     expect(screen.queryByLabelText(/talos schematic/i)).not.toBeInTheDocument()
+  })
+
+  it('shows Pending and Approved tabs with a pending count badge', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([
+      { mac: 'aa:bb', hostname: 'p1', ip: '', booted: '', approved: false } as Host,
+      { mac: 'cc:dd', hostname: 'a1', ip: '', booted: '', approved: true } as Host,
+    ])
+    render(<HostsView />)
+    const pendingTab = await screen.findByRole('tab', { name: /Pending/ })
+    expect(screen.getByRole('tab', { name: /Approved/ })).toBeInTheDocument()
+    // Scope the count to the tab — a bare getByText('1') is ambiguous once other
+    // numerals render on the page.
+    expect(within(pendingTab).getByText('1')).toBeInTheDocument()
+  })
+
+  it('the Approved table is reachable via its tab', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([
+      { mac: 'cc:dd', hostname: 'a1', ip: '', booted: '', approved: true } as Host,
+    ])
+    render(<HostsView />)
+    await userEvent.click(await screen.findByRole('tab', { name: /Approved/ }))
+    expect(await screen.findByText('cc:dd')).toBeInTheDocument()
   })
 })

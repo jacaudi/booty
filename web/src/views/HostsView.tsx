@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, AutoComplete, Button, Form, Modal, Select, Space, Table, Typography, message } from 'antd'
+import { Alert, AutoComplete, Badge, Button, Form, Modal, Select, Space, Tabs, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { Host } from '../api/types'
 import { approveHostWith, bindSchematic, listHosts, revokeHost, setMenuMode } from '../api/client'
@@ -134,14 +134,20 @@ export default function HostsView() {
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Typography.Title level={3}>Hosts</Typography.Title>
       {error && <Alert type="error" message={error} showIcon />}
-      <div>
-        <Typography.Title level={5}>Pending</Typography.Title>
-        <Table rowKey="mac" loading={loading} columns={pendingCols} dataSource={pending} pagination={false} />
-      </div>
-      <div>
-        <Typography.Title level={5}>Approved</Typography.Title>
-        <Table rowKey="mac" loading={loading} columns={approvedCols} dataSource={approved} pagination={false} />
-      </div>
+      <Tabs
+        items={[
+          {
+            key: 'pending',
+            label: <Badge count={pending.length} offset={[12, -2]} size="small">Pending</Badge>,
+            children: <Table rowKey="mac" loading={loading} columns={pendingCols} dataSource={pending} pagination={false} />,
+          },
+          {
+            key: 'approved',
+            label: 'Approved',
+            children: <Table rowKey="mac" loading={loading} columns={approvedCols} dataSource={approved} pagination={false} />,
+          },
+        ]}
+      />
 
       <Modal title={`Allow ${allowing?.mac ?? ''}`} open={!!allowing} onOk={submitAllow} onCancel={() => setAllowing(null)} destroyOnHidden>
         <Form form={allowForm} layout="vertical">
