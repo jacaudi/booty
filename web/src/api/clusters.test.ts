@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { addMember, createCluster, importCluster, listClusters, removeMember } from './clusters'
+import { addMember, createCluster, exportClusterSecrets, importCluster, listClusters, removeMember, updateCluster } from './clusters'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -38,5 +38,22 @@ describe('clusters api client', () => {
     vi.stubGlobal('fetch', fetchMock)
     await importCluster({ name: 'a', controlplane: 'yaml', controlplaneMac: 'aa:bb' })
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/clusters/import', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('exportClusterSecrets POSTs /clusters/{id}/export and unwraps', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ secretsYaml: 'apiVersion: v1alpha1' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(exportClusterSecrets(3)).resolves.toEqual({ secretsYaml: 'apiVersion: v1alpha1' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/clusters/3/export', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('updateCluster PUTs the pinned inputs', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 3 }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await updateCluster(3, { endpoint: 'https://e:6443', talosVersion: 'v1.13.6', k8sVersion: 'v1.34.0' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/clusters/3',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ endpoint: 'https://e:6443', talosVersion: 'v1.13.6', k8sVersion: 'v1.34.0' }) }),
+    )
   })
 })
