@@ -5,7 +5,9 @@ const BASE = '/api/v1'
 export async function request<T>(path: string, init?: RequestInit): Promise<T | undefined> {
   const res = await fetch(`${BASE}${path}`, init)
   if (!res.ok) {
-    throw new Error(`${init?.method ?? 'GET'} ${path} failed: ${res.status}`)
+    const body = (await res.text()).trim()
+    const base = `${init?.method ?? 'GET'} ${path} failed: ${res.status}`
+    throw new Error(body ? `${base}: ${body}` : base)
   }
   if (res.status === 204) return undefined
   const text = await res.text()

@@ -53,4 +53,17 @@ describe('api client', () => {
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ configId: 3 }) }),
     )
   })
+
+  it('includes the response body in the thrown error (for Validate 422s)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ detail: 'butane: line 3: unknown key' }), { status: 422 })),
+    )
+    await expect(listHosts()).rejects.toThrow(/unknown key/)
+  })
+
+  it('still reports the status when the body is empty', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 500 })))
+    await expect(listHosts()).rejects.toThrow(/failed: 500/)
+  })
 })
