@@ -719,3 +719,18 @@ func TestTranslateDebianConfigSudoUnmarshalMatrix(t *testing.T) {
 		})
 	}
 }
+
+// TestTranslateDebianConfigLateCommandListEqualsBlock: a late_command YAML list
+// normalizes to the SAME ';'-joined line as the equivalent block scalar (D3),
+// and both match the pre-existing block-only output (back-compat).
+func TestTranslateDebianConfigLateCommandListEqualsBlock(t *testing.T) {
+	block := translate(t, "late_command: |\n  in-target systemctl enable ssh\n  in-target apt-get clean\n")
+	list := translate(t, "late_command:\n  - in-target systemctl enable ssh\n  - in-target apt-get clean\n")
+	want := "d-i preseed/late_command string in-target systemctl enable ssh ; in-target apt-get clean\n"
+	if block != want {
+		t.Errorf("block form:\ngot:\n%s\nwant:\n%s", block, want)
+	}
+	if list != want {
+		t.Errorf("list form:\ngot:\n%s\nwant:\n%s", list, want)
+	}
+}

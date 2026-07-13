@@ -28,8 +28,8 @@ type debianConfigSpec struct {
 	Packages []string        `yaml:"packages"`
 	Disk     *debianDisk     `yaml:"disk"`
 
-	LateCommand string `yaml:"late_command"` // raw d-i late_command, verbatim intent
-	RawPreseed  string `yaml:"raw_preseed"`  // verbatim preseed lines, appended LAST
+	LateCommand stringOrList `yaml:"late_command"` // block scalar OR a YAML list (D3)
+	RawPreseed  string       `yaml:"raw_preseed"`  // verbatim preseed lines, appended LAST
 }
 
 // debianMirror is override-only apt mirror selection; the suite/codename comes
@@ -326,6 +326,34 @@ func sshLateCommand(username string, keys []string) string {
 		"in-target chmod 600 " + home + "/.ssh/authorized_keys"
 }
 
+// stringOrList lets late_command be authored as either a YAML block scalar (the
+// original form) or a YAML sequence of commands (D3). A sequence joins with
+// "\n" so it feeds flattenLateCommand identically to a multi-line block —
+// flattenLateCommand stays the single ';'-joining normalizer (DRY). null/absent
+// -> "" (back-compat: an absent late_command emits no line).
+type stringOrList string
+
+func (s *stringOrList) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var str string
+		if err := node.Decode(&str); err != nil { // null decodes to ""
+			return err
+		}
+		*s = stringOrList(str)
+		return nil
+	case yaml.SequenceNode:
+		var items []string
+		if err := node.Decode(&items); err != nil {
+			return err
+		}
+		*s = stringOrList(strings.Join(items, "\n"))
+		return nil
+	default:
+		return errors.New("http: debianconfig: late_command must be a string or a list of strings")
+	}
+}
+
 // flattenLateCommand flattens a (possibly multiline) operator late_command to
 // the single debconf line d-i expects: lines trimmed, empties dropped,
 // "; "-joined. Commands must therefore be independently sequenceable.
@@ -448,7 +476,7 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 	if v.Disk != nil && v.Disk.ESPSyncCmd != "" {
 		lateParts = append(lateParts, v.Disk.ESPSyncCmd)
 	}
-	if op := flattenLateCommand(spec.LateCommand); op != "" {
+	if op := flattenLateCommand(string(spec.LateCommand)); op != "" {
 		lateParts = append(lateParts, op)
 	}
 	v.LateCommand = strings.Join(lateParts, " ; ")
