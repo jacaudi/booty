@@ -17,8 +17,8 @@ export interface NavEntry {
 export const navEntries: NavEntry[] = [
   { path: '/', label: 'Home', element: <HomeView /> },
   { path: '/hosts', label: 'Hosts', element: <HostsView /> },
-  { path: '/cache', label: 'Cache', element: <CacheView /> },
   { path: '/boot-configs', label: 'Boot Configs', element: <BootConfigsView /> },
+  { path: '/cache', label: 'Cache', element: <CacheView /> },
   { path: '/clusters', label: 'Clusters', element: <ClustersView /> },
   { path: '/about', label: 'About', element: <AboutView /> },
 ]
