@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Button, Card, Checkbox, Collapse, Input, Segmented, Select, Space, Statistic,
   Table, Tag, Tooltip, Typography, message, theme,
 } from 'antd'
-import { CheckCircleFilled, CloseCircleFilled, PushpinOutlined, SearchOutlined } from '@ant-design/icons'
+import type { ColumnsType } from 'antd/es/table'
+import { CheckCircleFilled, CloseCircleFilled, PushpinOutlined, SearchOutlined, WarningFilled } from '@ant-design/icons'
 import type { CacheEntry } from '../api/cache'
 import { listCache, pinCache, reverifyCacheEntry, scanCache, unpinCache } from '../api/cache'
 import { applyClientFilters, groupEntries, humanSize, summarize } from '../api/cacheModel'
 
 type StateFilter = 'All' | 'In cycle' | 'Archived' | 'Pinned' | 'Failed'
 
-// Status colors come from AntD's design TOKENS (colorSuccess/colorError), never
-// hand-picked hex — they must track the active light/dark algorithm.
+// Status colors come from AntD's design TOKENS (colorSuccess/colorError/colorWarning),
+// never hand-picked hex — they must track the active light/dark algorithm.
 function VerifyIcon({ entry }: { entry: CacheEntry }) {
   const { token } = theme.useToken()
   if (entry.verified === true) return <CheckCircleFilled style={{ color: token.colorSuccess }} aria-label="verified" />
@@ -21,7 +22,11 @@ function VerifyIcon({ entry }: { entry: CacheEntry }) {
         <CloseCircleFilled style={{ color: token.colorError }} aria-label="verification failed" />
       </Tooltip>
     )
-  return <Typography.Text type="secondary">—</Typography.Text>
+  return (
+    <Tooltip title="not yet verified">
+      <WarningFilled style={{ color: token.colorWarning }} aria-label="not yet verified" />
+    </Tooltip>
+  )
 }
 
 export default function CacheView() {
@@ -39,6 +44,7 @@ export default function CacheView() {
   const [version, setVersion] = useState('')
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set())
+  const [bulkInFlight, setBulkInFlight] = useState(false)
 
   // The SERVER filter — note that 'All' and 'Failed' produce the SAME server
   // filter (Failed is client-side; the API has no failed param). load() must
@@ -122,23 +128,46 @@ export default function CacheView() {
   // Collapse must be CONTROLLED here: `defaultActiveKey` is only read on the
   // component's initial mount, but groups don't exist yet on that first render
   // (listCache() resolves asynchronously) — so an uncontrolled Collapse's panels
-  // never become active and rc-collapse never mounts their content. Syncing an
-  // `activeKey` state to the freshly-computed groups keeps newly-appearing
-  // groups expanded by default while still letting the user collapse one.
+  // never become active and rc-collapse never mounts their content.
+  //
+  // `groups` gets a brand-new array reference on every load() (after every
+  // pin/unpin/reverify/bulk action and every filter change), so this effect
+  // must NOT simply re-seed activeKeys from every group each time — that would
+  // snap a manually-collapsed group back open on the next reload. Instead it
+  // tracks which group keys have been SEEN before and only default-expands
+  // keys that are new, leaving the active/collapsed state of already-seen
+  // groups untouched.
   const [activeKeys, setActiveKeys] = useState<string[]>([])
+  const seenGroupKeys = useRef<Set<string>>(new Set())
   useEffect(() => {
-    setActiveKeys(groups.map((g) => g.key))
+    const newKeys = groups.map((g) => g.key).filter((k) => !seenGroupKeys.current.has(k))
+    for (const k of groups.map((g) => g.key)) seenGroupKeys.current.add(k)
+    if (newKeys.length > 0) setActiveKeys((prev) => [...prev, ...newKeys])
   }, [groups])
 
   const bulk = async (fn: (id: number) => Promise<unknown>, ok: string) => {
     const ids = [...selectedRows]
-    if (ids.length === 0) return
-    // Client-side fan-out over the single-item routes: no bulk endpoint exists
-    // (design §4.1 / Task 16 deferred). Await all before reload.
-    await Promise.allSettled(ids.map((id) => fn(id)))
-    message.success(ok)
-    setSelectedRows(new Set())
-    await load()
+    if (ids.length === 0 || bulkInFlight) return
+    setBulkInFlight(true)
+    try {
+      // Client-side fan-out over the single-item routes: no bulk endpoint exists
+      // (design §4.1 / Task 16 deferred). Inspect every settled result — like the
+      // single-item act(), a bulk action must not claim success on failure.
+      const results = await Promise.allSettled(ids.map((id) => fn(id)))
+      const failed = results.filter((r) => r.status === 'rejected').length
+      const succeeded = results.length - failed
+      if (failed === 0) {
+        message.success(ok)
+      } else if (succeeded === 0) {
+        message.error(`${ok}: all ${failed} failed`)
+      } else {
+        message.warning(`${ok}: ${succeeded} succeeded, ${failed} failed`)
+      }
+      setSelectedRows(new Set())
+      await load()
+    } finally {
+      setBulkInFlight(false)
+    }
   }
 
   const toggleRow = (id: number, checked: boolean) => {
@@ -150,7 +179,10 @@ export default function CacheView() {
     })
   }
 
-  const versionColumns = [
+  // groupKey (cacheModel.ts) groups by os/channel only, NOT arch — so two entries
+  // that differ only by arch land in the same group. The Arch column is what
+  // disambiguates them in the master list (the old flat table had this column).
+  const versionColumns: ColumnsType<CacheEntry> = [
     {
       title: '',
       key: 'select',
@@ -164,6 +196,7 @@ export default function CacheView() {
       ),
     },
     { title: 'Version', dataIndex: 'version', key: 'version' },
+    { title: 'Arch', dataIndex: 'arch', key: 'arch' },
     {
       title: 'State',
       key: 'state',
@@ -242,9 +275,18 @@ export default function CacheView() {
           value={version}
           onChange={(e) => setVersion(e.target.value)}
         />
-        <Button disabled={selectedRows.size === 0} onClick={() => bulk(pinCache, 'Pinned selected')}>Pin all</Button>
-        <Button disabled={selectedRows.size === 0} onClick={() => bulk(unpinCache, 'Unpinned selected')}>Unpin all</Button>
-        <Button disabled={selectedRows.size === 0} onClick={() => bulk(reverifyCacheEntry, 'Re-verified selected')}>Re-verify all</Button>
+        <Button disabled={selectedRows.size === 0 || bulkInFlight} onClick={() => bulk(pinCache, 'Pinned selected')}>
+          Pin all
+        </Button>
+        <Button disabled={selectedRows.size === 0 || bulkInFlight} onClick={() => bulk(unpinCache, 'Unpinned selected')}>
+          Unpin all
+        </Button>
+        <Button
+          disabled={selectedRows.size === 0 || bulkInFlight}
+          onClick={() => bulk(reverifyCacheEntry, 'Re-verified selected')}
+        >
+          Re-verify all
+        </Button>
       </Space>
 
       <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
