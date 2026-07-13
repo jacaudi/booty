@@ -40,6 +40,9 @@ export default function SchematicBuilder({
   const [savedId, setSavedId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [overlayError, setOverlayError] = useState<string | null>(null)
+  // Adopted after a successful create so a SECOND Generate updates the same
+  // record instead of creating a duplicate schematic (SGE review Important 1).
+  const [activeConfig, setActiveConfig] = useState<Config | null>(config)
 
   // Edit mode: seed the form from the stored source. A source outside the
   // generated subset (hand-authored, or the legacy nested-overlay shape after
@@ -79,6 +82,13 @@ export default function SchematicBuilder({
     [extensions, overlayName, overlayImage],
   )
 
+  // A saved derived ID is only valid for the exact body it was computed from;
+  // any subsequent edit to that body invalidates it so the success Alert never
+  // shows a stale ID next to a changed live preview (SGE review Important 2).
+  useEffect(() => {
+    setSavedId(null)
+  }, [extensions, overlayName, overlayImage])
+
   // Deep-link sync in an EFFECT keyed on the state (SGE B7). Calling a sync
   // helper from each handler would serialize the PRE-update closure values, so
   // the URL would be permanently one interaction stale.
@@ -106,11 +116,14 @@ export default function SchematicBuilder({
     setOverlayError(null)
     setSaving(true)
     try {
-      const result = config
-        ? await updateConfig(config.id, yaml)
+      const result = activeConfig
+        ? await updateConfig(activeConfig.id, yaml)
         : await createConfig({ name, kind: 'schematic', source: yaml })
       setSavedId(result?.derivedSchematicId ?? null)
-      message.success(config ? `Rebuilt ${name}` : `Built ${name}`)
+      // Adopt the created record so the NEXT save updates it instead of
+      // calling createConfig again with the same name (SGE review Important 1).
+      if (result && !activeConfig) setActiveConfig(result)
+      message.success(activeConfig ? `Rebuilt ${name}` : `Built ${name}`)
       onSaved() // refresh the list; we STAY here so the Alert below renders
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'schematic build failed')
@@ -122,7 +135,7 @@ export default function SchematicBuilder({
   const builderForm = (
     <Form layout="vertical">
       <Form.Item label="Name" htmlFor="schematic-name" required>
-        <Input id="schematic-name" value={name} onChange={(e) => setName(e.target.value)} disabled={!!config} />
+        <Input id="schematic-name" value={name} onChange={(e) => setName(e.target.value)} disabled={!!activeConfig} />
       </Form.Item>
       <Form.Item label="Hardware type">
         <Segmented value={hw} onChange={(v) => setHw(v as string)} options={HW_OPTIONS} />
@@ -197,7 +210,7 @@ export default function SchematicBuilder({
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Space>
         <Button icon={<ArrowLeftOutlined />} onClick={onBack}>Schematics</Button>
-        <Typography.Title level={4} style={{ margin: 0 }}>{config ? config.name : 'New schematic'}</Typography.Title>
+        <Typography.Title level={4} style={{ margin: 0 }}>{activeConfig ? activeConfig.name : 'New schematic'}</Typography.Title>
       </Space>
 
       {savedId && (
@@ -207,7 +220,21 @@ export default function SchematicBuilder({
           message={
             <Space>
               <span>Derived schematic ID: <Typography.Text code>{savedId}</Typography.Text></span>
-              <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => navigator.clipboard?.writeText(savedId)} />
+              <Button
+                size="small"
+                type="text"
+                icon={<CopyOutlined />}
+                onClick={() => {
+                  if (!navigator.clipboard) {
+                    message.error('Clipboard unavailable')
+                    return
+                  }
+                  navigator.clipboard.writeText(savedId).then(
+                    () => message.success('Copied'),
+                    () => message.error('Copy failed'),
+                  )
+                }}
+              />
             </Space>
           }
         />
@@ -247,7 +274,7 @@ export default function SchematicBuilder({
 
       <Space>
         <Button type="primary" loading={saving} disabled={rawSource !== null} onClick={save}>
-          {config ? 'Save' : 'Generate'}
+          {activeConfig ? 'Save' : 'Generate'}
         </Button>
         <Button onClick={onBack}>Cancel</Button>
       </Space>
