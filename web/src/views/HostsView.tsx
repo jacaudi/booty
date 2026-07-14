@@ -7,6 +7,7 @@ import type { Config } from '../api/configs'
 import { listConfigs } from '../api/configs'
 import type { Role } from '../api/roles'
 import { listRoles } from '../api/roles'
+import { SCHEMATIC_KIND, kindsForHostOS } from '../api/configKinds'
 
 export default function HostsView() {
   const [hosts, setHosts] = useState<Host[]>([])
@@ -64,7 +65,7 @@ export default function HostsView() {
       if (values.schematic) {
         // Bind BEFORE approve so approve's target-param encoding picks the
         // schematic up (approve reads host.Schematic at approval time).
-        const byName = configs.find((c) => c.kind === 'schematic' && c.name === values.schematic)
+        const byName = configs.find((c) => c.kind === SCHEMATIC_KIND && c.name === values.schematic)
         await bindSchematic(mac, byName ? { configId: byName.id } : { schematic: values.schematic })
       }
       await approveHostWith(mac, { configId: values.configId, roleIds: values.roleIds })
@@ -155,7 +156,15 @@ export default function HostsView() {
             <Select
               allowClear
               placeholder="none"
-              options={configs.filter((c) => c.kind !== 'schematic').map((c) => ({ value: c.id, label: c.name }))}
+              options={configs
+                // Only kinds THIS HOST's OS family admits. familyAllowsKind is
+                // per-family (render.go:34-43): a butane config on a Talos host
+                // is as silently useless as a taloscluster — resolveConfig falls
+                // through to the default file with only a slog.Warn. An unknown
+                // OS falls back to the full boot-config union, which still
+                // excludes schematic and taloscluster.
+                .filter((c) => kindsForHostOS(allowing?.os).includes(c.kind as never))
+                .map((c) => ({ value: c.id, label: c.name }))}
             />
           </Form.Item>
           <Form.Item name="roleIds" label="Roles">
@@ -172,7 +181,7 @@ export default function HostsView() {
                 allowClear
                 placeholder="vanilla"
                 options={configs
-                  .filter((c) => c.kind === 'schematic')
+                  .filter((c) => c.kind === SCHEMATIC_KIND)
                   .map((c) => ({ value: c.name, label: c.name }))}
               />
             </Form.Item>

@@ -118,4 +118,54 @@ describe('HostsView', () => {
     await userEvent.click(await screen.findByRole('tab', { name: /Approved/ }))
     expect(await screen.findByText('cc:dd')).toBeInTheDocument()
   })
+
+  const allConfigs = [
+    { id: 6, name: 'talos-node', kind: 'machineconfig' as const, activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    { id: 7, name: 'web', kind: 'butane' as const, activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    { id: 8, name: 'iscsi', kind: 'schematic' as const, activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    { id: 9, name: 'prod-spec', kind: 'taloscluster' as const, activeRevision: 1, revisionCount: 1, updatedAt: '' },
+  ]
+
+  const openAllowFor = async (os: string | undefined) => {
+    vi.mocked(client.listHosts).mockResolvedValue([
+      { mac: 'ho:st', hostname: '', ip: '', os, booted: '', approved: false } as Host,
+    ])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue(allConfigs)
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    render(<HostsView />)
+    await waitFor(() => screen.getByText('ho:st'))
+    await userEvent.click(screen.getByRole('button', { name: /allow/i }))
+    await userEvent.click(await screen.findByRole('combobox', { name: 'Config' }))
+  }
+
+  const optionNames = () =>
+    [...document.querySelectorAll('.ant-select-item-option-content')].map((n) => n.textContent)
+
+  it('the Allow modal Config Select offers neither a schematic nor a taloscluster', async () => {
+    // Silent no-op: familyAllowsKind rejects both, so resolveConfig falls through
+    // to the default file with only a slog.Warn — a bound config, an unbound boot.
+    await openAllowFor('talos')
+    await screen.findByText('talos-node', { selector: '.ant-select-item-option-content' })
+    expect(optionNames()).not.toContain('prod-spec')
+    expect(optionNames()).not.toContain('iscsi')
+  })
+
+  it('the Allow modal Config Select offers only kinds the host OS family admits', async () => {
+    // familyAllowsKind is PER-FAMILY: a butane config bound to a TALOS host fails
+    // on the same path with the same silent fall-through as a taloscluster.
+    await openAllowFor('talos')
+    await screen.findByText('talos-node', { selector: '.ant-select-item-option-content' })
+    expect(optionNames()).toEqual(['talos-node'])
+  })
+
+  it('the Allow modal Config Select stays permissive for a host with no known OS', async () => {
+    // A host that has not booted yet has no OS. Offering the full boot-config
+    // union beats hiding every option; the server rejects a bad bind loudly.
+    await openAllowFor(undefined)
+    await screen.findByText('web', { selector: '.ant-select-item-option-content' })
+    expect(optionNames()).toEqual(['talos-node', 'web'])
+    // Still never the unbindable kinds.
+    expect(optionNames()).not.toContain('iscsi')
+    expect(optionNames()).not.toContain('prod-spec')
+  })
 })
