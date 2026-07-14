@@ -21,8 +21,19 @@ export interface ScanResult {
   orphans: number
 }
 
-export async function listCache(): Promise<CacheEntry[]> {
-  const body = await request<{ entries: CacheEntry[] }>('/cache')
+export interface CacheFilter {
+  os?: string
+  state?: 'in-cycle' | 'archived'
+  pinned?: boolean
+}
+
+export async function listCache(filter?: CacheFilter): Promise<CacheEntry[]> {
+  const q = new URLSearchParams()
+  if (filter?.os) q.set('os', filter.os)
+  if (filter?.state) q.set('state', filter.state)
+  if (filter?.pinned !== undefined) q.set('pinned', String(filter.pinned))
+  const qs = q.toString()
+  const body = await request<{ entries: CacheEntry[] }>(qs ? `/cache?${qs}` : '/cache')
   return body?.entries ?? []
 }
 

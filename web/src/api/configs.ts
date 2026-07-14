@@ -3,7 +3,7 @@ import { request } from './client'
 export interface Config {
   id: number
   name: string
-  kind: 'butane' | 'machineconfig' | 'preseed' | 'schematic'
+  kind: 'butane' | 'machineconfig' | 'preseed' | 'schematic' | 'taloscluster' | 'debianconfig'
   activeRevision: number
   revisionCount: number
   derivedSchematicId?: string

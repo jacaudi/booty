@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, Button, Drawer, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Tooltip, Typography, message } from 'antd'
+import { Alert, Button, Collapse, Drawer, Form, Input, Modal, Radio, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { Config, Preview, Revision } from '../api/configs'
 import { createConfig, getConfig, listConfigs, listRevisions, previewConfig, rollbackConfig, updateConfig } from '../api/configs'
 import type { Role } from '../api/roles'
 import { createRole, listRoles, updateRole } from '../api/roles'
-import { buildCustomization, parseCustomization } from '../api/schematicYaml'
-
-const CONFIG_KINDS = ['butane', 'machineconfig', 'preseed'] as const
+import { OS_CHOICES, isBootConfigKind, kindForOS, osNameForKind } from '../api/configKinds'
 
 function ConfigsTab() {
   const [configs, setConfigs] = useState<Config[]>([])
@@ -16,6 +14,9 @@ function ConfigsTab() {
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm] = Form.useForm()
+  // The kind is DERIVED from the OS, never chosen. Watched so the form can show
+  // the user what the OS resolves to before they submit.
+  const createOS = Form.useWatch<string | undefined>('os', createForm)
 
   const [editing, setEditing] = useState<Config | null>(null)
   const [editForm] = Form.useForm()
@@ -29,11 +30,17 @@ function ConfigsTab() {
   const [revisions, setRevisions] = useState<Revision[]>([])
   const [revisionsLoading, setRevisionsLoading] = useState(false)
 
+  const [validating, setValidating] = useState<number | null>(null)
+
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      setConfigs((await listConfigs()).filter((c) => c.kind !== 'schematic'))
+      // Only kinds renderConfig can actually serve to a machine. This excludes
+      // `schematic` (an IMAGE identity, now on OS Images) and `taloscluster` (a
+      // cluster spec, owned by the Clusters page) — neither is allowed by any
+      // family in familyAllowsKind (render.go:34-43).
+      setConfigs((await listConfigs()).filter((c) => isBootConfigKind(c.kind)))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed to load configs')
     } finally {
@@ -62,7 +69,12 @@ function ConfigsTab() {
 
   const submitCreate = async () => {
     const values = await createForm.validateFields()
-    await act(() => createConfig(values), `Created ${values.name}`)
+    const kind = kindForOS(values.os)
+    if (!kind) return // unreachable: the OS field is required and comes from OS_CHOICES
+    await act(
+      () => createConfig({ name: values.name, kind, source: values.source }),
+      `Created ${values.name}`,
+    )
     setCreateOpen(false)
   }
 
@@ -120,19 +132,57 @@ function ConfigsTab() {
     setRevisionsFor(null)
   }
 
+  const validate = async (c: Config) => {
+    setValidating(c.id)
+    try {
+      const preview = await previewConfig(c.id)
+      // A resolved preview is NOT proof of validity: the server returns 200 and
+      // folds a render failure into `report` (api_configs.go:236-240). Inspect the
+      // body — an empty `rendered` means the render failed (SGE B1).
+      if (!preview?.rendered) {
+        message.error(preview?.report || `${c.name} is invalid`)
+      } else {
+        message.success(`${c.name} is valid`)
+      }
+    } catch (e) {
+      // Real rejections: non-renderable kind, no active revision, transport. Task 1
+      // preserved the response body, so this message is actually useful.
+      message.error(e instanceof Error ? e.message : `${c.name} is invalid`)
+    } finally {
+      setValidating(null)
+    }
+  }
+
   const columns: ColumnsType<Config> = [
     { title: 'Name', dataIndex: 'name', key: 'name' },
-    { title: 'Kind', dataIndex: 'kind', key: 'kind', render: (k: string) => <Tag>{k}</Tag> },
+    {
+      title: 'Kind',
+      key: 'kind',
+      // There is no OS column: ConfigDTO carries no OS (a config binds to hosts,
+      // not to an OS), so one would be a pure reverse-map of this cell. The OS
+      // product name leads; the literal server kind sits beneath it.
+      render: (_, c) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{osNameForKind(c.kind)}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{c.kind}</Typography.Text>
+        </Space>
+      ),
+    },
     { title: 'Active Rev', dataIndex: 'activeRevision', key: 'activeRevision' },
     { title: 'Updated', dataIndex: 'updatedAt', key: 'updatedAt' },
     {
       title: 'Actions',
       key: 'actions',
+      // No taloscluster guard on Validate any more: a taloscluster no longer
+      // reaches this list, so every row here is renderable by construction.
       render: (_, c) => (
         <Space>
           <Button size="small" onClick={() => openEdit(c)}>Edit</Button>
           <Button size="small" onClick={() => openPreview(c)}>Preview</Button>
           <Button size="small" onClick={() => openRevisions(c)}>Revisions</Button>
+          <Button size="small" loading={validating === c.id} onClick={() => validate(c)}>
+            Validate
+          </Button>
           <Tooltip title="available after authentication (P10)">
             <Button size="small" danger disabled>Delete</Button>
           </Tooltip>
@@ -165,13 +215,65 @@ function ConfigsTab() {
       </Space>
       <Table rowKey="id" loading={loading} columns={columns} dataSource={configs} pagination={false} />
 
+      <Collapse
+        items={[{
+          key: 'vars',
+          label: 'Template variables',
+          children: (
+            <Typography>
+              <Typography.Paragraph>Available in every rendered config:</Typography.Paragraph>
+              <ul>
+                <li><Typography.Text code>{'{{ .MAC }}'}</Typography.Text> — host MAC</li>
+                <li><Typography.Text code>{'{{ .Hostname }}'}</Typography.Text> — host name</li>
+                <li><Typography.Text code>{'{{ .IP }}'}</Typography.Text> — observed IP</li>
+                <li><Typography.Text code>{'{{ .UUID }}'}</Typography.Text> — hardware UUID</li>
+                <li><Typography.Text code>{'{{ .Serial }}'}</Typography.Text> — hardware serial</li>
+                <li><Typography.Text code>{'{{ .ServerIP }}'}</Typography.Text> — booty server IP</li>
+                <li><Typography.Text code>{'{{ .ServerHTTPPort }}'}</Typography.Text> — booty HTTP port</li>
+                <li><Typography.Text code>{'{{ .JoinString }}'}</Typography.Text> — join string</li>
+              </ul>
+              <Typography.Paragraph>Populated for the machineconfig family only:</Typography.Paragraph>
+              <ul>
+                <li><Typography.Text code>{'{{ .TalosVersion }}'}</Typography.Text></li>
+                <li><Typography.Text code>{'{{ .Schematic }}'}</Typography.Text></li>
+                <li><Typography.Text code>{'{{ .Roles }}'}</Typography.Text></li>
+              </ul>
+            </Typography>
+          ),
+        }]}
+      />
+
       <Modal title="Create Config" open={createOpen} onOk={submitCreate} onCancel={() => setCreateOpen(false)} destroyOnHidden>
         <Form form={createForm} layout="vertical">
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="kind" label="Kind" rules={[{ required: true }]}>
-            <Select options={CONFIG_KINDS.map((k) => ({ value: k, label: k }))} />
+          <Form.Item name="os" label="OS" rules={[{ required: true, message: 'Pick the OS this config is for' }]}>
+            <Radio.Group>
+              <Space direction="vertical">
+                {OS_CHOICES.map((o) => (
+                  <Radio key={o.value} value={o.value}>{o.label}</Radio>
+                ))}
+              </Space>
+            </Radio.Group>
+          </Form.Item>
+          <Form.Item label="Kind">
+            <Typography.Text type="secondary" data-testid="derived-kind">
+              {createOS ? kindForOS(createOS) : 'follows from the OS'}
+            </Typography.Text>
+          </Form.Item>
+          <Form.Item label="Upload a file (optional)">
+            <Upload.Dragger
+              beforeUpload={(file) => {
+                const reader = new FileReader()
+                reader.onload = () => createForm.setFieldValue('source', String(reader.result ?? ''))
+                reader.readAsText(file)
+                return false // prevent auto-upload; we only read the text locally
+              }}
+              maxCount={1}
+            >
+              <p className="ant-upload-text">Drag a config file here, or click to select</p>
+            </Upload.Dragger>
           </Form.Item>
           <Form.Item name="source" label="Source" rules={[{ required: true }]}>
             <Input.TextArea rows={8} />
@@ -239,7 +341,11 @@ function RolesTab() {
     try {
       const [r, c] = await Promise.all([listRoles(), listConfigs()])
       setRoles(r)
-      setConfigs(c.filter((cfg) => cfg.kind !== 'schematic'))
+      // Only BINDABLE kinds. A config is bindable exactly when it is renderable:
+      // resolveConfig gates every binding rung through familyAllowsKind
+      // (resolve.go:30,65), so binding a schematic or a taloscluster silently
+      // resolves to the default file — a bound config and an unbound boot.
+      setConfigs(c.filter((cfg) => isBootConfigKind(cfg.kind)))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed to load roles')
     } finally {
@@ -291,7 +397,16 @@ function RolesTab() {
     {
       title: 'Default Config',
       key: 'defaultConfigId',
-      render: (_, r) => configs.find((c) => c.id === r.defaultConfigId)?.name ?? '—',
+      render: (_, r) => (
+        <Select
+          style={{ minWidth: 180 }}
+          aria-label={`default config for ${r.name}`}
+          placeholder="None"
+          value={r.defaultConfigId ?? null}
+          options={configOptions}
+          onChange={(value) => act(() => updateRole(r.id, { name: r.name, defaultConfigId: value }), `Updated ${r.name}`)}
+        />
+      ),
     },
     { title: 'Host Count', dataIndex: 'hostCount', key: 'hostCount' },
     {
@@ -334,217 +449,13 @@ function RolesTab() {
             <Input />
           </Form.Item>
           <Form.Item name="defaultConfigId" label="Default Config">
-            <Select allowClear options={configOptions} />
+            {/* No allowClear: UpdateRole only writes default_config_id when the
+                pointer is non-nil, and the server cannot distinguish a JSON
+                null from an absent key, so a clear affordance here would
+                silently no-op while reporting success. */}
+            <Select options={configOptions} />
           </Form.Item>
         </Form>
-      </Modal>
-    </Space>
-  )
-}
-
-function shortId(id?: string): string {
-  return id && id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : (id ?? '—')
-}
-
-function SchematicsTab() {
-  const [schematics, setSchematics] = useState<Config[]>([])
-  const [sources, setSources] = useState<Record<number, string>>({})
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const [createOpen, setCreateOpen] = useState(false)
-  const [createForm] = Form.useForm()
-
-  const [editing, setEditing] = useState<Config | null>(null)
-  const [editForm] = Form.useForm()
-  // Non-null when the stored source is outside the generated subset — shown
-  // read-only instead of being destroyed by the form round-trip.
-  const [editRaw, setEditRaw] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const sch = (await listConfigs()).filter((c) => c.kind === 'schematic')
-      setSchematics(sch)
-      // The list shows each schematic's extension set; sources come from the
-      // detail endpoint (small N — this catalog IS the point of the view: the
-      // Factory itself refuses to list schematics).
-      const details = await Promise.all(sch.map((c) => getConfig(c.id)))
-      const bySrc: Record<number, string> = {}
-      for (const d of details) if (d) bySrc[d.id] = d.source
-      setSources(bySrc)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'failed to load schematics')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    load()
-  }, [load])
-
-  const fieldsToSource = (values: { extensions?: string[]; overlayName?: string; overlayImage?: string }) =>
-    buildCustomization({ extensions: values.extensions ?? [], overlayName: values.overlayName, overlayImage: values.overlayImage })
-
-  const submitCreate = async () => {
-    // AntD renders per-field errors on rejection (e.g. the overlay
-    // both-or-neither rule); nothing else to surface here.
-    const values = await createForm.validateFields().catch(() => null)
-    if (!values) return
-    try {
-      const created = await createConfig({ name: values.name, kind: 'schematic', source: fieldsToSource(values) })
-      message.success(`Built ${values.name}: ${created?.derivedSchematicId ?? 'unknown id'}`)
-      setCreateOpen(false)
-      await load()
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'schematic build failed')
-    }
-  }
-
-  const openEdit = (c: Config) => {
-    const fields = parseCustomization(sources[c.id] ?? '')
-    if (fields) {
-      editForm.setFieldsValue({ extensions: fields.extensions, overlayName: fields.overlayName, overlayImage: fields.overlayImage })
-      setEditRaw(null)
-    } else {
-      setEditRaw(sources[c.id] ?? '')
-    }
-    setEditing(c)
-  }
-
-  const submitEdit = async () => {
-    if (!editing || editRaw !== null) {
-      setEditing(null)
-      return
-    }
-    // AntD renders per-field errors on rejection (e.g. the overlay
-    // both-or-neither rule); nothing else to surface here.
-    const values = await editForm.validateFields().catch(() => null)
-    if (!values) return
-    try {
-      const updated = await updateConfig(editing.id, fieldsToSource(values))
-      message.success(`Rebuilt ${editing.name}: ${updated?.derivedSchematicId ?? 'unknown id'}`)
-      setEditing(null)
-      await load()
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : 'schematic build failed')
-    }
-  }
-
-  const columns: ColumnsType<Config> = [
-    { title: 'Name', dataIndex: 'name', key: 'name' },
-    {
-      title: 'Schematic ID',
-      key: 'id',
-      render: (_, c) => (
-        <Tooltip title={c.derivedSchematicId}>
-          <Typography.Text code>{shortId(c.derivedSchematicId)}</Typography.Text>
-        </Tooltip>
-      ),
-    },
-    {
-      title: 'Extensions',
-      key: 'extensions',
-      render: (_, c) => {
-        const fields = parseCustomization(sources[c.id] ?? '')
-        if (!fields) return <Tag>custom</Tag>
-        if (fields.extensions.length === 0 && !fields.overlayName) return <Tag>vanilla</Tag>
-        return (
-          <Space wrap>
-            {fields.extensions.map((e) => (
-              <Tag key={e}>{e}</Tag>
-            ))}
-            {fields.overlayName && <Tag color="blue">overlay: {fields.overlayName}</Tag>}
-          </Space>
-        )
-      },
-    },
-    { title: 'Updated', dataIndex: 'updatedAt', key: 'updatedAt' },
-    {
-      title: 'Actions',
-      key: 'actions',
-      render: (_, c) => (
-        <Space>
-          <Button size="small" onClick={() => openEdit(c)}>Edit</Button>
-          <Tooltip title="available after authentication (P10)">
-            <Button size="small" danger disabled>Delete</Button>
-          </Tooltip>
-        </Space>
-      ),
-    },
-  ]
-
-  const schematicFormItems = (
-    <>
-      <Form.Item name="extensions" label="Official extensions" help="e.g. siderolabs/iscsi-tools">
-        <Select mode="tags" placeholder="siderolabs/…" open={false} tokenSeparators={[',', ' ']} />
-      </Form.Item>
-      <Form.Item
-        name="overlayName"
-        label="Overlay name (SBCs, optional)"
-        dependencies={['overlayImage']}
-        rules={[
-          ({ getFieldValue }) => ({
-            validator(_, value) {
-              return !!value === !!getFieldValue('overlayImage')
-                ? Promise.resolve()
-                : Promise.reject(new Error('Overlay requires both a name and an image'))
-            },
-          }),
-        ]}
-      >
-        <Input placeholder="rpi_generic" />
-      </Form.Item>
-      <Form.Item
-        name="overlayImage"
-        label="Overlay image (optional)"
-        dependencies={['overlayName']}
-        rules={[
-          ({ getFieldValue }) => ({
-            validator(_, value) {
-              return !!value === !!getFieldValue('overlayName')
-                ? Promise.resolve()
-                : Promise.reject(new Error('Overlay requires both a name and an image'))
-            },
-          }),
-        ]}
-      >
-        <Input placeholder="siderolabs/sbc-raspberrypi" />
-      </Form.Item>
-    </>
-  )
-
-  return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      {error && <Alert type="error" message={error} showIcon />}
-      <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-        <div />
-        <Button type="primary" onClick={() => { createForm.resetFields(); setCreateOpen(true) }}>Create Schematic</Button>
-      </Space>
-      <Table rowKey="id" loading={loading} columns={columns} dataSource={schematics} pagination={false} />
-
-      <Modal title="Create Schematic" open={createOpen} onOk={submitCreate} onCancel={() => setCreateOpen(false)} destroyOnHidden>
-        <Form form={createForm} layout="vertical">
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          {schematicFormItems}
-        </Form>
-      </Modal>
-
-      <Modal title={`Edit ${editing?.name ?? ''}`} open={!!editing} onOk={submitEdit} onCancel={() => setEditing(null)} destroyOnHidden>
-        {editRaw !== null ? (
-          <Space direction="vertical" style={{ width: '100%' }}>
-            <Alert type="info" showIcon message="This schematic's source is not in the generated form; shown read-only." />
-            <Input.TextArea readOnly rows={8} value={editRaw} />
-          </Space>
-        ) : (
-          <Form form={editForm} layout="vertical">
-            {schematicFormItems}
-          </Form>
-        )}
       </Modal>
     </Space>
   )
@@ -557,7 +468,6 @@ export default function BootConfigsView() {
       <Tabs
         items={[
           { key: 'configs', label: 'Configs', children: <ConfigsTab /> },
-          { key: 'schematics', label: 'Schematics', children: <SchematicsTab /> },
           { key: 'roles', label: 'Roles', children: <RolesTab /> },
         ]}
       />
