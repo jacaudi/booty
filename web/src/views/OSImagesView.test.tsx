@@ -13,7 +13,6 @@ import * as configsApi from '../api/configs'
 vi.mock('../api/client')
 vi.mock('../api/cache')
 vi.mock('../api/configs')
-vi.mock('../api/client')
 
 beforeEach(() => {
   vi.mocked(cacheApi.listCache).mockResolvedValue([])
