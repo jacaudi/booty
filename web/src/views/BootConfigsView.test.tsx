@@ -275,4 +275,26 @@ describe('BootConfigsView', () => {
     expect(screen.queryByText('iscsi', { selector: '.ant-select-item-option-content' })).not.toBeInTheDocument()
     expect(screen.queryByText('prod-spec', { selector: '.ant-select-item-option-content' })).not.toBeInTheDocument()
   })
+
+  it('the Edit Role modal Default Config Select offers no clear affordance', async () => {
+    // UpdateRole (pkg/db/roles.go) only writes default_config_id when the
+    // pointer is non-nil, and the PUT body field is a single *int64
+    // (pkg/http/api_roles.go) — a JSON null and an absent key decode to the
+    // same nil, so the server cannot express "unbind." An allowClear here
+    // would silently no-op while the UI reports success. (This exact trap was
+    // already hit and fixed once on the inline table-cell Select above; the
+    // Create Role modal keeps allowClear on purpose — CreateRole inserts the
+    // pointer directly, so there's no pre-existing binding to preserve.)
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([{ id: 1, name: 'cp', defaultConfigId: 7, hostCount: 0 }])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 7, name: 'web', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    ])
+    render(<BootConfigsView />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Roles' }))
+    await screen.findByText('cp')
+    await userEvent.click(screen.getByRole('button', { name: /edit/i }))
+    // Wait for the modal to open and the form to prefill.
+    await screen.findByDisplayValue('cp')
+    expect(document.querySelector('.ant-select-clear')).not.toBeInTheDocument()
+  })
 })

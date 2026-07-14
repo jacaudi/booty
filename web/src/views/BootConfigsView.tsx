@@ -449,7 +449,11 @@ function RolesTab() {
             <Input />
           </Form.Item>
           <Form.Item name="defaultConfigId" label="Default Config">
-            <Select allowClear options={configOptions} />
+            {/* No allowClear: UpdateRole only writes default_config_id when the
+                pointer is non-nil, and the server cannot distinguish a JSON
+                null from an absent key, so a clear affordance here would
+                silently no-op while reporting success. */}
+            <Select options={configOptions} />
           </Form.Item>
         </Form>
       </Modal>
