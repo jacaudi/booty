@@ -5,6 +5,7 @@ import type { Config, Preview, Revision } from '../api/configs'
 import { createConfig, getConfig, listConfigs, listRevisions, previewConfig, rollbackConfig, updateConfig } from '../api/configs'
 import type { Role } from '../api/roles'
 import { createRole, listRoles, updateRole } from '../api/roles'
+import { isBootConfigKind, osNameForKind } from '../api/configKinds'
 
 const CONFIG_KINDS = ['butane', 'machineconfig', 'preseed'] as const
 
@@ -34,7 +35,11 @@ function ConfigsTab() {
     setLoading(true)
     setError(null)
     try {
-      setConfigs((await listConfigs()).filter((c) => c.kind !== 'schematic'))
+      // Only kinds renderConfig can actually serve to a machine. This excludes
+      // `schematic` (an IMAGE identity, now on OS Images) and `taloscluster` (a
+      // cluster spec, owned by the Clusters page) — neither is allowed by any
+      // family in familyAllowsKind (render.go:34-43).
+      setConfigs((await listConfigs()).filter((c) => isBootConfigKind(c.kind)))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed to load configs')
     } finally {
@@ -144,27 +149,34 @@ function ConfigsTab() {
 
   const columns: ColumnsType<Config> = [
     { title: 'Name', dataIndex: 'name', key: 'name' },
-    { title: 'Kind', dataIndex: 'kind', key: 'kind', render: (k: string) => <Tag>{k}</Tag> },
+    {
+      title: 'Kind',
+      key: 'kind',
+      // There is no OS column: ConfigDTO carries no OS (a config binds to hosts,
+      // not to an OS), so one would be a pure reverse-map of this cell. The OS
+      // product name leads; the literal server kind sits beneath it.
+      render: (_, c) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text>{osNameForKind(c.kind)}</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>{c.kind}</Typography.Text>
+        </Space>
+      ),
+    },
     { title: 'Active Rev', dataIndex: 'activeRevision', key: 'activeRevision' },
     { title: 'Updated', dataIndex: 'updatedAt', key: 'updatedAt' },
     {
       title: 'Actions',
       key: 'actions',
+      // No taloscluster guard on Validate any more: a taloscluster no longer
+      // reaches this list, so every row here is renderable by construction.
       render: (_, c) => (
         <Space>
           <Button size="small" onClick={() => openEdit(c)}>Edit</Button>
           <Button size="small" onClick={() => openPreview(c)}>Preview</Button>
           <Button size="small" onClick={() => openRevisions(c)}>Revisions</Button>
-          <Tooltip title={c.kind === 'taloscluster' ? 'cluster specs are not renderable' : undefined}>
-            <Button
-              size="small"
-              loading={validating === c.id}
-              disabled={c.kind === 'taloscluster'}
-              onClick={() => validate(c)}
-            >
-              Validate
-            </Button>
-          </Tooltip>
+          <Button size="small" loading={validating === c.id} onClick={() => validate(c)}>
+            Validate
+          </Button>
           <Tooltip title="available after authentication (P10)">
             <Button size="small" danger disabled>Delete</Button>
           </Tooltip>

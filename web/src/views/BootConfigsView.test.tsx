@@ -122,11 +122,37 @@ describe('BootConfigsView', () => {
     expect(await screen.findByText(/no active revision/)).toBeInTheDocument()
   })
 
-  it('Validate is disabled for taloscluster configs (not renderable)', async () => {
-    vi.mocked(configsApi.listConfigs).mockResolvedValue([cfgRow({ id: 2, name: 'prod-spec', kind: 'taloscluster' })])
+  it('Configs list excludes taloscluster (a cluster spec is not a boot config)', async () => {
+    // It is owned by the Clusters page now. It was never renderable
+    // (api_configs.go:211-215), which is why its Validate button was permanently
+    // disabled — the row itself was the mistake.
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      cfgRow({ id: 1, name: 'web' }),
+      cfgRow({ id: 2, name: 'prod-spec', kind: 'taloscluster' }),
+    ])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
     render(<BootConfigsView />)
-    await screen.findByText('prod-spec')
-    expect(screen.getByRole('button', { name: 'Validate' })).toBeDisabled()
+    await screen.findByText('web')
+    expect(screen.queryByText('prod-spec')).not.toBeInTheDocument()
+  })
+
+  it('the Kind cell leads with the OS product name over the raw server kind', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      cfgRow({ id: 1, name: 'talos-node', kind: 'machineconfig' }),
+      cfgRow({ id: 2, name: 'fc', kind: 'butane' }),
+      cfgRow({ id: 3, name: 'deb', kind: 'debianconfig' }),
+      cfgRow({ id: 4, name: 'legacy', kind: 'preseed' }),
+    ])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    render(<BootConfigsView />)
+    await screen.findByText('talos-node')
+    expect(screen.getByText('Talos Linux')).toBeInTheDocument()
+    expect(screen.getByText('Flatcar / Fedora CoreOS')).toBeInTheDocument()
+    // A legacy raw preseed still lists, and still reads as Debian.
+    expect(screen.getAllByText('Debian')).toHaveLength(2)
+    // The literal server kind is still shown beneath the product name.
+    expect(screen.getByText('machineconfig')).toBeInTheDocument()
+    expect(screen.getByText('preseed')).toBeInTheDocument()
   })
 
   it('changing a role default config inline calls updateRole', async () => {
