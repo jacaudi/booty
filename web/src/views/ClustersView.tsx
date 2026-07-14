@@ -1,8 +1,11 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
-import { Alert, Button, Form, Input, Modal, Space, Table, Tag, message } from 'antd'
+import { Alert, Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd'
 import type { Cluster } from '../api/clusters'
 import { addMember, createCluster, exportClusterSecrets, importCluster, listClusters, removeMember, updateCluster } from '../api/clusters'
+import { TALOSCLUSTER_KIND } from '../api/configKinds'
+import type { Config } from '../api/configs'
+import { listConfigs } from '../api/configs'
 
 export default function ClustersView() {
   const [clusters, setClusters] = useState<Cluster[]>([])
@@ -16,6 +19,7 @@ export default function ClustersView() {
   const [editing, setEditing] = useState<Cluster | null>(null)
   const [editForm] = Form.useForm()
   const [saving, setSaving] = useState(false)
+  const [specConfigs, setSpecConfigs] = useState<Config[]>([])
 
   const load = async () => {
     setLoading(true)
@@ -63,9 +67,22 @@ export default function ClustersView() {
     }
   }
 
-  const openEdit = (c: Cluster) => {
-    editForm.setFieldsValue({ endpoint: c.endpoint, talosVersion: c.talosVersion, k8sVersion: c.k8sVersion })
+  const openEdit = async (c: Cluster) => {
+    // Prefill with the CURRENT binding: an untouched Select then re-sends the same
+    // id (a no-op), and an unbound cluster sends nothing at all — both preserve
+    // the server's state, which is the only thing PUT can express.
+    editForm.setFieldsValue({
+      endpoint: c.endpoint,
+      talosVersion: c.talosVersion,
+      k8sVersion: c.k8sVersion,
+      specConfigId: c.specConfigId,
+    })
     setEditing(c)
+    try {
+      setSpecConfigs((await listConfigs()).filter((cfg) => cfg.kind === TALOSCLUSTER_KIND))
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'failed to load cluster specs')
+    }
   }
 
   const submitEdit = async () => {
@@ -75,9 +92,16 @@ export default function ClustersView() {
     try {
       // A Talos-version bump ensures + pins every member's cache targets BEFORE
       // committing, then kicks an async reconcile — so this can 422, but it does
-      // NOT block on downloads (SGE I4). specConfigId is intentionally omitted —
-      // PUT preserves the existing binding; sending empty would not clear it.
-      await updateCluster(editing.id, { endpoint: v.endpoint, talosVersion: v.talosVersion, k8sVersion: v.k8sVersion })
+      // NOT block on downloads (SGE I4).
+      const input: { endpoint: string; talosVersion: string; k8sVersion: string; specConfigId?: number } = {
+        endpoint: v.endpoint,
+        talosVersion: v.talosVersion,
+        k8sVersion: v.k8sVersion,
+      }
+      // Omitted => the server PRESERVES the existing binding. There is no way to
+      // clear one (api_clusters.go:198-206), which is why the Select has no clear.
+      if (v.specConfigId !== undefined && v.specConfigId !== null) input.specConfigId = v.specConfigId
+      await updateCluster(editing.id, input)
       message.success(`Updated ${editing.name}`)
       setEditing(null)
       await load()
@@ -194,6 +218,16 @@ export default function ClustersView() {
             <Input placeholder="v1.13.5" />
           </Form.Item>
           <Form.Item name="k8sVersion" label="Kubernetes version" rules={[{ required: true }]}><Input placeholder="v1.34.0" /></Form.Item>
+          <Form.Item
+            name="specConfigId"
+            label="Spec config"
+            extra="A taloscluster config, layered into every generated node config. It cannot be unbound once set."
+          >
+            <Select
+              placeholder="None"
+              options={specConfigs.map((c) => ({ value: c.id, label: c.name }))}
+            />
+          </Form.Item>
         </Form>
       </Modal>
     </Space>

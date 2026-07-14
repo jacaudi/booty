@@ -3,10 +3,15 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ClustersView from './ClustersView'
 import * as clustersApi from '../api/clusters'
+import * as configsApi from '../api/configs'
 
 vi.mock('../api/clusters')
+vi.mock('../api/configs')
 
-beforeEach(() => vi.resetAllMocks())
+beforeEach(() => {
+  vi.resetAllMocks()
+  vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+})
 
 describe('ClustersView', () => {
   it('lists clusters with member counts and versions', async () => {
@@ -96,5 +101,58 @@ describe('ClustersView', () => {
     await screen.findByText('prod')
     await userEvent.click(screen.getByRole('button', { name: 'Export' }))
     expect(await screen.findByText('422: export requires --secretsKey (fail-closed)')).toBeInTheDocument()
+  })
+
+  it('the Edit modal offers only taloscluster configs as the Spec config', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([
+      { id: 1, name: 'prod', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', members: [], updatedAt: '' },
+    ])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 9, name: 'prod-spec', kind: 'taloscluster', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+      { id: 7, name: 'web', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    ])
+    render(<ClustersView />)
+    await screen.findByText('prod')
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    await userEvent.click(await screen.findByRole('combobox', { name: 'Spec config' }))
+    expect(await screen.findByText('prod-spec', { selector: '.ant-select-item-option-content' })).toBeInTheDocument()
+    expect(screen.queryByText('web', { selector: '.ant-select-item-option-content' })).not.toBeInTheDocument()
+  })
+
+  it('Edit sends specConfigId once a spec is picked', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([
+      { id: 1, name: 'prod', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', members: [], updatedAt: '' },
+    ])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 9, name: 'prod-spec', kind: 'taloscluster', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    ])
+    vi.mocked(clustersApi.updateCluster).mockResolvedValue(undefined)
+    render(<ClustersView />)
+    await screen.findByText('prod')
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    await userEvent.click(await screen.findByRole('combobox', { name: 'Spec config' }))
+    await userEvent.click(await screen.findByText('prod-spec', { selector: '.ant-select-item-option-content' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(clustersApi.updateCluster).toHaveBeenCalledWith(1, {
+      endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', specConfigId: 9,
+    }))
+  })
+
+  it('offers no way to clear a bound spec (the server cannot express it)', async () => {
+    // Omitting specConfigId PRESERVES the binding and the server cannot clear one
+    // (a nil pointer is indistinguishable from an explicit null,
+    // api_clusters.go:198-206). An allowClear would silently no-op while
+    // reporting success. Unbinding is backend follow-up work.
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([
+      { id: 1, name: 'prod', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', specConfigId: 9, members: [], updatedAt: '' },
+    ])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 9, name: 'prod-spec', kind: 'taloscluster', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    ])
+    render(<ClustersView />)
+    await screen.findByText('prod')
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    const select = (await screen.findByRole('combobox', { name: 'Spec config' })).closest('.ant-select')
+    expect(select?.querySelector('.ant-select-clear')).not.toBeInTheDocument()
   })
 })
