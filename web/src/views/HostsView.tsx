@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, AutoComplete, Badge, Button, Form, Modal, Select, Space, Tabs, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { Host } from '../api/types'
@@ -7,7 +7,7 @@ import type { Config } from '../api/configs'
 import { listConfigs } from '../api/configs'
 import type { Role } from '../api/roles'
 import { listRoles } from '../api/roles'
-import { SCHEMATIC_KIND, kindsForHostOS } from '../api/configKinds'
+import { SCHEMATIC_KIND, isBootConfigKind, kindsForHostOS } from '../api/configKinds'
 
 export default function HostsView() {
   const [hosts, setHosts] = useState<Host[]>([])
@@ -79,6 +79,14 @@ export default function HostsView() {
 
   const pending = hosts.filter((h) => !h.approved)
   const approved = hosts.filter((h) => h.approved)
+
+  // Only kinds THIS HOST's OS family admits. familyAllowsKind is per-family
+  // (render.go:34-43): a butane config on a Talos host is as silently useless
+  // as a taloscluster — resolveConfig falls through to the default file with
+  // only a slog.Warn. An unknown OS falls back to the full boot-config union,
+  // which still excludes schematic and taloscluster. Hoisted out of the
+  // Select's options filter so it isn't recomputed on every render.
+  const allowedKinds = useMemo(() => kindsForHostOS(allowing?.os), [allowing?.os])
 
   const baseCols: ColumnsType<Host> = [
     { title: 'MAC', dataIndex: 'mac', key: 'mac' },
@@ -157,13 +165,7 @@ export default function HostsView() {
               allowClear
               placeholder="none"
               options={configs
-                // Only kinds THIS HOST's OS family admits. familyAllowsKind is
-                // per-family (render.go:34-43): a butane config on a Talos host
-                // is as silently useless as a taloscluster — resolveConfig falls
-                // through to the default file with only a slog.Warn. An unknown
-                // OS falls back to the full boot-config union, which still
-                // excludes schematic and taloscluster.
-                .filter((c) => kindsForHostOS(allowing?.os).includes(c.kind as never))
+                .filter((c) => isBootConfigKind(c.kind) && allowedKinds.includes(c.kind))
                 .map((c) => ({ value: c.id, label: c.name }))}
             />
           </Form.Item>

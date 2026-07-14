@@ -6,6 +6,7 @@ import { addMember, createCluster, exportClusterSecrets, importCluster, listClus
 import { TALOSCLUSTER_KIND } from '../api/configKinds'
 import type { Config } from '../api/configs'
 import { listConfigs } from '../api/configs'
+import { shortSchematicId } from '../api/schematicId'
 
 export default function ClustersView() {
   const [clusters, setClusters] = useState<Cluster[]>([])
@@ -132,7 +133,7 @@ export default function ClustersView() {
   const memberColumns = (clusterId: number) => [
     { title: 'MAC', dataIndex: 'mac', key: 'mac' },
     { title: 'Type', dataIndex: 'machineType', key: 'type' },
-    { title: 'Schematic', dataIndex: 'schematic', key: 'schematic', render: (s?: string) => s ? s.slice(0, 12) : '—' },
+    { title: 'Schematic', dataIndex: 'schematic', key: 'schematic', render: (s?: string) => s ? shortSchematicId(s) : '—' },
     {
       title: 'Status', dataIndex: 'status', key: 'status',
       render: (s: string) => <Tag color={s === 'booted' ? 'green' : 'default'}>{s}</Tag>,

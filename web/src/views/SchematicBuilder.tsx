@@ -9,6 +9,7 @@ import { createConfig, getConfig, updateConfig } from '../api/configs'
 import { buildCustomization, parseCustomization } from '../api/schematicYaml'
 import { parseBuilderParams, serializeBuilderParams } from '../api/schematicUrl'
 import { EXTENSION_CATALOGUE } from '../api/schematicCatalogue'
+import { SCHEMATIC_KIND } from '../api/configKinds'
 
 const HW_OPTIONS = ['metal', 'cloud', 'sbc']
 const ARCH_OPTIONS = ['amd64', 'arm64']
@@ -145,7 +146,7 @@ export default function SchematicBuilder({
     try {
       const result = activeConfig
         ? await updateConfig(activeConfig.id, yaml)
-        : await createConfig({ name, kind: 'schematic', source: yaml })
+        : await createConfig({ name, kind: SCHEMATIC_KIND, source: yaml })
       setSavedId(result?.derivedSchematicId ?? null)
       // Adopt the created record so the NEXT save updates it instead of
       // calling createConfig again with the same name (SGE review Important 1).

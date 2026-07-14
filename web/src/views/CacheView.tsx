@@ -43,20 +43,21 @@ export default function CacheView() {
   const [error, setError] = useState<string | null>(null)
 
   // The live schematic catalogue, used to NAME the cache's schematic-keyed groups.
-  // `undefined` means "could not load" — distinct from "loaded, and empty", which
-  // is what licenses the "not referenced by any current schematic" claim.
-  const [schematics, setSchematics] = useState<SchematicRef[] | undefined>(undefined)
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const configs = await listConfigs()
-        setSchematics(configs.filter((c) => c.kind === SCHEMATIC_KIND))
-      } catch {
-        setSchematics(undefined) // labels degrade to bare short IDs; the cache list still works
-      }
-    })()
-  }, [])
+  // Refetched by load() below on every refresh/Scan — not just at mount — so
+  // that building a schematic on the Schematics tab and coming back to Cached
+  // versions (AntD Tabs keeps this component mounted) picks up its name
+  // without a full page reload.
+  //
+  // An unmatched group's label is NEVER "not referenced" / "orphaned" /
+  // "stranded" — see labelGroup's doc comment in cacheModel.ts for the full
+  // reasoning. In short: a schematic-keyed cache target has four sources and
+  // three carry no config at all (host-bound raw IDs from this UI's own
+  // Import-by-ID, and cluster-member schematics — both in active use), and
+  // CacheEntryDTO exposes no provenance to tell a stranded target from one a
+  // host is booting right now. Because of that, a load failure and a
+  // genuinely-empty catalogue are handled identically ([]): neither state
+  // licenses any claim beyond the bare short id.
+  const [schematics, setSchematics] = useState<SchematicRef[]>([])
 
   const [stateFilter, setStateFilter] = useState<StateFilter>('All')
   const [os, setOs] = useState<string | undefined>(undefined)
@@ -83,17 +84,23 @@ export default function CacheView() {
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    // The schematic catalogue is independent of the cache-entries fetch below
+    // (its own try/catch) — a catalogue-load failure must degrade labels to
+    // bare short ids, never surface as the cache-entries error banner.
+    const catalogueLoad = listConfigs()
+      .then((configs) => setSchematics(configs.filter((c) => c.kind === SCHEMATIC_KIND)))
+      .catch(() => setSchematics([])) // labels degrade to bare short IDs; the cache list still works
     try {
       const filter = JSON.parse(serverFilterKey) as typeof serverFilter
       const hasFilter = Object.keys(filter).length > 0
       // One unfiltered read for the strip + one filtered read for the list. When no
       // server filter is active they are the same query, so issue it once.
       if (hasFilter) {
-        const [filtered, all] = await Promise.all([listCache(filter), listCache()])
+        const [filtered, all] = await Promise.all([listCache(filter), listCache(), catalogueLoad])
         setEntries(filtered)
         setAllEntries(all)
       } else {
-        const all = await listCache()
+        const [all] = await Promise.all([listCache(), catalogueLoad])
         setEntries(all)
         setAllEntries(all)
       }

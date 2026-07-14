@@ -381,6 +381,27 @@ describe('CacheView', () => {
     expect(screen.getByText('talos · bbb')).toBeInTheDocument()
   })
 
+  it('re-reads the schematic catalogue on Scan so a newly built schematic picks up its name', async () => {
+    // The flagship flow this page exists for: build a schematic on the
+    // Schematics tab (which calls cache.EnsureSchematicTarget server-side),
+    // come back here, hit Scan. The group must pick up the new name WITHOUT
+    // a full page reload — Tabs keeps CacheView mounted the whole time.
+    const id = `43fac7${'0'.repeat(54)}1367`
+    vi.mocked(api.listCache).mockResolvedValue([
+      entry({ id: 1, os: 'talos', params: { schematic: id }, version: 'v1.9.0' }),
+    ])
+    vi.mocked(api.scanCache).mockResolvedValue({ scanned: 1, updated: 0, orphans: 0 })
+    vi.mocked(configsApi.listConfigs)
+      .mockResolvedValueOnce([]) // not yet built when CacheView first mounts
+      .mockResolvedValueOnce([
+        { id: 9, name: 'rpi4-tailscale', kind: 'schematic', activeRevision: 1, revisionCount: 1, derivedSchematicId: id, updatedAt: '' },
+      ])
+    render(<CacheView />)
+    expect(await screen.findByText('talos · 43fac7…1367')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Scan/ }))
+    expect(await screen.findByText('talos · rpi4-tailscale')).toBeInTheDocument()
+  })
+
   it('still renders the cache when the schematic catalogue fails to load', async () => {
     // Labels degrade to bare short IDs; the cache list itself must keep working.
     const id = `9f21ab${'0'.repeat(54)}7c40`
