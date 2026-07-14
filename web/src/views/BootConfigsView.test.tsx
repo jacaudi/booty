@@ -216,4 +216,44 @@ describe('BootConfigsView', () => {
       successSpy.mockRestore()
     }
   })
+
+  it('the create form picks an OS and derives the kind on the wire', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(configsApi.createConfig).mockResolvedValue(undefined)
+    render(<BootConfigsView />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Config' }))
+    await userEvent.type(await screen.findByLabelText('Name'), 'debian-worker')
+    await userEvent.click(screen.getByRole('radio', { name: 'Debian' }))
+    await userEvent.type(screen.getByLabelText('Source'), 'hostname: w1')
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() =>
+      expect(configsApi.createConfig).toHaveBeenCalledWith({
+        name: 'debian-worker',
+        kind: 'debianconfig',
+        source: 'hostname: w1',
+      }),
+    )
+  })
+
+  it('the create form shows the derived kind without letting you choose it', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    render(<BootConfigsView />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Config' }))
+    await userEvent.click(await screen.findByRole('radio', { name: 'Talos Linux' }))
+    expect(await screen.findByTestId('derived-kind')).toHaveTextContent('machineconfig')
+    // There is no Kind input to choose from.
+    expect(screen.queryByRole('combobox', { name: 'Kind' })).not.toBeInTheDocument()
+  })
+
+  it('the create form does not offer raw preseed (debianconfig is the authoring format)', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    render(<BootConfigsView />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Config' }))
+    await screen.findByRole('radio', { name: 'Debian' })
+    expect(screen.queryByRole('radio', { name: /preseed/i })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('radio')).toHaveLength(3)
+  })
 })

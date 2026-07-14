@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, Button, Collapse, Drawer, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd'
+import { Alert, Button, Collapse, Drawer, Form, Input, Modal, Radio, Select, Space, Table, Tabs, Tag, Tooltip, Typography, Upload, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { Config, Preview, Revision } from '../api/configs'
 import { createConfig, getConfig, listConfigs, listRevisions, previewConfig, rollbackConfig, updateConfig } from '../api/configs'
 import type { Role } from '../api/roles'
 import { createRole, listRoles, updateRole } from '../api/roles'
-import { isBootConfigKind, osNameForKind } from '../api/configKinds'
-
-const CONFIG_KINDS = ['butane', 'machineconfig', 'preseed'] as const
+import { OS_CHOICES, isBootConfigKind, kindForOS, osNameForKind } from '../api/configKinds'
 
 function ConfigsTab() {
   const [configs, setConfigs] = useState<Config[]>([])
@@ -16,6 +14,9 @@ function ConfigsTab() {
 
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm] = Form.useForm()
+  // The kind is DERIVED from the OS, never chosen. Watched so the form can show
+  // the user what the OS resolves to before they submit.
+  const createOS = Form.useWatch<string | undefined>('os', createForm)
 
   const [editing, setEditing] = useState<Config | null>(null)
   const [editForm] = Form.useForm()
@@ -68,7 +69,12 @@ function ConfigsTab() {
 
   const submitCreate = async () => {
     const values = await createForm.validateFields()
-    await act(() => createConfig(values), `Created ${values.name}`)
+    const kind = kindForOS(values.os)
+    if (!kind) return // unreachable: the OS field is required and comes from OS_CHOICES
+    await act(
+      () => createConfig({ name: values.name, kind, source: values.source }),
+      `Created ${values.name}`,
+    )
     setCreateOpen(false)
   }
 
@@ -242,8 +248,19 @@ function ConfigsTab() {
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="kind" label="Kind" rules={[{ required: true }]}>
-            <Select options={CONFIG_KINDS.map((k) => ({ value: k, label: k }))} />
+          <Form.Item name="os" label="OS" rules={[{ required: true, message: 'Pick the OS this config is for' }]}>
+            <Radio.Group>
+              <Space direction="vertical">
+                {OS_CHOICES.map((o) => (
+                  <Radio key={o.value} value={o.value}>{o.label}</Radio>
+                ))}
+              </Space>
+            </Radio.Group>
+          </Form.Item>
+          <Form.Item label="Kind">
+            <Typography.Text type="secondary" data-testid="derived-kind">
+              {createOS ? kindForOS(createOS) : 'follows from the OS'}
+            </Typography.Text>
           </Form.Item>
           <Form.Item label="Upload a file (optional)">
             <Upload.Dragger
