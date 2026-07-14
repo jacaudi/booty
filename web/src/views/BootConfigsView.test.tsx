@@ -256,4 +256,23 @@ describe('BootConfigsView', () => {
     expect(screen.queryByRole('radio', { name: /preseed/i })).not.toBeInTheDocument()
     expect(screen.getAllByRole('radio')).toHaveLength(3)
   })
+
+  it('the role default-config Select offers neither a schematic nor a taloscluster', async () => {
+    // Binding either silently no-ops: familyAllowsKind rejects them and
+    // resolveConfig falls through to the default file with only a slog.Warn —
+    // a bound config and an unbound boot (resolve.go:30,39-41).
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([{ id: 1, name: 'cp', defaultConfigId: undefined, hostCount: 0 }])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 7, name: 'web', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+      { id: 8, name: 'iscsi', kind: 'schematic', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+      { id: 9, name: 'prod-spec', kind: 'taloscluster', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    ])
+    render(<BootConfigsView />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Roles' }))
+    await screen.findByText('cp')
+    await userEvent.click(screen.getByRole('combobox', { name: 'default config for cp' }))
+    await screen.findByText('web', { selector: '.ant-select-item-option-content' })
+    expect(screen.queryByText('iscsi', { selector: '.ant-select-item-option-content' })).not.toBeInTheDocument()
+    expect(screen.queryByText('prod-spec', { selector: '.ant-select-item-option-content' })).not.toBeInTheDocument()
+  })
 })

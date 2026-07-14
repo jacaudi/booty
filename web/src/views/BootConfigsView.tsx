@@ -341,7 +341,11 @@ function RolesTab() {
     try {
       const [r, c] = await Promise.all([listRoles(), listConfigs()])
       setRoles(r)
-      setConfigs(c.filter((cfg) => cfg.kind !== 'schematic'))
+      // Only BINDABLE kinds. A config is bindable exactly when it is renderable:
+      // resolveConfig gates every binding rung through familyAllowsKind
+      // (resolve.go:30,65), so binding a schematic or a taloscluster silently
+      // resolves to the default file — a bound config and an unbound boot.
+      setConfigs(c.filter((cfg) => isBootConfigKind(cfg.kind)))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed to load roles')
     } finally {
