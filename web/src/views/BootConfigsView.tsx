@@ -5,7 +5,6 @@ import type { Config, Preview, Revision } from '../api/configs'
 import { createConfig, getConfig, listConfigs, listRevisions, previewConfig, rollbackConfig, updateConfig } from '../api/configs'
 import type { Role } from '../api/roles'
 import { createRole, listRoles, updateRole } from '../api/roles'
-import SchematicsView from './SchematicsView'
 
 const CONFIG_KINDS = ['butane', 'machineconfig', 'preseed'] as const
 
@@ -432,7 +431,6 @@ export default function BootConfigsView() {
       <Tabs
         items={[
           { key: 'configs', label: 'Configs', children: <ConfigsTab /> },
-          { key: 'schematics', label: 'Schematics', children: <SchematicsView /> },
           { key: 'roles', label: 'Roles', children: <RolesTab /> },
         ]}
       />

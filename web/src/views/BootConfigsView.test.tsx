@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter } from 'react-router-dom'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { message } from 'antd'
@@ -62,22 +61,6 @@ describe('BootConfigsView', () => {
     await userEvent.click(screen.getByRole('button', { name: /edit/i }))
     expect(await screen.findByDisplayValue('EXISTING SOURCE CONTENT')).toBeInTheDocument()
     expect(configsApi.getConfig).toHaveBeenCalledWith(7)
-  })
-
-  it('Schematics tab delegates to SchematicsView', async () => {
-    // Full schematic list/builder/import coverage now lives in
-    // SchematicsView.test.tsx (extracted in Task 8) — this is a smoke test
-    // that the tab actually wires up the extracted view. Wrapped in
-    // MemoryRouter because SchematicsView's builder screen (Task 9) needs it.
-    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
-    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
-    render(
-      <MemoryRouter>
-        <BootConfigsView />
-      </MemoryRouter>,
-    )
-    await userEvent.click(screen.getByRole('tab', { name: /schematics/i }))
-    expect(await screen.findByRole('button', { name: 'New schematic' })).toBeInTheDocument()
   })
 
   it('Configs tab excludes schematic-kind entries', async () => {
