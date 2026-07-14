@@ -56,4 +56,17 @@ describe('clusters api client', () => {
       expect.objectContaining({ method: 'PUT', body: JSON.stringify({ endpoint: 'https://e:6443', talosVersion: 'v1.13.6', k8sVersion: 'v1.34.0' }) }),
     )
   })
+
+  it('updateCluster PUTs specConfigId when one is supplied', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 3 }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await updateCluster(3, { endpoint: 'https://e:6443', talosVersion: 'v1.13.6', k8sVersion: 'v1.34.0', specConfigId: 9 })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/clusters/3',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ endpoint: 'https://e:6443', talosVersion: 'v1.13.6', k8sVersion: 'v1.34.0', specConfigId: 9 }),
+      }),
+    )
+  })
 })

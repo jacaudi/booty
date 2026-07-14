@@ -44,9 +44,14 @@ export function importCluster(input: { name: string; controlplane: string; contr
   return request<Cluster>('/clusters/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
 }
 
+// specConfigId binds a kind=taloscluster config as the cluster's spec (validated
+// server-side, api_clusters.go:207-216). OMITTING it PRESERVES the existing
+// binding (api_clusters.go:198-206) — and the server cannot clear one at all, so
+// there is deliberately no way to express "unbind" here. Only PUT accepts this
+// field; POST /clusters does not.
 export function updateCluster(
   id: number,
-  input: { endpoint: string; talosVersion: string; k8sVersion: string },
+  input: { endpoint: string; talosVersion: string; k8sVersion: string; specConfigId?: number },
 ): Promise<Cluster | undefined> {
   return request<Cluster>(`/clusters/${id}`, {
     method: 'PUT',
