@@ -7,10 +7,12 @@ import { getConfig, listConfigs } from '../api/configs'
 import { parseCustomization } from '../api/schematicYaml'
 import { bindSchematic, listHosts } from '../api/client'
 import type { Host } from '../api/types'
+import { SCHEMATIC_KIND } from '../api/configKinds'
+import { shortSchematicId } from '../api/schematicId'
 import SchematicBuilder from './SchematicBuilder'
 
 function shortId(id?: string): string {
-  return id && id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : (id ?? 'Not built')
+  return id ? shortSchematicId(id) : 'Not built'
 }
 
 type Mode = { screen: 'list' } | { screen: 'builder'; config: Config | null }
@@ -29,7 +31,7 @@ export default function SchematicsView() {
     setLoading(true)
     setError(null)
     try {
-      const sch = (await listConfigs()).filter((c) => c.kind === 'schematic')
+      const sch = (await listConfigs()).filter((c) => c.kind === SCHEMATIC_KIND)
       setSchematics(sch)
       const details = await Promise.all(sch.map((c) => getConfig(c.id)))
       const bySrc: Record<number, string> = {}
