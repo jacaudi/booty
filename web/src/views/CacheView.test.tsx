@@ -1,19 +1,35 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { message } from 'antd'
 import type { CacheEntry } from '../api/cache'
 import CacheView from './CacheView'
 import * as api from '../api/cache'
+import * as configsApi from '../api/configs'
 
 vi.mock('../api/cache')
+vi.mock('../api/configs')
+
+beforeEach(() => {
+  // Every test needs a schematic catalogue: CacheView cross-references it to name
+  // its groups. Default to empty; individual tests override.
+  vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+})
 
 const entry = (o: Partial<CacheEntry>): CacheEntry => ({
   id: 1, os: 'talos', arch: 'amd64', version: 'v1.0.0', size: 1024,
   state: 'in-cycle', pinned: false, inWindow: true, fetchedAt: '', ...o,
 })
 
-afterEach(() => vi.resetAllMocks())
+afterEach(() => {
+  vi.resetAllMocks()
+  // AntD's message toasts mount into document.body OUTSIDE the render container
+  // (see the note above the `segmented` helper) and RTL's cleanup doesn't reach
+  // them, so a toast from one test can leak into the next test's DOM. This
+  // matters here specifically because the scan test's "...0 orphans" toast would
+  // otherwise satisfy a later /orphan/i assertion for the wrong reason.
+  message.destroy()
+})
 
 describe('CacheView', () => {
   it('shows a summary strip with used bytes and counts (no budget bar)', async () => {
@@ -309,5 +325,71 @@ describe('CacheView', () => {
     await waitFor(() => expect(api.listCache).toHaveBeenCalled())
     await userEvent.click(screen.getByRole('button', { name: /Scan/ }))
     expect(api.scanCache).toHaveBeenCalled()
+  })
+
+  it('names a schematic group after the live schematic it matches', async () => {
+    const id = `43fac7${'0'.repeat(54)}1367`
+    vi.mocked(api.listCache).mockResolvedValue([
+      entry({ id: 1, os: 'talos', params: { schematic: id }, version: 'v1.9.0' }),
+    ])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 9, name: 'rpi4-tailscale', kind: 'schematic', activeRevision: 1, revisionCount: 1, derivedSchematicId: id, updatedAt: '' },
+    ])
+    render(<CacheView />)
+    expect(await screen.findByText('talos · rpi4-tailscale')).toBeInTheDocument()
+    expect(screen.getByText('schematic 43fac7…1367')).toBeInTheDocument()
+  })
+
+  it('names the predefined default target after the seeded vanilla schematic', async () => {
+    // The predefined Talos target (pkg/cache/seed.go:53) carries the constant
+    // DefaultTalosSchematic id, and SeedVanillaSchematic seeds a matching
+    // kind=schematic config named "vanilla" at startup — so it names itself.
+    const vanilla = '376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba'
+    vi.mocked(api.listCache).mockResolvedValue([
+      entry({ id: 1, os: 'talos', params: { schematic: vanilla }, version: 'v1.8.0' }),
+    ])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 1, name: 'vanilla', kind: 'schematic', activeRevision: 1, revisionCount: 1, derivedSchematicId: vanilla, updatedAt: '' },
+    ])
+    render(<CacheView />)
+    expect(await screen.findByText('talos · vanilla')).toBeInTheDocument()
+  })
+
+  it('makes NO claim about a schematic target it cannot match to a config', async () => {
+    // An unmatched target may be stranded, OR it may be a host-bound raw ID that a
+    // host is booting right now (Import-by-ID creates exactly this, with no
+    // config). CacheEntryDTO carries no provenance, so we cannot tell — and must
+    // not imply the images are disposable. Show the id, claim nothing.
+    const id = `9f21ab${'0'.repeat(54)}7c40`
+    vi.mocked(api.listCache).mockResolvedValue([
+      entry({ id: 1, os: 'talos', params: { schematic: id }, version: 'v1.8.0' }),
+    ])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    render(<CacheView />)
+    expect(await screen.findByText('talos · 9f21ab…7c40')).toBeInTheDocument()
+    expect(screen.queryByText(/not referenced/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/orphan/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps two distinct schematics in separate groups', async () => {
+    vi.mocked(api.listCache).mockResolvedValue([
+      entry({ id: 1, os: 'talos', params: { schematic: 'aaa' }, version: 'v1.9.0' }),
+      entry({ id: 2, os: 'talos', params: { schematic: 'bbb' }, version: 'v1.9.0' }),
+    ])
+    render(<CacheView />)
+    await waitFor(() => expect(screen.getByText('talos · aaa')).toBeInTheDocument())
+    expect(screen.getByText('talos · bbb')).toBeInTheDocument()
+  })
+
+  it('still renders the cache when the schematic catalogue fails to load', async () => {
+    // Labels degrade to bare short IDs; the cache list itself must keep working.
+    const id = `9f21ab${'0'.repeat(54)}7c40`
+    vi.mocked(api.listCache).mockResolvedValue([
+      entry({ id: 1, os: 'talos', params: { schematic: id }, version: 'v1.8.0' }),
+    ])
+    vi.mocked(configsApi.listConfigs).mockRejectedValue(new Error('boom'))
+    render(<CacheView />)
+    expect(await screen.findByText('talos · 9f21ab…7c40')).toBeInTheDocument()
+    expect(screen.getByText('v1.8.0')).toBeInTheDocument()
   })
 })

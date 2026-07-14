@@ -7,7 +7,10 @@ import type { ColumnsType } from 'antd/es/table'
 import { CheckCircleFilled, CloseCircleFilled, PushpinOutlined, SearchOutlined, WarningFilled } from '@ant-design/icons'
 import type { CacheEntry } from '../api/cache'
 import { listCache, pinCache, reverifyCacheEntry, scanCache, unpinCache } from '../api/cache'
-import { applyClientFilters, groupEntries, humanSize, summarize } from '../api/cacheModel'
+import type { SchematicRef } from '../api/cacheModel'
+import { applyClientFilters, groupEntries, humanSize, labelGroup, summarize } from '../api/cacheModel'
+import { SCHEMATIC_KIND } from '../api/configKinds'
+import { listConfigs } from '../api/configs'
 
 type StateFilter = 'All' | 'In cycle' | 'Archived' | 'Pinned' | 'Failed'
 
@@ -38,6 +41,22 @@ export default function CacheView() {
   const [allEntries, setAllEntries] = useState<CacheEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // The live schematic catalogue, used to NAME the cache's schematic-keyed groups.
+  // `undefined` means "could not load" — distinct from "loaded, and empty", which
+  // is what licenses the "not referenced by any current schematic" claim.
+  const [schematics, setSchematics] = useState<SchematicRef[] | undefined>(undefined)
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const configs = await listConfigs()
+        setSchematics(configs.filter((c) => c.kind === SCHEMATIC_KIND))
+      } catch {
+        setSchematics(undefined) // labels degrade to bare short IDs; the cache list still works
+      }
+    })()
+  }, [])
 
   const [stateFilter, setStateFilter] = useState<StateFilter>('All')
   const [os, setOs] = useState<string | undefined>(undefined)
@@ -116,6 +135,10 @@ export default function CacheView() {
     [entries, version, stateFilter],
   )
   const groups = useMemo(() => groupEntries(visible), [visible])
+  const labelledGroups = useMemo(
+    () => groups.map((g) => ({ group: g, label: labelGroup(g, schematics) })),
+    [groups, schematics],
+  )
   // Strip + OS options come from the UNFILTERED snapshot (SGE I5): otherwise the
   // OS Select collapses to only the already-selected OS and can never be changed.
   const summary = useMemo(() => summarize(allEntries), [allEntries])
@@ -228,8 +251,7 @@ export default function CacheView() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Space style={{ justifyContent: 'space-between', width: '100%' }}>
-        <Typography.Title level={3} style={{ margin: 0 }}>Cache</Typography.Title>
+      <Space style={{ justifyContent: 'flex-end', width: '100%' }}>
         <Button icon={<SearchOutlined />} onClick={scan}>Scan now</Button>
       </Space>
 
@@ -309,14 +331,19 @@ export default function CacheView() {
           <Collapse
             activeKey={activeKeys}
             onChange={(keys) => setActiveKeys(keys as string[])}
-            items={groups.map((g) => ({
+            items={labelledGroups.map(({ group: g, label }) => ({
               key: g.key,
               label: (
-                <Space>
-                  <Typography.Text strong>{g.key}</Typography.Text>
-                  <Typography.Text type="secondary">
-                    {g.versionCount} version(s) · {humanSize(g.totalSize)}
-                  </Typography.Text>
+                <Space direction="vertical" size={0}>
+                  <Space>
+                    <Typography.Text strong>{label.title}</Typography.Text>
+                    <Typography.Text type="secondary">
+                      {g.versionCount} version(s) · {humanSize(g.totalSize)}
+                    </Typography.Text>
+                  </Space>
+                  {label.subtitle && (
+                    <Typography.Text type="secondary">{label.subtitle}</Typography.Text>
+                  )}
                 </Space>
               ),
               children: (
