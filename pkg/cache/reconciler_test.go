@@ -55,7 +55,7 @@ func TestReconciler_StartRunsStartupReconcileThenStop(t *testing.T) {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	if _, err := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true}); err != nil {
+	if _, err := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true}); err != nil {
 		t.Fatalf("CreateTarget: %v", err)
 	}
 

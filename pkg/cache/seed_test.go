@@ -66,8 +66,8 @@ func TestSeedTargets_PredefinedSet(t *testing.T) {
 	if !ok {
 		t.Fatal("talos predefined target missing")
 	}
-	if tal.RetainN != 3 || !tal.Predefined {
-		t.Errorf("talos target = %+v, want RetainN=3 Predefined=true", tal)
+	if tal.RetainN != 3 || tal.Source != "catalog" {
+		t.Errorf("talos target = %+v, want RetainN=3 Source=catalog", tal)
 	}
 	all, _ := store.ListTargets()
 	if len(all) != 3 {
@@ -102,8 +102,8 @@ func TestSeedTargets_HostDerivedTalosSchematic(t *testing.T) {
 	if !ok {
 		t.Fatal("host-derived talos target missing")
 	}
-	if hd.Predefined {
-		t.Errorf("host-derived target should have predefined=false, got %+v", hd)
+	if hd.Source != "host" {
+		t.Errorf("host-derived target should have source=host, got %+v", hd)
 	}
 	// Confirm the params string is the canonical JSON the UNIQUE constraint sees.
 	var m map[string]string

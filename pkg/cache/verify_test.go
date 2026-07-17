@@ -241,7 +241,7 @@ func TestVerifyVersion_AbsentFinalWithPartialIsNull(t *testing.T) {
 	viper.Set(config.CoreOSArchitecture, "x86_64")
 
 	store := newReconcileStore(t)
-	tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatalf("CreateTarget: %v", err)
 	}

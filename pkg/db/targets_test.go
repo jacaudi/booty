@@ -20,7 +20,7 @@ func TestCreateAndGetTarget(t *testing.T) {
 
 	id, err := s.CreateTarget(Target{
 		OS: "talos", Arch: "amd64", Params: `{"schematic":"abc"}`,
-		Mode: "discovery", RetainN: 3, Predefined: true, Enabled: true,
+		Mode: "discovery", RetainN: 3, Source: "catalog", Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateTarget: %v", err)
@@ -34,14 +34,14 @@ func TestCreateAndGetTarget(t *testing.T) {
 		t.Fatalf("GetTarget: %v", err)
 	}
 	if got.OS != "talos" || got.Arch != "amd64" || got.Mode != "discovery" ||
-		got.RetainN != 3 || !got.Predefined || !got.Enabled {
+		got.RetainN != 3 || got.Source != "catalog" || !got.Enabled {
 		t.Errorf("GetTarget = %+v, mismatch", got)
 	}
 }
 
 func TestCreateTarget_UniqueConflict(t *testing.T) {
 	s := newTestStore(t)
-	base := Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "manual", Enabled: true}
+	base := Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "manual", Source: "api", Enabled: true}
 	if _, err := s.CreateTarget(base); err != nil {
 		t.Fatalf("first CreateTarget: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestCreateTarget_UniqueConflict(t *testing.T) {
 
 func TestUpsertTarget_IdempotentOnConflict(t *testing.T) {
 	s := newTestStore(t)
-	base := Target{OS: "flatcar", Arch: "amd64", Params: "{}", Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true}
+	base := Target{OS: "flatcar", Arch: "amd64", Params: "{}", Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true}
 	if err := s.UpsertTarget(base); err != nil {
 		t.Fatalf("first UpsertTarget: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestUpsertTarget_IdempotentOnConflict(t *testing.T) {
 
 func TestEnsureTargetCreateIfAbsent(t *testing.T) {
 	s := newTestStore(t)
-	tgt := Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true}
+	tgt := Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true}
 	if err := s.EnsureTarget(tgt); err != nil {
 		t.Fatalf("EnsureTarget (fresh): %v", err)
 	}
@@ -99,7 +99,7 @@ func TestEnsureTargetCreateIfAbsent(t *testing.T) {
 
 func TestUpdateTargetParamsPreservesVersions(t *testing.T) {
 	s := newTestStore(t)
-	id, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: "{}", Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true})
+	id, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: "{}", Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,10 +124,10 @@ func TestUpdateTargetParamsPreservesVersions(t *testing.T) {
 
 func TestListTargets(t *testing.T) {
 	s := newTestStore(t)
-	if _, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "manual", Enabled: true}); err != nil {
+	if _, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "manual", Source: "api", Enabled: true}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := s.CreateTarget(Target{OS: "debian", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", Enabled: true}); err != nil {
+	if _, err := s.CreateTarget(Target{OS: "debian", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", Source: "api", Enabled: true}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	all, err := s.ListTargets()

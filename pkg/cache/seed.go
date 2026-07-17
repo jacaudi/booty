@@ -49,9 +49,9 @@ func seedTargets(store *db.Store) error {
 
 	talosArch := viper.GetString(config.TalosArchitecture)
 	predefined := []db.Target{
-		{OS: "flatcar", Arch: viper.GetString(config.FlatcarArchitecture), Params: flatcarParams, Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true},
-		{OS: "fedora-coreos", Arch: viper.GetString(config.CoreOSArchitecture), Params: coreosParams, Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true},
-		{OS: "talos", Arch: talosArch, Params: defParams, Mode: "discovery", RetainN: viper.GetInt(config.TalosRetainMinors), Predefined: true, Enabled: true},
+		{OS: "flatcar", Arch: viper.GetString(config.FlatcarArchitecture), Params: flatcarParams, Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true},
+		{OS: "fedora-coreos", Arch: viper.GetString(config.CoreOSArchitecture), Params: coreosParams, Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true},
+		{OS: "talos", Arch: talosArch, Params: defParams, Mode: "discovery", RetainN: viper.GetInt(config.TalosRetainMinors), Source: "catalog", Enabled: true},
 	}
 	for _, t := range predefined {
 		if err := store.EnsureTarget(t); err != nil {

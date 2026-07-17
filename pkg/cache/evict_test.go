@@ -26,7 +26,7 @@ func newEvictFixture(t *testing.T) *db.Store {
 	t.Cleanup(viper.Reset)
 	viper.Set(config.DataDir, t.TempDir())
 	store := newReconcileStore(t)
-	tid, err := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"schem1"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, err := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"schem1"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatalf("CreateTarget: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestEvictNeverRemovesNewestCachedVersion(t *testing.T) {
 	viper.Set(config.DataDir, t.TempDir())
 	store := newReconcileStore(t)
 
-	tid, err := store.CreateTarget(db.Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, err := store.CreateTarget(db.Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

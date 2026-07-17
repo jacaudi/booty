@@ -31,7 +31,7 @@ func EnsureSchematicTarget(store *db.Store, schematic string) error {
 	if err := store.EnsureTarget(db.Target{
 		OS: "talos", Arch: viper.GetString(config.TalosArchitecture), Params: params,
 		Mode: "discovery", RetainN: viper.GetInt(config.TalosRetainMinors),
-		Predefined: false, Enabled: true,
+		Source: "host", Enabled: true,
 	}); err != nil {
 		return fmt.Errorf("cache: ensure schematic target %s: %w", schematic, err)
 	}

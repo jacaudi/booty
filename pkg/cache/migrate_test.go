@@ -33,7 +33,7 @@ func TestMigrateFreshInstallIsNoOp(t *testing.T) {
 
 func TestMigrateRewritesOldShapeRowInPlace(t *testing.T) {
 	store := migrateFixture(t)
-	id, err := store.CreateTarget(db.Target{OS: "flatcar", Arch: "amd64", Params: "{}", Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true})
+	id, err := store.CreateTarget(db.Target{OS: "flatcar", Arch: "amd64", Params: "{}", Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,9 +68,9 @@ func TestMigrateRewritesOldShapeRowInPlace(t *testing.T) {
 
 func TestMigrateDisablesOldRowWhenDestinationExists(t *testing.T) {
 	store := migrateFixture(t)
-	oldID, _ := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: "{}", Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true})
+	oldID, _ := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: "{}", Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true})
 	// Operator pre-created the destination row.
-	if _, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 2, Predefined: false, Enabled: true}); err != nil {
+	if _, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 2, Source: "api", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,16 +107,16 @@ func TestMigrateDisablesOldRowWhenDestinationExists(t *testing.T) {
 }
 
 func TestMigrateLeavesNonPredefinedOldRowUntouchedWhenDestinationExists(t *testing.T) {
-	// A pre-#48 operator-created row (Params="{}", Predefined=false) that
+	// A pre-#48 operator-created row (Params="{}", Source="api") that
 	// collides with an existing destination is left ENABLED and un-migrated
-	// (only Predefined-true rows are the migration's own handled-marker), but
+	// (only catalog-source rows are the migration's own handled-marker), but
 	// must be WARN-logged every startup until the operator resolves it.
 	store := migrateFixture(t)
-	oldID, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: "{}", Mode: "discovery", RetainN: 1, Predefined: false, Enabled: true})
+	oldID, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: "{}", Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 2, Predefined: false, Enabled: true}); err != nil {
+	if _, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 2, Source: "api", Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,7 +128,7 @@ func TestMigrateLeavesNonPredefinedOldRowUntouchedWhenDestinationExists(t *testi
 		t.Fatal(err)
 	}
 	if !old.Enabled || old.Params != "{}" {
-		t.Fatalf("non-predefined old row must be left untouched (still enabled, params unchanged): %+v", old)
+		t.Fatalf("non-catalog old row must be left untouched (still enabled, params unchanged): %+v", old)
 	}
 }
 
@@ -183,7 +183,7 @@ func TestMigrateDiskStepRunsEvenWhenDBAlreadyMigrated(t *testing.T) {
 	// Crash-consistency (SGE #3): the disk step keys ONLY on directories, never
 	// on DB/params shape — a crash between the two steps retries the remainder.
 	store := migrateFixture(t)
-	if _, err := store.CreateTarget(db.Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true}); err != nil {
+	if _, err := store.CreateTarget(db.Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true}); err != nil {
 		t.Fatal(err) // DB already in the new shape
 	}
 	oldDir := filepath.Join(cacheRoot(), "flatcar", "-", "amd64", "4230.2.2")

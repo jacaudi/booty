@@ -16,14 +16,14 @@ import (
 // TargetDTO is the wire representation of a cache target. Params is decoded
 // from the canonical JSON encoding stored in the DB to a plain map for callers.
 type TargetDTO struct {
-	ID         int64             `json:"id"`
-	OS         string            `json:"os"`
-	Arch       string            `json:"arch"`
-	Params     map[string]string `json:"params"`
-	Mode       string            `json:"mode"`
-	RetainN    int               `json:"retainN"`
-	Predefined bool              `json:"predefined"`
-	Enabled    bool              `json:"enabled"`
+	ID      int64             `json:"id"`
+	OS      string            `json:"os"`
+	Arch    string            `json:"arch"`
+	Params  map[string]string `json:"params"`
+	Mode    string            `json:"mode"`
+	RetainN int               `json:"retainN"`
+	Source  string            `json:"source"`
+	Enabled bool              `json:"enabled"`
 }
 
 type listTargetsOutput struct {
@@ -36,7 +36,7 @@ func toTargetDTO(t db.Target) TargetDTO {
 	params, _ := cache.DecodeParams(t.Params)
 	return TargetDTO{
 		ID: t.ID, OS: t.OS, Arch: t.Arch, Params: params, Mode: t.Mode,
-		RetainN: t.RetainN, Predefined: t.Predefined, Enabled: t.Enabled,
+		RetainN: t.RetainN, Source: t.Source, Enabled: t.Enabled,
 	}
 }
 
@@ -131,7 +131,7 @@ func registerTargets(api huma.API, deps APIDeps) {
 		}
 		id, err := deps.Store.CreateTarget(db.Target{
 			OS: in.Body.OS, Arch: in.Body.Arch, Params: encoded, Mode: in.Body.Mode,
-			RetainN: in.Body.RetainN, Predefined: false, Enabled: true,
+			RetainN: in.Body.RetainN, Source: "api", Enabled: true,
 		})
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("create target (duplicate?)", err)

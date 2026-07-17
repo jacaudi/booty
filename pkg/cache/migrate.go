@@ -22,9 +22,9 @@ import (
 //  1. DB step (keyed on the old shape existing): every flatcar/fedora-coreos
 //     target with params="{}" has its params rewritten in place to
 //     {"channel": <current flag>}. If the destination (os,arch,params) row
-//     already exists, a PREDEFINED old row is DISABLED and logged — never
-//     silently merged (Predefined flips to false as the one-time
-//     already-handled marker). A non-predefined old-shape row (an operator
+//     already exists, a CATALOG old row is DISABLED and logged — never
+//     silently merged (source flips catalog->api as the one-time
+//     already-handled marker). A non-catalog old-shape row (an operator
 //     created it pre-#48) that collides is left untouched — enabled, params
 //     unrewritten — and WARN-logged every startup until the operator
 //     resolves the collision.
@@ -73,20 +73,19 @@ func MigrateChannelLayout(store *db.Store) error {
 			return fmt.Errorf("cache: migrate encode params: %w", err)
 		}
 		if hasParams[t.OS+"|"+t.Arch+"|"+newParams] {
-			// Predefined is the one-time "already handled this collision" marker:
-			// flipped false the first time this branch disables a row, so later
-			// startups skip silently even after an operator re-enables the row via
-			// PATCH (which never touches Predefined) — Enabled alone can't carry
-			// this because "never touched, freshly enabled" and "disabled once,
-			// then re-enabled" are otherwise indistinguishable (D1: API owns rows;
-			// migrate must not re-litigate an operator's later decision).
-			if !t.Predefined {
-				slog.Warn("cache: migrate: destination target exists but pre-#48 row is not predefined; leaving it untouched (disable it via PATCH if unwanted)",
+			// source != "catalog" is the one-time "already handled this
+			// collision" marker: a catalog row disabled here is flipped to
+			// "api" so later startups skip it silently even after an operator
+			// re-enables it via PATCH. Enabled alone can't carry this because
+			// "freshly enabled" and "disabled once, then re-enabled" are
+			// otherwise indistinguishable (D1: API owns rows post-seed).
+			if t.Source != "catalog" {
+				slog.Warn("cache: migrate: destination target exists but pre-#48 row is operator-owned; leaving it untouched (disable it via PATCH if unwanted)",
 					"os", t.OS, "arch", t.Arch, "target", t.ID)
 				continue
 			}
 			t.Enabled = false
-			t.Predefined = false
+			t.Source = "api"
 			if err := store.UpsertTarget(t); err != nil {
 				return fmt.Errorf("cache: migrate disable old %s row: %w", t.OS, err)
 			}

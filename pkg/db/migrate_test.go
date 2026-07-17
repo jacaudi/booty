@@ -28,8 +28,8 @@ func TestMigrate_CreatesTablesAndSetsUserVersion(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 6 {
-		t.Errorf("user_version = %d, want 6 after all migrations", uv)
+	if uv != 7 {
+		t.Errorf("user_version = %d, want 7 after all migrations", uv)
 	}
 }
 
@@ -52,21 +52,21 @@ func TestMigrate_IsIdempotentAcrossReopen(t *testing.T) {
 	if err := s2.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 6 {
-		t.Errorf("user_version = %d after reopen, want 6", uv)
+	if uv != 7 {
+		t.Errorf("user_version = %d after reopen, want 7", uv)
 	}
 }
 
 func TestMigration0003ConfigsRoles(t *testing.T) {
 	s := newTestStore(t) // Open() runs every migration, incl. 0003
 
-	// user_version reached 6 (six migrations applied).
+	// user_version reached 7 (seven migrations applied).
 	var uv int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if uv != 6 {
-		t.Fatalf("user_version = %d, want 6", uv)
+	if uv != 7 {
+		t.Fatalf("user_version = %d, want 7", uv)
 	}
 
 	// The four new tables + the hosts.config_id column exist.
@@ -297,8 +297,8 @@ func TestMigration0006DebianConfig(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if uv != 6 {
-		t.Fatalf("user_version = %d, want 6", uv)
+	if uv != 7 {
+		t.Fatalf("user_version = %d, want 7", uv)
 	}
 
 	// The rebuilt kind CHECK admits 'debianconfig' and still rejects junk.
@@ -365,5 +365,90 @@ func TestMigration0006PreservesData(t *testing.T) {
 	}
 	if _, err := s.CreateConfig("dc-check", "debianconfig"); err != nil {
 		t.Fatalf("kind='debianconfig' rejected on an upgraded DB: %v", err)
+	}
+}
+
+func TestMigrate0007_ColumnAndCheck(t *testing.T) {
+	s := newTestStore(t) // existing helper; opens + migrates fully
+	if _, err := s.db.Exec(`INSERT INTO targets (os,arch,params,mode,retain_n,source,enabled)
+		VALUES ('talos','amd64','{"schematic":"x"}','discovery',3,'catalog',1)`); err != nil {
+		t.Fatalf("insert catalog row: %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO targets (os,arch,params,mode,retain_n,source,enabled)
+		VALUES ('talos','amd64','{"schematic":"y"}','discovery',3,'bogus',1)`); err == nil {
+		t.Fatal("expected CHECK to reject source='bogus'")
+	}
+}
+
+// TestMigrate0007BackfillsSource_Upgrade drives the CASE backfill on REAL data,
+// following the hand-built-DB upgrade pattern used by TestMigration0006*. It
+// applies 0001..0006 by hand, seeds one row per source class + a matching host,
+// sets user_version=6, then Open() runs 0007 and we assert the backfill.
+func TestMigrate0007BackfillsSource_Upgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgrade7.db")
+	raw, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	for _, m := range []string{
+		"0001_init.sql", "0002_cache_entries.sql", "0003_configs_roles.sql",
+		"0004_schematic_id.sql", "0005_clusters.sql", "0006_debianconfig.sql",
+	} {
+		stmt, rerr := migrationsFS.ReadFile("migrations/" + m)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if _, err := raw.Exec(string(stmt)); err != nil {
+			t.Fatalf("apply %s: %v", m, err)
+		}
+	}
+	if _, err := raw.Exec(`PRAGMA user_version = 6`); err != nil {
+		t.Fatal(err)
+	}
+
+	// predefined flatcar row -> expect source='catalog'
+	if _, err := raw.Exec(`INSERT INTO targets (os,arch,params,mode,retain_n,predefined,enabled)
+		VALUES ('flatcar','amd64','{"channel":"stable"}','discovery',1,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	// host-derived talos schematic (predefined=0) with a MATCHING hosts row -> 'host'
+	if _, err := raw.Exec(`INSERT INTO targets (os,arch,params,mode,retain_n,predefined,enabled)
+		VALUES ('talos','amd64','{"schematic":"HS"}','discovery',3,0,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO hosts (mac,os,schematic) VALUES ('aa:bb','talos','HS')`); err != nil {
+		t.Fatal(err)
+	}
+	// plain operator/api row (predefined=0, no host match) -> 'api'
+	if _, err := raw.Exec(`INSERT INTO targets (os,arch,params,mode,retain_n,predefined,enabled)
+		VALUES ('talos','amd64','{"schematic":"ORPHAN"}','discovery',3,0,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(path) // runs 0007
+	if err != nil {
+		t.Fatalf("Open (0007): %v", err)
+	}
+	defer store.Close()
+	got := map[string]string{} // params -> source
+	rows, _ := store.db.Query(`SELECT params, source FROM targets`)
+	defer rows.Close()
+	for rows.Next() {
+		var p, s string
+		rows.Scan(&p, &s)
+		got[p] = s
+	}
+	for params, want := range map[string]string{
+		`{"channel":"stable"}`:   "catalog",
+		`{"schematic":"HS"}`:     "host",
+		`{"schematic":"ORPHAN"}`: "api",
+	} {
+		if got[params] != want {
+			t.Errorf("source for %s = %q, want %q", params, got[params], want)
+		}
 	}
 }

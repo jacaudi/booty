@@ -5,31 +5,31 @@ import "fmt"
 // Target is one operator-declared cache target. Params is the canonical JSON
 // encoding of the per-OS path-discriminating params (e.g. {"schematic":"..."}).
 type Target struct {
-	ID         int64
-	OS         string
-	Arch       string
-	Params     string
-	Mode       string // 'discovery' | 'manual'
-	RetainN    int
-	Predefined bool
-	Enabled    bool
+	ID      int64
+	OS      string
+	Arch    string
+	Params  string
+	Mode    string // 'discovery' | 'manual'
+	RetainN int
+	Source  string // 'catalog' | 'api' | 'host'
+	Enabled bool
 }
 
-// UpsertTarget inserts t, or updates mode/retain_n/predefined/enabled if
+// UpsertTarget inserts t, or updates mode/retain_n/source/enabled if
 // (os,arch,params) already exists. Used for idempotent predefined-target
 // seeding (re-run every tick). Params MUST be the canonical encoding so equal
 // param sets collide on the UNIQUE(os,arch,params) constraint.
 func (s *Store) UpsertTarget(t Target) error {
 	_, err := s.db.Exec(
-		`INSERT INTO targets (os, arch, params, mode, retain_n, predefined, enabled)
+		`INSERT INTO targets (os, arch, params, mode, retain_n, source, enabled)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(os, arch, params) DO UPDATE SET
 		   mode       = excluded.mode,
 		   retain_n   = excluded.retain_n,
-		   predefined = excluded.predefined,
+		   source     = excluded.source,
 		   enabled    = excluded.enabled,
 		   updated_at = datetime('now')`,
-		t.OS, t.Arch, t.Params, t.Mode, t.RetainN, t.Predefined, t.Enabled,
+		t.OS, t.Arch, t.Params, t.Mode, t.RetainN, t.Source, t.Enabled,
 	)
 	if err != nil {
 		return fmt.Errorf("db: upsert target %s/%s: %w", t.OS, t.Arch, err)
@@ -44,10 +44,10 @@ func (s *Store) UpsertTarget(t Target) error {
 // canonical encoding so equal param sets collide on UNIQUE(os,arch,params).
 func (s *Store) EnsureTarget(t Target) error {
 	_, err := s.db.Exec(
-		`INSERT INTO targets (os, arch, params, mode, retain_n, predefined, enabled)
+		`INSERT INTO targets (os, arch, params, mode, retain_n, source, enabled)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(os, arch, params) DO NOTHING`,
-		t.OS, t.Arch, t.Params, t.Mode, t.RetainN, t.Predefined, t.Enabled,
+		t.OS, t.Arch, t.Params, t.Mode, t.RetainN, t.Source, t.Enabled,
 	)
 	if err != nil {
 		return fmt.Errorf("db: ensure target %s/%s: %w", t.OS, t.Arch, err)
@@ -59,9 +59,9 @@ func (s *Store) EnsureTarget(t Target) error {
 // violates the UNIQUE constraint and returns an error.
 func (s *Store) CreateTarget(t Target) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO targets (os, arch, params, mode, retain_n, predefined, enabled)
+		`INSERT INTO targets (os, arch, params, mode, retain_n, source, enabled)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		t.OS, t.Arch, t.Params, t.Mode, t.RetainN, t.Predefined, t.Enabled,
+		t.OS, t.Arch, t.Params, t.Mode, t.RetainN, t.Source, t.Enabled,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("db: create target %s/%s: %w", t.OS, t.Arch, err)
@@ -90,9 +90,9 @@ func (s *Store) UpdateTargetParams(id int64, params string) error {
 func (s *Store) GetTarget(id int64) (*Target, error) {
 	var t Target
 	err := s.db.QueryRow(
-		`SELECT id, os, arch, params, mode, retain_n, predefined, enabled
+		`SELECT id, os, arch, params, mode, retain_n, source, enabled
 		   FROM targets WHERE id = ?`, id,
-	).Scan(&t.ID, &t.OS, &t.Arch, &t.Params, &t.Mode, &t.RetainN, &t.Predefined, &t.Enabled)
+	).Scan(&t.ID, &t.OS, &t.Arch, &t.Params, &t.Mode, &t.RetainN, &t.Source, &t.Enabled)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (s *Store) GetTarget(id int64) (*Target, error) {
 // ListTargets returns all targets ordered by id.
 func (s *Store) ListTargets() ([]Target, error) {
 	rows, err := s.db.Query(
-		`SELECT id, os, arch, params, mode, retain_n, predefined, enabled
+		`SELECT id, os, arch, params, mode, retain_n, source, enabled
 		   FROM targets ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("db: list targets: %w", err)
@@ -112,7 +112,7 @@ func (s *Store) ListTargets() ([]Target, error) {
 	var out []Target
 	for rows.Next() {
 		var t Target
-		if err := rows.Scan(&t.ID, &t.OS, &t.Arch, &t.Params, &t.Mode, &t.RetainN, &t.Predefined, &t.Enabled); err != nil {
+		if err := rows.Scan(&t.ID, &t.OS, &t.Arch, &t.Params, &t.Mode, &t.RetainN, &t.Source, &t.Enabled); err != nil {
 			return nil, fmt.Errorf("db: scan target: %w", err)
 		}
 		out = append(out, t)
