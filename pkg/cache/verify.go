@@ -136,6 +136,31 @@ func hashFile(filePath string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// errKeyringParse tags a failure to parse the armored keyring in the shared
+// checkDetachedSignature core, so verifyDetachedGPG can classify it as
+// CORRUPTION (benign / fail-closed, per its doc comment) rather than letting it
+// fall through to the FORGERY default arm. Without this, moving the parse into
+// the shared helper would silently reclassify a malformed key as forgery —
+// changing warn-policy availability (forgery is always rejected; corruption
+// warn-lands).
+var errKeyringParse = errors.New("keyring parse")
+
+// checkDetachedSignature is the shared openpgp core for detached-signature
+// verification: parse the armored keyring, then check sig (binary, detached)
+// over signed. Both verifyDetachedGPG (fetches the signature over HTTP) and
+// verifyDetachedGPGLocal (reads it from disk) call this single helper so "how
+// we check a detached sig" stays single-sourced (DRY). A keyring-parse failure
+// is wrapped with errKeyringParse so callers can distinguish it from a genuine
+// signature-verification failure.
+func checkDetachedSignature(key []byte, signed io.Reader, sig []byte) error {
+	keyring, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(key))
+	if err != nil {
+		return fmt.Errorf("%w: %v", errKeyringParse, err)
+	}
+	_, err = openpgp.CheckDetachedSignature(keyring, signed, bytes.NewReader(sig), nil)
+	return err
+}
+
 // verifyDetachedGPG fetches the detached BINARY signature at a.SigURL and checks
 // it over filePath against a.GPGKey (armored keyring). Unfetchable/unparseable
 // material and an unknown/expired key are CORRUPTION (benign / fail-closed); a
@@ -143,10 +168,6 @@ func hashFile(filePath string) (string, error) {
 // CheckDetachedSignature (not the Armored variant); the key file is armored →
 // ReadArmoredKeyRing (spike §9).
 func verifyDetachedGPG(ctx context.Context, filePath string, a ostype.Artifact) artifactVerdict {
-	keyring, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(a.GPGKey))
-	if err != nil {
-		return artifactVerdict{class: classCorruption, err: fmt.Errorf("%s: keyring parse: %w", a.Filename, err)}
-	}
 	sig, err := fetchBytes(ctx, a.SigURL)
 	if err != nil {
 		return artifactVerdict{class: classCorruption, err: fmt.Errorf("%s: signature material unavailable: %w", a.Filename, err)}
@@ -157,10 +178,15 @@ func verifyDetachedGPG(ctx context.Context, filePath string, a ostype.Artifact) 
 	}
 	defer signed.Close()
 
-	_, err = openpgp.CheckDetachedSignature(keyring, signed, bytes.NewReader(sig), nil)
+	err = checkDetachedSignature(a.GPGKey, signed, sig)
 	switch {
 	case err == nil:
 		return artifactVerdict{class: classPass}
+	case errors.Is(err, errKeyringParse):
+		// An unparseable/malformed armored key is CORRUPTION (benign / fail-
+		// closed), NOT forgery — matching this function's doc comment and the
+		// pre-DRY-refactor behavior. Guards warn-policy availability (§5).
+		return artifactVerdict{class: classCorruption, err: fmt.Errorf("%s: keyring parse: %w", a.Filename, err)}
 	case errors.Is(err, pgperrors.ErrUnknownIssuer), errors.Is(err, pgperrors.ErrKeyExpired), errors.Is(err, pgperrors.ErrSignatureExpired):
 		// ErrSignatureExpired (a signature-packet expiry, distinct from key
 		// expiry) joins the same benign arm as ErrKeyExpired — matching the
@@ -171,6 +197,29 @@ func verifyDetachedGPG(ctx context.Context, filePath string, a ostype.Artifact) 
 	default:
 		return artifactVerdict{class: classForgery, err: fmt.Errorf("%s: signature mismatch: %w", a.Filename, err)}
 	}
+}
+
+// verifyDetachedGPGLocal checks the detached BINARY signature at sigPath over
+// signedPath against key (armored keyring), reading both from disk — no HTTP
+// fetch. Used offline for material already downloaded to the cache (e.g. a
+// DVD ISO's SHA256SUMS/SHA256SUMS.sign pair), sharing checkDetachedSignature's
+// openpgp core with verifyDetachedGPG rather than re-parsing/re-checking
+// independently.
+func verifyDetachedGPGLocal(signedPath, sigPath string, key []byte) error {
+	sig, err := os.ReadFile(sigPath)
+	if err != nil {
+		return fmt.Errorf("%s: read signature: %w", sigPath, err)
+	}
+	signed, err := os.Open(signedPath)
+	if err != nil {
+		return fmt.Errorf("%s: open for verify: %w", signedPath, err)
+	}
+	defer signed.Close()
+
+	if err := checkDetachedSignature(key, signed, sig); err != nil {
+		return fmt.Errorf("%s: signature verification failed: %w", signedPath, err)
+	}
+	return nil
 }
 
 func fetchBytes(ctx context.Context, url string) ([]byte, error) {

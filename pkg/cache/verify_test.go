@@ -172,6 +172,31 @@ func TestVerifyArtifact_FailClosedOnSig404(t *testing.T) {
 	}
 }
 
+// TestVerifyArtifact_UnparseableKeyIsCorruption pins the classification of an
+// unparseable armored keyring: with a REACHABLE served .sig (so fetchBytes and
+// the file open both succeed and control actually reaches
+// ReadArmoredKeyRing — unlike FailClosedOnUnobtainable, which 404s the sig so
+// the parse is never hit), a malformed GPGKey must classify as CORRUPTION, NOT
+// forgery. Corruption warn-lands while forgery is always rejected
+// (TestLandArtifact_PolicyTable), so misclassifying a bad key as forgery would
+// silently change warn-policy availability — the exact regression this guards.
+// It matches verifyDetachedGPG's doc comment ("unparseable material … is
+// CORRUPTION").
+func TestVerifyArtifact_UnparseableKeyIsCorruption(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte("signed-artifact")
+	p := writeFile(t, dir, "vmlinuz", body)
+	// gpgFixture serves a real detached sig over body at a reachable 200 URL; we
+	// discard its keyring and substitute garbage so the parse is what fails.
+	_, sigURL, closeFn := gpgFixture(t, body)
+	t.Cleanup(closeFn)
+
+	a := ostype.Artifact{Filename: "vmlinuz", URL: "https://ex/vmlinuz", SigURL: sigURL, GPGKey: []byte("-----BEGIN PGP PUBLIC KEY BLOCK-----\nnot a real key\n-----END PGP PUBLIC KEY BLOCK-----")}
+	if v := verifyArtifact(t.Context(), p, "", a); v.class != classCorruption || v.err == nil {
+		t.Errorf("unparseable keyring must be CORRUPTION (non-nil err), got class=%d err=%v", v.class, v.err)
+	}
+}
+
 func TestAggregateVerdicts(t *testing.T) {
 	// none verifiable → NULL
 	if verified, _ := aggregateVerdicts([]artifactVerdict{{class: classNotVerifiable}, {class: classNotVerifiable}}); verified != nil {
