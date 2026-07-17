@@ -135,12 +135,15 @@ recording who manages it — see [DATABASE.md](DATABASE.md#targets):
   (`EnsureSchematicTarget`, the surviving `reconcileHostSchematics` loop).
   Also never touched by the catalog pass.
 
-**Adoption.** If an existing `source=api` (or freshly-created) row's identity
-`(os,arch,params)` matches a catalog entry, the catalog pass **adopts** it:
-`source` becomes `catalog` and its declared fields reconcile to the entry.
-This is a one-way transition — once adopted, that row is catalog-managed until
-removed from the catalog (at which point it is disabled, not returned to
-`api`).
+**Adoption.** If an existing row's identity `(os,arch,params)` matches a
+catalog entry, the catalog pass **adopts** it regardless of its prior
+`source` — `api`, freshly-created, or even `host` — setting `source` to
+`catalog` and reconciling its declared fields to the entry. This is a
+one-way transition — once adopted, that row is catalog-managed until removed
+from the catalog (at which point it is disabled, not returned to its prior
+source). Adopting a `source=host` row is exactly the scenario covered in
+[Known limitation](#known-limitation-a-host-managed-talos-schematic-listed-in-the-catalog)
+below.
 
 ### Authoritative for declared fields only
 
@@ -282,8 +285,15 @@ see [Debian — not yet supported](#debian--not-yet-supported).)
 A Talos schematic can be **both** host-derived (`source=host`, from a
 registered host's own `schematic`) **and** catalog-declared (`source=catalog`)
 if you happen to list the same `(os, arch, spec)` identity in both places —
-there is only one target row per identity, so whichever pass touches it last
-wins for `source`.
+there is only one target row per identity, and the outcome is deterministic,
+not a race: **the catalog pass always wins** for any identity it lists. Every
+reconcile tick, `reconcileAll` runs `applyCatalog` before
+`reconcileHostSchematics` (`pkg/cache/reconciler.go`), and `applyCatalog`
+unconditionally sets `source='catalog'` (`UpdateTargetFromCatalog`,
+`pkg/db/targets.go`) for any existing row whose identity matches a catalog
+entry. The host loop's writer, `EnsureSchematicTarget` (via `EnsureTarget`,
+`INSERT ... ON CONFLICT DO NOTHING`), can never overwrite an existing row's
+`source` — it only creates a row when none exists yet.
 
 Concretely: if you list a schematic in `catalog.yaml` that a registered host
 also uses, that target becomes (or stays) `source=catalog` — governed by the
