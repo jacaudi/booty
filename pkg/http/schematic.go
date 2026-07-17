@@ -97,8 +97,9 @@ const vanillaSchematicSource = "customization: {}\n"
 // boot to Factory reachability — a disposability regression and an air-gap
 // hazard (a private/self-hosted Factory may be down at boot). Idempotent:
 // any existing config named "vanilla" makes it a no-op. Its cache target
-// needs no ensuring here — seedTargets already seeds the predefined Talos
-// target from the --talosSchematic default every reconcile tick.
+// needs no ensuring here — the catalog-apply pass (a catalog entry, not
+// seeded here) covers the vanilla/default Talos schematic target every
+// reconcile tick.
 func SeedVanillaSchematic(store *db.Store) error {
 	list, err := store.ListConfigs()
 	if err != nil {

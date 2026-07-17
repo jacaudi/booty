@@ -334,11 +334,19 @@ func run(cmd *cobra.Command, argv []string) error {
 
 	// One-time #48 migration: rewrite pre-channel target rows and rename
 	// <os>/- cache dirs to the flag channel. Must run before the reconciler's
-	// first pass — seedTargets (create-if-absent) would otherwise mint a NEW
-	// channel row next to the un-migrated "{}" one. Fail-fast: a malformed
-	// channel flag aborts startup.
+	// first pass — the catalog-apply pass (create-if-absent) would otherwise
+	// mint a NEW channel row next to the un-migrated "{}" one. Fail-fast: a
+	// malformed channel flag aborts startup.
 	if err := cache.MigrateChannelLayout(store); err != nil {
 		return fmt.Errorf("cache migrate: %w", err)
+	}
+
+	// Load the declarative cache-target catalog (fail-fast): an operator
+	// catalog.yaml if present, else the flag-derived default set. Must run
+	// after MigrateChannelLayout so the source column + backfill are in place.
+	catalog, err := cache.LoadCatalog()
+	if err != nil {
+		return fmt.Errorf("cache: load catalog: %w", err)
 	}
 
 	// P5: the registry always shows the Factory's vanilla schematic. Seeded by
@@ -360,6 +368,7 @@ func run(cmd *cobra.Command, argv []string) error {
 		store,
 		viper.GetDuration(config.CacheInterval),
 		viper.GetInt(config.CacheConcurrency),
+		catalog,
 	)
 	reconciler.Start(ctx)
 

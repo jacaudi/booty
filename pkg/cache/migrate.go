@@ -12,9 +12,9 @@ import (
 )
 
 // MigrateChannelLayout is the one-time #48 migration, run at startup BEFORE
-// the reconciler starts (seedTargets runs inside reconcileAll; the in-place
-// rewrite must precede the create-if-absent seed so target_versions and
-// cache_entries survive on the same row).
+// the reconciler starts (the catalog-apply pass runs inside reconcileAll; the
+// in-place rewrite must precede the create-if-absent apply so target_versions
+// and cache_entries survive on the same row).
 //
 // Two steps, INDEPENDENTLY idempotent (crash-consistency: neither keys on the
 // other having run, so a crash between them retries the remainder next start):

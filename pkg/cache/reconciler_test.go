@@ -17,10 +17,10 @@ import (
 // immediate reconcile over all targets and Stop terminates the coordinator.
 // The test is fully hermetic: ALL upstreams (talos factory, flatcar, coreos
 // streams + builds) point at one httptest server, so no real network call is
-// made even though seedTargets also seeds the flatcar/fedora-coreos predefined
-// targets. The talos path returns a real version list + artifact bytes; the
-// flatcar/coreos paths return a benign 404, and those discovery failures are
-// non-fatal slog.Warns — the test still asserts the talos target caches.
+// made. A nil catalog means applyCatalog creates nothing; only the talos
+// target the test creates directly is reconciled. The talos path returns a
+// real version list + artifact bytes; the flatcar/coreos paths would return a
+// benign 404 if hit, and those discovery failures are non-fatal slog.Warns.
 func TestReconciler_StartRunsStartupReconcileThenStop(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -55,11 +55,14 @@ func TestReconciler_StartRunsStartupReconcileThenStop(t *testing.T) {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	if _, err := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true}); err != nil {
+	// Source=api (not catalog): the catalog under test is nil, and applyCatalog
+	// disables any source=catalog row absent from the desired set — this
+	// fixture target must survive reconcileAll untouched to be reconciled.
+	if _, err := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true}); err != nil {
 		t.Fatalf("CreateTarget: %v", err)
 	}
 
-	r := NewReconciler(store, time.Hour, 4) // long interval: rely on the startup reconcile
+	r := NewReconciler(store, time.Hour, 4, nil) // long interval: rely on the startup reconcile
 	r.Start(t.Context())
 
 	// Poll for the startup reconcile to land the version on disk.
@@ -74,7 +77,7 @@ func TestReconciler_StartRunsStartupReconcileThenStop(t *testing.T) {
 }
 
 func TestTriggerCoalesces(t *testing.T) {
-	r := NewReconciler(nil, time.Hour, 1)
+	r := NewReconciler(nil, time.Hour, 1, nil)
 	// Trigger before Start: fills the buffered channel without blocking, and a
 	// second call coalesces (no panic, no block).
 	r.Trigger()

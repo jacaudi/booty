@@ -12,14 +12,16 @@ import (
 // for one schematic ID so the reconciler eagerly fetches its boot assets
 // (kernel-<arch>, initramfs-<arch>.xz) across the retained version window
 // (P5 design D4). It is the single knowledge site for the talos-schematic
-// target row shape: seedTargets' host-derived loop and the schematic-save API
-// path are two triggers for the same "ensure a discovery target for schematic
-// X" knowledge, both funnelling through db.EnsureTarget (create-if-absent,
-// #48 D1 — an existing row's mode/retain_n/enabled stay API-owned).
+// target row shape: reconcileHostSchematics' host-derived loop and the
+// schematic-save API path are two triggers for the same "ensure a discovery
+// target for schematic X" knowledge, both funnelling through db.EnsureTarget
+// (create-if-absent, #48 D1 — an existing row's mode/retain_n/enabled stay
+// API-owned).
 //
 // ponytail: schematic-derived rows inherit the host-derived behavior noted in
-// seedTargets — NOT pruned when the schematic config is later deleted (DELETE
-// is 403 until P10 anyway); a stale target only over-caches (SGE M4).
+// reconcileHostSchematics — NOT pruned when the schematic config is later
+// deleted (DELETE is 403 until P10 anyway); a stale target only over-caches
+// (SGE M4).
 func EnsureSchematicTarget(store *db.Store, schematic string) error {
 	if err := ValidatePathParam(schematic); err != nil {
 		return fmt.Errorf("cache: schematic target: %w", err)

@@ -86,6 +86,28 @@ func (s *Store) UpdateTargetParams(id int64, params string) error {
 	return nil
 }
 
+// UpdateTargetFromCatalog reconciles a target's catalog-declared fields
+// (enabled, retain_n) and marks it source='catalog', preserving mode and
+// identity. Used by the catalog-apply pass (create-if-absent handles new rows).
+func (s *Store) UpdateTargetFromCatalog(id int64, enabled bool, retainN int) error {
+	if _, err := s.db.Exec(
+		`UPDATE targets SET source = 'catalog', enabled = ?, retain_n = ?, updated_at = datetime('now') WHERE id = ?`,
+		enabled, retainN, id); err != nil {
+		return fmt.Errorf("db: update target from catalog id=%d: %w", id, err)
+	}
+	return nil
+}
+
+// DisableTarget sets enabled=false, preserving everything else. Used for
+// catalog-removed source='catalog' rows (bytes are kept; eviction reclaims).
+func (s *Store) DisableTarget(id int64) error {
+	if _, err := s.db.Exec(
+		`UPDATE targets SET enabled = 0, updated_at = datetime('now') WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("db: disable target id=%d: %w", id, err)
+	}
+	return nil
+}
+
 // GetTarget returns the target with id, or sql.ErrNoRows if none.
 func (s *Store) GetTarget(id int64) (*Target, error) {
 	var t Target
