@@ -342,8 +342,9 @@ func run(cmd *cobra.Command, argv []string) error {
 	}
 
 	// Load the declarative cache-target catalog (fail-fast): an operator
-	// catalog.yaml if present, else the flag-derived default set. Must run
-	// after MigrateChannelLayout so the source column + backfill are in place.
+	// catalog.yaml if present, else the flag-derived default set. This reads
+	// only files/flags (no DB access); it runs before NewReconciler so the
+	// desired set is available to the reconciler's applyCatalog pass.
 	catalog, err := cache.LoadCatalog()
 	if err != nil {
 		return fmt.Errorf("cache: load catalog: %w", err)
