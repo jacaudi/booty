@@ -1,8 +1,13 @@
 # Configuration reference
 
-booty is configured entirely through command-line flags and environment variables — there is **no
-config file**. Every flag is also bindable as an environment variable (via Viper). Defaults are the
-values used when neither a flag nor an env var is set.
+booty is configured through command-line flags and environment variables. Every flag is also
+bindable as an environment variable (via Viper). Defaults are the values used when neither a flag
+nor an env var is set.
+
+The one exception is the set of cache targets (which OS images/versions booty caches), which is
+declared in an optional `catalog.yaml` file rather than flags — see
+[schema/CATALOG.md](schema/CATALOG.md). Everything else in this document remains flags/env, no
+config file.
 
 ## Flags
 
@@ -17,13 +22,14 @@ values used when neither a flag nor an env var is set.
 | `--serverIP` | `127.0.0.1` | LAN-reachable IP that clients use to reach booty. **Set this.** |
 | `--serverHttpPort` | `0` (falls back to `--httpPort`) | Client-facing HTTP port advertised in boot-config URLs. Unset (`0`) advertises whatever `--httpPort` listens on — the correct default for a single-process, no-proxy deploy. Set explicitly only when a proxy/LB fronts booty and the client-facing port differs from the listen port (e.g. `--serverHttpPort=80` with `--httpPort=8080`). |
 | `--joinString` | `""` | Optional `kubeadm join` string injected into rendered Ignition. |
-| `--flatcarArchitecture` | `amd64` | Architecture for Flatcar downloads. |
-| `--flatcarChannel` | `stable` | Flatcar release channel — **first-boot default only** (see below). |
-| `--coreOSArchitecture` | `x86_64` | Architecture for Fedora CoreOS downloads. |
-| `--coreOSChannel` | `stable` | Fedora CoreOS stream/channel — **first-boot default only** (see below). |
-| `--talosArchitecture` | `amd64` | Talos architecture token (`amd64` / `arm64`). |
-| `--talosSchematic` | `376567988ad3…b4ba` | Default Talos Image Factory schematic ID — **first-boot default only** (see below). |
-| `--talosRetainMinors` | `3` | Number of newest Talos minor lines to keep cached — **first-boot default only** (see below). |
+| `--flatcarArchitecture` | `amd64` | Architecture for Flatcar downloads — **feeds the default catalog only** (see below). |
+| `--flatcarChannel` | `stable` | Flatcar release channel — **feeds the default catalog only** (see below). |
+| `--coreOSArchitecture` | `x86_64` | Architecture for Fedora CoreOS downloads; also the fallback arch used when rendering a Fedora CoreOS host's boot config with no per-host arch. Fedora CoreOS is not in the default catalog (see below), so this flag does not affect it. |
+| `--coreOSChannel` | `stable` | Fedora CoreOS stream/channel; also the fallback channel used when rendering a Fedora CoreOS host's boot config with no per-host channel. Fedora CoreOS is not in the default catalog (see below), so this flag does not affect it. |
+| `--talosArchitecture` | `amd64` | Talos architecture token (`amd64` / `arm64`) — **feeds the default catalog only** (see below). |
+| `--talosSchematic` | `376567988ad3…b4ba` | Default Talos Image Factory schematic ID — **feeds the default catalog only** (see below). |
+| `--talosRetainMinors` | `3` | Number of newest Talos minor lines to keep cached — **feeds the default catalog only** (see below). |
+| `--catalogFile` | `""` (falls back to `<dataDir>/catalog.yaml`, then a flag-derived default) | Declarative cache-target catalog. See [schema/CATALOG.md](schema/CATALOG.md). |
 | `--talosConfigFile` | `config/machineconfig.yaml` | Talos machine-config template, relative to `--dataDir`. |
 | `--talosFactoryURL` | `https://factory.talos.dev` | Talos Image Factory base URL. |
 | `--secretsKey` | `""` (unset) | Path to an age identity file (`age-keygen` output) encrypting Talos cluster secrets and frozen node configs at rest. **Fail-closed** when unset: cluster create/import/add-member/export refuse with `422`. **Fail-fast** when set but invalid: refuses startup (see [below](#talos-cluster-authoring-p6)). |
@@ -34,38 +40,34 @@ values used when neither a flag nor an env var is set.
 | `--preseedFile` | `config/preseed.cfg` | Debian preseed template, relative to `--dataDir` — the rung-4 server-default fallback for hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
 | `--configRevisionsKeep` | `10` | Number of newest config revisions to retain per config, applied after every `PUT /configs/{id}`. The currently-active revision is always kept, even if it falls outside the newest-N window. |
 
-> **First-boot defaults (#48).** `--flatcarChannel`, `--coreOSChannel`, `--talosSchematic`, and
-> `--talosRetainMinors` seed the **predefined** cache targets (Flatcar, Fedora CoreOS, Talos) only
-> when that target's row doesn't exist yet — a fresh install, or the one-time migration on first
-> startup after upgrading past #48 (see [schema/STORAGE.md](schema/STORAGE.md)). Once a predefined
-> row exists, these flags are never consulted for it again: the `/api/v1/targets` API owns
-> `enabled` / `retainN` / `mode` from that point on, and a value set via `PATCH` survives every
-> reconcile tick. Concretely:
+> **Cache targets are catalog-declared, not flag-seeded.** As of the declarative catalog feature,
+> which OS/version cache targets booty maintains is resolved once at startup from `catalog.yaml`
+> (`--catalogFile`, default `<dataDir>/catalog.yaml`) — see **[schema/CATALOG.md](schema/CATALOG.md)**
+> for the full schema, precedence, and reconcile semantics. `--flatcarChannel`, `--flatcarArchitecture`,
+> `--talosSchematic`, `--talosArchitecture`, and `--talosRetainMinors` matter **only when no
+> `catalog.yaml` is present**: they shape the flag-derived default catalog (Flatcar primary channel +
+> `lts`, Talos — Fedora CoreOS is not in the default). Once a `catalog.yaml` exists, these flags are
+> not consulted for target selection at all — edit the file instead. A target's declared fields
+> (`enabled`, `retainN`) are reconciled to the catalog every tick; `mode` is the one field the catalog
+> never touches and stays whatever the `/api/v1/targets` API last set it to (see
+> [schema/CATALOG.md](schema/CATALOG.md#authoritative-for-declared-fields-only)).
 >
-> - Changing `--flatcarChannel` / `--coreOSChannel` after first boot does **not** retarget the
->   existing predefined row — because the channel is part of the target's identity
->   (`UNIQUE(os,arch,params)`), it seeds a **new** predefined target for the new channel on the
->   next tick, alongside the old one. Disable the old channel's target with
->   `PATCH /api/v1/targets/{id} {"enabled":false}` if it should stop being cached.
-> - **`--talosRetainMinors` behavior change:** bumping this flag after the Talos predefined target
->   already exists has **no effect** on that row — it only sets the initial `retainN` at creation
->   time. Adjust retention on an existing target with
->   `PATCH /api/v1/targets/{id} {"retainN":<n>}` instead.
->
-> See [schema/API.md](schema/API.md#targets) for the full create-if-absent / PATCH contract.
+> See [schema/API.md](schema/API.md#targets) for the target create/PATCH contract, and
+> [schema/CATALOG.md](schema/CATALOG.md#upgrade-notes) for what changes on an upgrade from a
+> pre-catalog booty.
 
 ### Retention windows for single-version-discovery OSes
 
 Flatcar and Fedora CoreOS discovery only ever returns **one** version — the channel's current
-build. For these OSes, `retainN` (via `--flatcarChannel`'s / `--coreOSChannel`'s predefined target,
-or `PATCH retainN` on any flatcar/fcos target) bounds a **window over known versions** rather than
-selecting from a larger discovered set: each reconcile tick, the newly-discovered version is added
-to the set of versions still in-window, and the newest `retainN` of that combined set are kept. The
-window therefore **grows one release at a time** as new versions are discovered — `retainN=3` takes
-three upstream releases to reach three cached versions, not one. It does **not backfill** older
-versions upstream no longer advertises; there is no way to retroactively populate history that was
-never seen while the reconciler was running. Versions that age out of the window are archived, not
-deleted (see [schema/STORAGE.md](schema/STORAGE.md)).
+build. For these OSes, `retainN` (declared as `retain` in `catalog.yaml` for a catalog-managed
+target, or `PATCH retainN` on any flatcar/fcos target) bounds a **window over known versions**
+rather than selecting from a larger discovered set: each reconcile tick, the newly-discovered
+version is added to the set of versions still in-window, and the newest `retainN` of that combined
+set are kept. The window therefore **grows one release at a time** as new versions are discovered —
+`retainN=3` takes three upstream releases to reach three cached versions, not one. It does **not
+backfill** older versions upstream no longer advertises; there is no way to retroactively populate
+history that was never seen while the reconciler was running. Versions that age out of the window
+are archived, not deleted (see [schema/STORAGE.md](schema/STORAGE.md)).
 
 ## Boot config precedence (P4)
 
@@ -129,8 +131,8 @@ Seeding is create-if-absent by name: a config already named `vanilla` (from a pr
 operator-created) makes it a no-op.
 
 **Pre-caching on save.** Saving a schematic config (create or edit) ensures a Talos discovery-mode
-cache target for the built ID — windowed by `--talosRetainMinors`, the same as the predefined Talos
-target — and triggers an async reconcile pass, so boot assets pre-fetch instead of waiting for a host
+cache target for the built ID — windowed by `--talosRetainMinors`, the same as the default catalog's
+Talos target — and triggers an async reconcile pass, so boot assets pre-fetch instead of waiting for a host
 to request them. Schematic-derived targets are **not** pruned when their owning config is deleted:
 `DELETE /api/v1/configs/{id}` is `403` until auth (P10) anyway, so this is over-caching only, not a
 dangling reference.

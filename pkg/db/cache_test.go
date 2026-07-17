@@ -19,7 +19,7 @@ func mustVersionID(t *testing.T, s *Store, targetID int64, version string) int64
 
 func TestCacheEntryUpsertAndList(t *testing.T) {
 	s := newTestStore(t)
-	tgtID, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"abc"}`, Mode: "discovery", RetainN: 3, Enabled: true})
+	tgtID, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"abc"}`, Mode: "discovery", RetainN: 3, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestCacheEntryUpsertAndList(t *testing.T) {
 
 func TestCacheEntryArchiveAndCascade(t *testing.T) {
 	s := newTestStore(t)
-	tgtID, _ := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"abc"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tgtID, _ := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"abc"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	_ = s.UpsertTargetVersion(TargetVersion{TargetID: tgtID, Version: "v1.13.5", Source: "discovered", Cached: true})
 	tvID := mustVersionID(t, s, tgtID, "v1.13.5")
 	_ = s.UpsertCacheEntry(tvID, 100)
@@ -88,7 +88,7 @@ func TestCacheEntryArchiveAndCascade(t *testing.T) {
 func seedCacheRow(t *testing.T, s *Store) (targetID, tvID int64) {
 	t.Helper()
 	var err error
-	targetID, err = s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	targetID, err = s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestListArchivedUnpinnedExcludesZeroByteRows(t *testing.T) {
 
 func TestUpsertCacheEntryArchivedFreshInsert(t *testing.T) {
 	s := newTestStore(t)
-	targetID, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	targetID, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

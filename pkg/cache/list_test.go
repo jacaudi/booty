@@ -108,6 +108,7 @@ func TestPartitionCachedSchemHash(t *testing.T) {
 		Params:  `{"schematic":"` + realTalosHash + `"}`,
 		Mode:    "discovery",
 		RetainN: 1,
+		Source:  "api",
 		Enabled: true,
 	})
 	if err != nil {

@@ -109,16 +109,16 @@ export interface GroupLabel {
 
 // Name a cache group. A schematic-keyed group is named after the live schematic
 // config whose derived id it matches — this is what makes the two OS Images tabs
-// agree with each other, and it covers the predefined default target for free
+// agree with each other, and it covers the catalog default Talos target for free
 // (SeedVanillaSchematic seeds a "vanilla" config carrying the constant id).
 //
 // An UNMATCHED group gets its short id and NOTHING ELSE — deliberately. It is
 // tempting to call it an orphan (editing a schematic really does strand its old
 // target forever, pkg/cache/schematic.go:20-22), but a schematic-keyed target has
-// four sources and only one is a config (pkg/cache/seed.go:41-77): host-bound raw
-// IDs — which this very UI's Import-by-ID creates, with no config by design — and
-// cluster-member schematics are configless AND IN ACTIVE USE. CacheEntryDTO
-// exposes no provenance (api_cache.go:16-28), so we cannot tell a stranded target
+// four sources and only one is a config: host-bound raw IDs — which this very
+// UI's Import-by-ID creates, with no config by design — and cluster-member
+// schematics are configless AND IN ACTIVE USE. CacheEntryDTO exposes no
+// provenance (api_cache.go:16-28), so we cannot tell a stranded target
 // from an image a host is booting right now. Claiming "not referenced" would
 // invite an operator to reap a running host's images. Show the id; claim nothing.
 // Surfacing true orphans needs target provenance on the API first (issue, Task 13).

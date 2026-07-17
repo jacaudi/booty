@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jeefy/booty/pkg/cache"
@@ -16,14 +15,14 @@ import (
 // TargetDTO is the wire representation of a cache target. Params is decoded
 // from the canonical JSON encoding stored in the DB to a plain map for callers.
 type TargetDTO struct {
-	ID         int64             `json:"id"`
-	OS         string            `json:"os"`
-	Arch       string            `json:"arch"`
-	Params     map[string]string `json:"params"`
-	Mode       string            `json:"mode"`
-	RetainN    int               `json:"retainN"`
-	Predefined bool              `json:"predefined"`
-	Enabled    bool              `json:"enabled"`
+	ID      int64             `json:"id"`
+	OS      string            `json:"os"`
+	Arch    string            `json:"arch"`
+	Params  map[string]string `json:"params"`
+	Mode    string            `json:"mode"`
+	RetainN int               `json:"retainN"`
+	Source  string            `json:"source"`
+	Enabled bool              `json:"enabled"`
 }
 
 type listTargetsOutput struct {
@@ -36,7 +35,7 @@ func toTargetDTO(t db.Target) TargetDTO {
 	params, _ := cache.DecodeParams(t.Params)
 	return TargetDTO{
 		ID: t.ID, OS: t.OS, Arch: t.Arch, Params: params, Mode: t.Mode,
-		RetainN: t.RetainN, Predefined: t.Predefined, Enabled: t.Enabled,
+		RetainN: t.RetainN, Source: t.Source, Enabled: t.Enabled,
 	}
 }
 
@@ -103,27 +102,8 @@ func registerTargets(api huma.API, deps APIDeps) {
 		if err := cache.ValidatePathParam(in.Body.Arch); err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid arch", err)
 		}
-		// Reject params keys the OS doesn't declare: paramSegment picks the
-		// path-discriminating segment by fixed key precedence (schematic >
-		// channel), so an unrequested key would become an UNVALIDATED disk/
-		// URL segment (layout invariant: exactly one such param per OS).
-		required := o.RequiredParams()
-		for k := range in.Body.Params {
-			if !slices.Contains(required, k) {
-				return nil, huma.Error422UnprocessableEntity("unexpected param: " + k)
-			}
-		}
-		for _, p := range required {
-			v := in.Body.Params[p]
-			if v == "" {
-				return nil, huma.Error422UnprocessableEntity("missing required param: " + p)
-			}
-			// Declared params are the path-discriminating ones (schematic/
-			// channel): they become cache dir + URL segments, so they must
-			// be path-safe (#48 §3).
-			if err := cache.ValidatePathParam(v); err != nil {
-				return nil, huma.Error422UnprocessableEntity("invalid param "+p, err)
-			}
+		if err := cache.ValidateTargetParams(o, in.Body.Params); err != nil {
+			return nil, huma.Error422UnprocessableEntity(err.Error())
 		}
 		encoded, err := cache.EncodeParams(in.Body.Params)
 		if err != nil {
@@ -131,7 +111,7 @@ func registerTargets(api huma.API, deps APIDeps) {
 		}
 		id, err := deps.Store.CreateTarget(db.Target{
 			OS: in.Body.OS, Arch: in.Body.Arch, Params: encoded, Mode: in.Body.Mode,
-			RetainN: in.Body.RetainN, Predefined: false, Enabled: true,
+			RetainN: in.Body.RetainN, Source: "api", Enabled: true,
 		})
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("create target (duplicate?)", err)

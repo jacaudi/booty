@@ -47,7 +47,7 @@ func TestScanSkipsPartialFiles(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set(config.DataDir, t.TempDir())
 	store := newReconcileStore(t)
-	tid, _ := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, _ := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "v1.0.0", Source: "discovered", Cached: true})
 	dir := cacheDir("talos", "s", "amd64", "v1.0.0")
 	os.MkdirAll(dir, 0o755)

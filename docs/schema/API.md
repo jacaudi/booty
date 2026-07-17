@@ -150,16 +150,20 @@ channel; `talos` requires a schematic):
    `--talosSchematic` flags at startup and on the one-time #48 migration, so a malformed flag or a
    malformed API param are rejected the same way.
 
-**Predefined-seeding semantics (#48 D1).** The Flatcar, Fedora CoreOS, and Talos predefined targets
-are **create-if-absent**: `--flatcarChannel` / `--coreOSChannel` / `--talosSchematic` /
-`--talosRetainMinors` only populate a predefined row the first time it's created (fresh install, or
-the one-time migration described in [STORAGE.md](STORAGE.md)). Once a row exists, the flags are
-never read again for it — `PATCH /api/v1/targets/{id}` owns `enabled` / `retainN` / `mode` from
-then on, and survives every reconcile tick untouched. Changing a channel flag later does **not**
-update the existing row: because params are part of row identity (`UNIQUE(os,arch,params)`), it
-creates a **new** predefined target for the new channel on the next tick; the old channel's target
-keeps running until an operator disables it with `PATCH {"enabled":false}` (`DELETE` is `403` until
-P10).
+**Catalog-managed targets (`source=catalog`).** Which targets exist and their declared fields
+(`enabled`, `retainN`) are driven by the declarative `catalog.yaml` — see
+[CATALOG.md](CATALOG.md) for the full schema and reconcile semantics. With no `catalog.yaml`
+present, a flag-derived default catalog is used (`--flatcarChannel`, `--flatcarArchitecture`,
+`--talosSchematic`, `--talosArchitecture`, `--talosRetainMinors`). A `source=catalog` target's
+declared fields are reconciled to the catalog **every** reconcile tick — editing them via
+`PATCH /api/v1/targets/{id}` reverts on the next tick; edit `catalog.yaml` instead. `mode` is the
+one field the catalog never touches, so it survives a `PATCH` indefinitely even on a catalog-managed
+row. `source=api` targets (created via `POST /api/v1/targets`) are never touched by the catalog and
+behave exactly as `PATCH` has always worked: it owns `enabled`/`retainN`/`mode` outright. Because
+params are part of row identity (`UNIQUE(os,arch,params)`), changing a catalog entry's channel
+creates a **new** target for the new channel rather than retargeting the old one — remove the old
+channel's entry from `catalog.yaml` (which disables it, keeping cached bytes) if it should stop
+being cached.
 
 ### Configs (P4)
 

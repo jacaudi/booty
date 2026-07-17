@@ -52,7 +52,7 @@ func TestReconcileTarget_TalosCachesRetainedAndArchived(t *testing.T) {
 	store := newReconcileStore(t)
 	tid, err := store.CreateTarget(db.Target{
 		OS: "talos", Arch: "amd64", Params: `{"schematic":"schem1"}`,
-		Mode: "discovery", RetainN: 2, Predefined: true, Enabled: true,
+		Mode: "discovery", RetainN: 2, Source: "catalog", Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateTarget: %v", err)
@@ -117,7 +117,7 @@ func newCacheEntryFixture(t *testing.T, retainN int) (*db.Store, int64, *string)
 	store := newReconcileStore(t)
 	tid, err := store.CreateTarget(db.Target{
 		OS: "talos", Arch: "amd64", Params: `{"schematic":"schem1"}`,
-		Mode: "discovery", RetainN: retainN, Predefined: true, Enabled: true,
+		Mode: "discovery", RetainN: retainN, Source: "catalog", Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateTarget: %v", err)
@@ -186,7 +186,7 @@ func TestReconcileTarget_ManualNeverPruned(t *testing.T) {
 	viper.Set(config.TalosFactoryURL, srv.URL)
 
 	store := newReconcileStore(t)
-	tid, _ := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, _ := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "v1.5.0", Source: "manual", Cached: true}); err != nil {
 		t.Fatalf("seed manual: %v", err)
 	}
@@ -239,7 +239,7 @@ func newFlatcarFixture(t *testing.T, retainN int) (*db.Store, int64, *string) {
 	store := newReconcileStore(t)
 	tid, err := store.CreateTarget(db.Target{
 		OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`,
-		Mode: "discovery", RetainN: retainN, Predefined: true, Enabled: true,
+		Mode: "discovery", RetainN: retainN, Source: "catalog", Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateTarget: %v", err)
@@ -332,14 +332,14 @@ func TestReconcileTwoFlatcarChannelsCacheIndependently(t *testing.T) {
 
 	stableID, err := store.CreateTarget(db.Target{
 		OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`,
-		Mode: "discovery", RetainN: 1, Predefined: true, Enabled: true,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateTarget stable: %v", err)
 	}
 	betaID, err := store.CreateTarget(db.Target{
 		OS: "flatcar", Arch: "amd64", Params: `{"channel":"beta"}`,
-		Mode: "discovery", RetainN: 1, Predefined: false, Enabled: true,
+		Mode: "discovery", RetainN: 1, Source: "api", Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateTarget beta: %v", err)
@@ -520,7 +520,7 @@ func TestReconcileSkipsAlreadyCachedVersion(t *testing.T) {
 	viper.Set(config.SignaturePolicy, "warn")
 
 	store := newReconcileStore(t)
-	tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,7 +645,7 @@ func TestReconcileFCOSVerification(t *testing.T) {
 		viper.Set(config.CoreOSChannel, "stable")
 		viper.Set(config.SignaturePolicy, policy)
 		store := newReconcileStore(t)
-		tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+		tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 		if err != nil {
 			t.Fatal(err)
 		}

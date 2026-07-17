@@ -23,7 +23,7 @@ func TestCacheAPIListPinAndDelete403(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)
 
-	tid, _ := deps.Store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"abc"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, _ := deps.Store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"abc"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	_ = deps.Store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "v1.13.5", Source: "discovered", Cached: true})
 	tvID, _ := deps.Store.TargetVersionID(tid, "v1.13.5")
 	_ = deps.Store.UpsertCacheEntry(tvID, 100)
@@ -104,7 +104,7 @@ func TestReverifyRecomputesVerdict(t *testing.T) {
 	viper.Set(config.CoreOSArchitecture, "x86_64")
 	viper.Set(config.CoreOSChannel, "stable")
 
-	tid, err := deps.Store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, err := deps.Store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatalf("CreateTarget: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestReverifyRecordsFailureVerdict(t *testing.T) {
 	viper.Set(config.CoreOSArchitecture, "x86_64")
 	viper.Set(config.CoreOSChannel, "stable")
 
-	tid, err := deps.Store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, err := deps.Store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatalf("CreateTarget: %v", err)
 	}

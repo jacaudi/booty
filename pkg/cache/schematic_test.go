@@ -25,8 +25,8 @@ func TestEnsureSchematicTargetIdempotent(t *testing.T) {
 	if !ok {
 		t.Fatal("schematic target not created")
 	}
-	if tg.Arch != "amd64" || tg.Mode != "discovery" || tg.RetainN != 3 || tg.Predefined || !tg.Enabled {
-		t.Fatalf("target row = %+v, want amd64/discovery/3/predefined=false/enabled", tg)
+	if tg.Arch != "amd64" || tg.Mode != "discovery" || tg.RetainN != 3 || tg.Source != "host" || !tg.Enabled {
+		t.Fatalf("target row = %+v, want amd64/discovery/3/source=host/enabled", tg)
 	}
 	all, err := store.ListTargets()
 	if err != nil || len(all) != 1 {

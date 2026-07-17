@@ -4,7 +4,7 @@ import "testing"
 
 func TestUpsertAndListTargetVersions(t *testing.T) {
 	s := newTestStore(t)
-	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "discovery", Enabled: true})
+	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "discovery", Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatalf("seed target: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestUpsertAndListTargetVersions(t *testing.T) {
 
 func TestPinManualVersionPreservesCached(t *testing.T) {
 	s := newTestStore(t)
-	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", Enabled: true})
+	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"s"}`, Mode: "discovery", Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestPinManualVersionPreservesCached(t *testing.T) {
 
 func TestDeleteTargetVersion(t *testing.T) {
 	s := newTestStore(t)
-	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "discovery", Enabled: true})
+	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "discovery", Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestDeleteTargetVersion(t *testing.T) {
 
 func TestTargetVersions_CascadeOnTargetDelete(t *testing.T) {
 	s := newTestStore(t)
-	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "discovery", Enabled: true})
+	tid, err := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: "{}", Mode: "discovery", Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestTargetVersions_CascadeOnTargetDelete(t *testing.T) {
 
 func TestListCachedInWindowVersions(t *testing.T) {
 	s := newTestStore(t)
-	id, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 2, Enabled: true})
+	id, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 2, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

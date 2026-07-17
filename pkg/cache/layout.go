@@ -129,7 +129,7 @@ var pathParamRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // segment (disk dir + URL). Single knowledge site for "values that become
 // path segments must be path-safe": it guards ALL such values — params
 // (schematic/channel) AND arch — and is called by the API create handler,
-// seedTargets, and the startup migration.
+// the catalog-apply pass, and the startup migration.
 func ValidatePathParam(v string) error {
 	if !pathParamRE.MatchString(v) {
 		return fmt.Errorf("cache: value %q is not path-safe (must match %s)", v, pathParamRE)

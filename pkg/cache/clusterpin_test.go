@@ -22,7 +22,7 @@ func TestEvictNeverEvictsClusterReferencedVersion(t *testing.T) {
 	viper.Set(config.TalosArchitecture, "amd64")
 	store := newReconcileStore(t)
 
-	tid, err := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"schemP"}`, Mode: "discovery", RetainN: 1, Enabled: true})
+	tid, err := store.CreateTarget(db.Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"schemP"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}

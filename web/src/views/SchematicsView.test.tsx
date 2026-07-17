@@ -41,6 +41,9 @@ describe('SchematicsView list screen', () => {
   })
 
   it('Import by ID binds the pasted raw id to a chosen host', async () => {
+    // delay:null skips userEvent's per-keystroke delay; typing a 64-char id
+    // otherwise pushes this test past the 5s default timeout under CI load.
+    const user = userEvent.setup({ delay: null })
     const ID = 'a'.repeat(64) // a schematic ID is 64 lowercase hex chars
     vi.mocked(configs.listConfigs).mockResolvedValue([])
     vi.mocked(client.listHosts).mockResolvedValue([
@@ -49,12 +52,12 @@ describe('SchematicsView list screen', () => {
     vi.mocked(client.bindSchematic).mockResolvedValue(undefined)
     renderView()
     await waitFor(() => screen.getByRole('button', { name: 'Import by ID' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Import by ID' }))
-    await userEvent.type(screen.getByLabelText('Schematic ID'), ID)
+    await user.click(screen.getByRole('button', { name: 'Import by ID' }))
+    await user.type(screen.getByLabelText('Schematic ID'), ID)
     // pick the host
-    await userEvent.click(screen.getByLabelText('Host'))
-    await userEvent.click(await screen.findByText('aa:bb (n1)'))
-    await userEvent.click(screen.getByRole('button', { name: 'Bind' }))
+    await user.click(screen.getByLabelText('Host'))
+    await user.click(await screen.findByText('aa:bb (n1)'))
+    await user.click(screen.getByRole('button', { name: 'Bind' }))
     await waitFor(() => expect(client.bindSchematic).toHaveBeenCalledWith('aa:bb', { schematic: ID }))
   })
 

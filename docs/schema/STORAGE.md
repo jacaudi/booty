@@ -145,8 +145,9 @@ See [DATABASE.md](DATABASE.md) and [CONFIGURATION.md](../CONFIGURATION.md).
 
 - A single **cache reconciler** (`--cacheInterval`, default every 5 minutes; bounded by
   `--cacheConcurrency`) caches each declared target's artifacts eagerly — on startup and on each
-  tick, never on boot. Predefined targets (Flatcar, Fedora CoreOS, Talos) are seeded automatically,
-  plus one Talos target per distinct registered-host schematic.
+  tick, never on boot. Which targets exist is resolved from the declarative catalog
+  (`catalog.yaml`, or a flag-derived default when no file is present — see
+  [CATALOG.md](CATALOG.md)), plus one Talos target per distinct registered-host schematic.
 - **Flatcar / CoreOS:** the newest `retainN` versions are kept per channel (default `1`, the
   historic "single current version" behavior). Discovery only ever returns the channel's current
   build, so a window over `retainN > 1` accumulates history one release at a time as new versions

@@ -9,5 +9,7 @@ v1 management plane lands.
 - **[DATABASE.md](DATABASE.md)** — the host database (`hardware.json`) record shape and the on-disk
   version-metadata files. (The v1 plane migrates this state into SQLite.)
 - **[STORAGE.md](STORAGE.md)** — the `--dataDir` layout and the artifact-cache directory structure.
+- **[CATALOG.md](CATALOG.md)** — the declarative `catalog.yaml` schema, precedence, and reconcile
+  semantics for cache targets.
 
 Together these answer: *what can I call, what gets stored, and where does it live on disk.*

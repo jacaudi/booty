@@ -75,7 +75,7 @@ func TestSchematicCreateBuildsStoresAndPreCaches(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(targets, func(tg db.Target) bool {
-		return tg.OS == "talos" && tg.Params == `{"schematic":"a1b2c3d4"}` && tg.Mode == "discovery" && !tg.Predefined
+		return tg.OS == "talos" && tg.Params == `{"schematic":"a1b2c3d4"}` && tg.Mode == "discovery" && tg.Source == "host"
 	}) {
 		t.Fatalf("schematic cache target not ensured: %+v", targets)
 	}

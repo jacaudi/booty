@@ -21,6 +21,7 @@ type Reconciler struct {
 	store       *db.Store
 	interval    time.Duration
 	concurrency int
+	catalog     []CatalogEntry
 
 	trigger  chan struct{}
 	done     chan struct{}
@@ -30,12 +31,14 @@ type Reconciler struct {
 
 // NewReconciler builds a reconciler over store. interval is the periodic tick
 // (config.CacheInterval); concurrency is the per-version artifact-download cap
-// (config.CacheConcurrency) applied inside reconcileTarget.
-func NewReconciler(store *db.Store, interval time.Duration, concurrency int) *Reconciler {
+// (config.CacheConcurrency) applied inside reconcileTarget; catalog is the
+// loaded declarative catalog (cache.LoadCatalog) applied every tick.
+func NewReconciler(store *db.Store, interval time.Duration, concurrency int, catalog []CatalogEntry) *Reconciler {
 	return &Reconciler{
 		store:       store,
 		interval:    interval,
 		concurrency: max(concurrency, 1),
+		catalog:     catalog,
 		trigger:     make(chan struct{}, 1),
 		done:        make(chan struct{}),
 	}
@@ -86,17 +89,21 @@ func (r *Reconciler) loop(ctx context.Context) {
 	}
 }
 
-// reconcileAll seeds predefined targets, then reconciles every enabled target
-// sequentially. Sequential target processing keeps all DB writes on this
-// goroutine; download concurrency is bounded inside reconcileTarget (a fresh
-// per-version errgroup capped at r.concurrency). A per-target error is logged
-// and the loop continues (one bad target never blocks others).
+// reconcileAll applies the catalog and host schematics, then reconciles every
+// enabled target sequentially. Sequential target processing keeps all DB
+// writes on this goroutine; download concurrency is bounded inside
+// reconcileTarget (a fresh per-version errgroup capped at r.concurrency). A
+// per-target error is logged and the loop continues (one bad target never
+// blocks others).
 func (r *Reconciler) reconcileAll(ctx context.Context) {
 	if err := SweepPartials(cacheRoot()); err != nil {
 		slog.Warn("cache: sweep partials failed", "err", err)
 	}
-	if err := seedTargets(r.store); err != nil {
-		slog.Warn("cache: seed targets failed", "err", err)
+	if err := applyCatalog(r.store, r.catalog); err != nil {
+		slog.Warn("cache: apply catalog failed", "err", err)
+	}
+	if err := reconcileHostSchematics(r.store); err != nil {
+		slog.Warn("cache: reconcile host schematics failed", "err", err)
 	}
 	targets, err := r.store.ListTargets()
 	if err != nil {

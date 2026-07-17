@@ -50,6 +50,7 @@ const (
 	SignaturePolicy        = "signaturePolicy"
 	PreseedFile            = "preseedFile"
 	ConfigRevisionsKeep    = "configRevisionsKeep"
+	CatalogFile            = "catalogFile"
 )
 
 // DefaultTalosSchematic is the Image Factory's "vanilla" (no-extensions)

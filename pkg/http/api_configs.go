@@ -97,8 +97,8 @@ func registerConfigs(api huma.API, deps APIDeps) {
 			// The config+revision are already committed at this point, so a
 			// pre-cache failure must not surface as a 500 misrepresenting a
 			// resource that actually exists. Pre-caching is self-healing: the
-			// reconciler's seedTargets/hostTalosSchematics re-ensures the
-			// target on the next tick — log and continue.
+			// reconciler's reconcileHostSchematics re-ensures the target on
+			// the next tick — log and continue.
 			if err := ensureSchematicPreCache(deps, *derivedID); err != nil {
 				slog.Warn("schematic pre-cache failed; config created, will self-heal on next reconcile",
 					"config_id", id, "config_name", in.Body.Name, "schematic", *derivedID, "error", err)
