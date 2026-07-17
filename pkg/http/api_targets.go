@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jeefy/booty/pkg/cache"
@@ -103,27 +102,8 @@ func registerTargets(api huma.API, deps APIDeps) {
 		if err := cache.ValidatePathParam(in.Body.Arch); err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid arch", err)
 		}
-		// Reject params keys the OS doesn't declare: paramSegment picks the
-		// path-discriminating segment by fixed key precedence (schematic >
-		// channel), so an unrequested key would become an UNVALIDATED disk/
-		// URL segment (layout invariant: exactly one such param per OS).
-		required := o.RequiredParams()
-		for k := range in.Body.Params {
-			if !slices.Contains(required, k) {
-				return nil, huma.Error422UnprocessableEntity("unexpected param: " + k)
-			}
-		}
-		for _, p := range required {
-			v := in.Body.Params[p]
-			if v == "" {
-				return nil, huma.Error422UnprocessableEntity("missing required param: " + p)
-			}
-			// Declared params are the path-discriminating ones (schematic/
-			// channel): they become cache dir + URL segments, so they must
-			// be path-safe (#48 §3).
-			if err := cache.ValidatePathParam(v); err != nil {
-				return nil, huma.Error422UnprocessableEntity("invalid param "+p, err)
-			}
+		if err := cache.ValidateTargetParams(o, in.Body.Params); err != nil {
+			return nil, huma.Error422UnprocessableEntity(err.Error())
 		}
 		encoded, err := cache.EncodeParams(in.Body.Params)
 		if err != nil {

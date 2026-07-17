@@ -31,6 +31,7 @@ var Cmd = &cobra.Command{
 var args struct {
 	debug               bool
 	dataDir             string
+	catalogFile         string
 	maxCacheAge         int
 	cacheInterval       time.Duration
 	cacheConcurrency    int
@@ -122,6 +123,13 @@ func init() {
 		"dataDir",
 		"/data",
 		"Directory to store stateful data",
+	)
+
+	flags.StringVar(
+		&args.catalogFile,
+		"catalogFile",
+		"",
+		"Declarative cache-target catalog (YAML); default <dataDir>/catalog.yaml, embedded defaults if absent",
 	)
 
 	flags.StringVar(
