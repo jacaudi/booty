@@ -85,7 +85,7 @@ func (debian) DiscoverVersions(ctx context.Context, params map[string]string) ([
 func (debian) Artifacts(ctx context.Context, version, arch string, params map[string]string) ([]Artifact, error) {
 	codename := debianCodenames[params["channel"]]
 	if codename == "" {
-		codename = debianCodenames["stable"]
+		codename = "trixie"
 	}
 	base := fmt.Sprintf(
 		"https://deb.debian.org/debian/dists/%s/main/installer-%s/current/images/netboot/debian-installer/%s",

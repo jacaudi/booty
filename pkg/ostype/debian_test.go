@@ -86,9 +86,47 @@ func TestDebianCodename_Trixie(t *testing.T) {
 	}
 }
 
+func TestDebianArtifacts_NetinstURLs(t *testing.T) {
+	for _, arch := range []string{"amd64", "arm64"} {
+		arts, err := debian{}.Artifacts(t.Context(), "13.6.0", arch, map[string]string{"channel": "13"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(arts) != 2 || arts[0].Filename != "linux" || arts[1].Filename != "initrd.gz" {
+			t.Fatalf("arch=%s artifacts=%v", arch, arts)
+		}
+		want := "installer-" + arch
+		if !strings.Contains(arts[0].URL, "trixie") || !strings.Contains(arts[0].URL, want) {
+			t.Fatalf("arch=%s linux URL=%q missing trixie/%s", arch, arts[0].URL, want)
+		}
+	}
+}
+
+// TestDebianArtifacts_DefaultsToTrixieWhenChannelUnset covers the fallback
+// branch the numeric lookup doesn't reach: an unset/unrecognized channel
+// param must default to "trixie", not silently resolve to an empty codename
+// (the old code fell back to the dead debianCodenames["stable"] key, which
+// doesn't exist in the numeric-keyed map).
+func TestDebianArtifacts_DefaultsToTrixieWhenChannelUnset(t *testing.T) {
+	arts, err := debian{}.Artifacts(t.Context(), "13.6.0", "amd64", map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(arts[0].URL, "trixie") {
+		t.Fatalf("unset channel URL=%q, want default trixie codename", arts[0].URL)
+	}
+}
+
+// TestDebian_Artifacts covers channel "12" (bookworm) — a numeric channel
+// distinct from TestDebianArtifacts_NetinstURLs's "13" (trixie) — and asserts
+// the resolved codename actually appears in the URL. Originally passed
+// channel "stable", which isn't a key in the numeric-keyed debianCodenames
+// map (rekeyed in Task 2) and so silently produced a malformed
+// empty-codename URL without the test catching it; reconciled here to a
+// real channel with a codename assertion per Task 3.
 func TestDebian_Artifacts(t *testing.T) {
 	o, _ := Lookup("debian")
-	got, err := o.Artifacts(t.Context(), "12.5", "amd64", map[string]string{"channel": "stable"})
+	got, err := o.Artifacts(t.Context(), "12.5", "amd64", map[string]string{"channel": "12"})
 	if err != nil {
 		t.Fatalf("Artifacts: %v", err)
 	}
@@ -99,9 +137,11 @@ func TestDebian_Artifacts(t *testing.T) {
 		if a.URL == "" || a.Filename == "" {
 			t.Errorf("incomplete debian artifact: %+v", a)
 		}
-		// codename for stable must appear in the URL.
 		if !slices.Contains([]string{"linux", "initrd.gz"}, a.Filename) {
 			t.Errorf("unexpected debian artifact filename %q", a.Filename)
+		}
+		if !strings.Contains(a.URL, "bookworm") {
+			t.Errorf("channel 12 URL=%q missing bookworm codename", a.URL)
 		}
 	}
 }
