@@ -90,8 +90,8 @@ describe('cacheModel', () => {
   it('labelGroup names the seeded vanilla schematic like any other', () => {
     // SeedVanillaSchematic (pkg/http/schematic.go:93-130, wired at cmd/main.go:338)
     // creates a kind=schematic config named "vanilla" carrying the constant
-    // DefaultTalosSchematic id. So the PREDEFINED default cache target
-    // (pkg/cache/seed.go:53) names itself, with no special-casing here.
+    // DefaultTalosSchematic id. So the catalog default Talos cache target
+    // names itself, with no special-casing here.
     const vanilla = '376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba'
     const [g] = groupEntries([e({ os: 'talos', params: { schematic: vanilla } })])
     expect(labelGroup(g, [{ name: 'vanilla', derivedSchematicId: vanilla }])).toEqual({
@@ -102,9 +102,9 @@ describe('cacheModel', () => {
 
   it('labelGroup makes NO claim about a schematic target it cannot match', () => {
     // A schematic-keyed target has FOUR sources and only one is a schematic
-    // config (pkg/cache/seed.go:41-77): the predefined default, host-bound raw
-    // IDs (this UI's own Import-by-ID creates these and deliberately creates no
-    // config), cluster members, and configs. CacheEntryDTO carries no provenance
+    // config: the catalog default, host-bound raw IDs (this UI's own
+    // Import-by-ID creates these and deliberately creates no config), cluster
+    // members, and configs. CacheEntryDTO carries no provenance
     // (api_cache.go:16-28), so an unmatched group may be a stranded target OR an
     // image a host is booting right now. Calling it "unreferenced" would invite
     // an operator to reap a running host's images. Show the id; claim nothing.

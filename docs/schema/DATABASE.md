@@ -68,17 +68,27 @@ once more to admit `'debianconfig'` (the curated Debian preseed authoring kind) 
 
 ### `targets`
 `id`, `os`, `arch`, `params` (JSON TEXT), `mode` (`discovery`|`manual`),
-`retain_n`, `predefined`, `enabled`, `created_at`, `updated_at`;
+`retain_n`, `source` (`catalog`|`api`|`host`), `enabled`, `created_at`, `updated_at`;
 `UNIQUE(os, arch, params)`.
+
+> **`source` (migration `0007`, replaces the old `predefined` bool).** Marks who
+> manages the target: `catalog` (declared in `catalog.yaml`, managed by the
+> catalog-apply reconcile pass), `api` (created ad hoc via the API/UI), or
+> `host` (a Talos target derived from a registered host's own schematic). See
+> [CATALOG.md](CATALOG.md#source-semantics-source) for the full semantics. The
+> one-time migration maps `predefined=1` → `source=catalog`, host-derived Talos
+> schematic rows → `source=host`, and everything else → `source=api`.
 
 ### `target_versions`
 `id`, `target_id` → `targets(id)` `ON DELETE CASCADE`, `version`,
 `source` (`discovered`|`manual`), `cached`, `created_at`;
 `UNIQUE(target_id, version)`.
 
-The **reconciler** (P1b) populates `targets` (predefined + host-derived) and `target_versions`
-(`discovered` rows from upstream discovery, retained per `retain_n`; `manual` rows are never
-pruned), and flips `cached` to 1 once a version's artifacts are on disk.
+The **reconciler** (P1b) populates `targets` (catalog-declared + host-derived) and
+`target_versions` (`discovered` rows from upstream discovery, retained per `retain_n`; `manual`
+rows are never pruned), and flips `cached` to 1 once a version's artifacts are on disk. As of the
+declarative catalog feature, `targets` population/pruning is driven by `catalog.yaml` — see
+[CATALOG.md](CATALOG.md).
 
 ### `cache_entries`
 

@@ -190,6 +190,22 @@ you most likely need:
 
 See **[`docs/CONFIGURATION.md`](docs/CONFIGURATION.md)** for the complete flag / env reference.
 
+## Cache target catalog (`catalog.yaml`)
+
+Which OS images/versions booty caches is declared in an optional `catalog.yaml` — booty reconciles
+to it each cache tick: creates missing targets, updates their declared fields, and disables (never
+deletes) a target whose entry is removed. With no `catalog.yaml` present, booty uses a curated
+flag-derived default (Flatcar primary channel + `lts`, Talos). Targets created via the API/UI are
+left alone.
+
+```bash
+cp docs/examples/catalog.yaml data/catalog.yaml   # start from the shipped example, then edit
+```
+
+See **[`docs/schema/CATALOG.md`](docs/schema/CATALOG.md)** for the full schema, precedence, and
+reconcile semantics, including **upgrade notes** for anyone running booty before this feature
+landed.
+
 ## Building from source
 
 Requires Go 1.26+ and Node.js (for the web UI).
@@ -240,3 +256,5 @@ See [`LICENSE`](LICENSE).
   - **[API](docs/schema/API.md)** — HTTP endpoints, TFTP boot filenames, proxyDHCP behavior.
   - **[Database](docs/schema/DATABASE.md)** — the host database and version-metadata records.
   - **[Storage](docs/schema/STORAGE.md)** — the on-disk data-directory and cache layout.
+  - **[Catalog](docs/schema/CATALOG.md)** — the declarative `catalog.yaml` schema and reconcile
+    semantics for cache targets.

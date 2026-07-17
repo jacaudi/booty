@@ -1,0 +1,75 @@
+# catalog.yaml — booty's declarative cache-target catalog.
+#
+# Terminology: the "catalog" is this user-facing file — what OS images/versions
+# you want booty to hold. A "target" is the internal DB concept (the `targets`
+# table) that each catalog entry maps onto 1:1. You write catalog entries;
+# booty reconciles them into targets.
+#
+# Location & precedence (see docs/schema/CATALOG.md):
+#   --catalogFile (if set)  ->  <dataDir>/catalog.yaml (if present)  ->  a
+#   flag-derived built-in default (this file's ACTIVE section below, mirrored).
+#
+# Booty reconciles every entry below each cache tick: creates a target if
+# missing, updates its enabled/retain fields to match this file, and DISABLES
+# (never deletes) a target whose entry is removed — cached bytes are kept.
+# Targets created via the API/UI (not listed here) are left completely alone.
+#
+# Copy this file to <dataDir>/catalog.yaml and edit it, or point --catalogFile
+# at your own copy.
+
+schemaVersion: 1
+
+catalog:
+  # ── ACTIVE: this is booty's shipped default set (byte-for-byte what you get
+  # ── with NO catalog.yaml present, driven by --flatcarChannel/--flatcarArchitecture/
+  # ── --talosSchematic/--talosArchitecture/--talosRetainMinors). Fedora CoreOS is
+  # ── intentionally NOT included — add it explicitly below if you want it.
+  - os: flatcar
+    arch: amd64
+    retain: 1
+    spec: { channel: stable }
+
+  - os: flatcar
+    arch: amd64
+    retain: 1
+    spec: { channel: lts }
+
+  - os: talos
+    arch: amd64
+    retain: 3
+    spec: { schematic: 376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba }
+
+  # ── The entries below are commented out — illustrative, not active. Uncomment
+  # ── and adjust any you want; each is a fully valid, independently addable entry.
+
+  # Fedora CoreOS — opt-in (not part of the shipped default). Add both channels
+  # if you want to track them side by side.
+  # - os: fedora-coreos
+  #   arch: x86_64
+  #   retain: 1
+  #   spec: { channel: stable }
+  # - os: fedora-coreos
+  #   arch: x86_64
+  #   retain: 1
+  #   spec: { channel: testing }
+
+  # Flatcar beta channel, alongside the active stable/lts entries above.
+  # - os: flatcar
+  #   arch: amd64
+  #   retain: 1
+  #   spec: { channel: beta }
+
+  # Talos on arm64, in addition to the active amd64 entry above — a homelab
+  # running both architectures on the same schematic.
+  # - os: talos
+  #   arch: arm64
+  #   retain: 3
+  #   spec: { schematic: 376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba }
+
+  # Debian — NOT YET SUPPORTED. Debian target support (release -> codename,
+  # sourceMode/dvdCount) does not exist yet; the loader rejects a `debian`
+  # entry today. This shape is forthcoming with Debian target support — do not
+  # uncomment it yet.
+  # - os: debian
+  #   arch: amd64
+  #   spec: { release: "13", sourceMode: netinst }

@@ -340,8 +340,8 @@ describe('CacheView', () => {
     expect(screen.getByText('schematic 43fac7…1367')).toBeInTheDocument()
   })
 
-  it('names the predefined default target after the seeded vanilla schematic', async () => {
-    // The predefined Talos target (pkg/cache/seed.go:53) carries the constant
+  it('names the catalog default target after the seeded vanilla schematic', async () => {
+    // The catalog default Talos target carries the constant
     // DefaultTalosSchematic id, and SeedVanillaSchematic seeds a matching
     // kind=schematic config named "vanilla" at startup — so it names itself.
     const vanilla = '376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba'
