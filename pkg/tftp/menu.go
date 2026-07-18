@@ -17,6 +17,7 @@ var osTitle = map[string]string{
 	"flatcar": "Flatcar",
 	"coreos":  "Fedora CoreOS",
 	"talos":   "Talos",
+	"debian":  "Debian",
 }
 
 // menuItemText is the human-readable label for one cache entry, e.g.

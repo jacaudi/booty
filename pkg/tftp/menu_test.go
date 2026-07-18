@@ -189,3 +189,9 @@ func TestRenderMenuSelectionRejects(t *testing.T) {
 		}
 	}
 }
+
+func TestOSTitle_Debian(t *testing.T) {
+	if osTitle["debian"] != "Debian" {
+		t.Fatalf("osTitle[debian]=%q want Debian", osTitle["debian"])
+	}
+}
