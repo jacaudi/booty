@@ -23,6 +23,19 @@ func TestCacheDirAndURLShareSegments(t *testing.T) {
 	}
 }
 
+// TestCacheURLPath_ComposesBase pins the refactor: CacheURLPath is the
+// host-less single source, and CacheURLBase composes it by prepending server
+// — so the boot-URL layout and the preseed mirror directory can never diverge.
+func TestCacheURLPath_ComposesBase(t *testing.T) {
+	p := CacheURLPath("debian", "12", "amd64", "12.15.0")
+	if p != "/data/cache/debian/12/amd64/12.15.0" {
+		t.Fatalf("CacheURLPath = %q", p)
+	}
+	if got := CacheURLBase("10.0.0.1:8080", "debian", "12", "amd64", "12.15.0"); got != "10.0.0.1:8080"+p {
+		t.Fatalf("CacheURLBase must compose CacheURLPath: %q", got)
+	}
+}
+
 func TestNameBridge_FedoraCoreOS(t *testing.T) {
 	if got := canonicalToCacheName("fedora-coreos"); got != "coreos" {
 		t.Errorf("canonicalToCacheName(fedora-coreos) = %q, want coreos", got)
