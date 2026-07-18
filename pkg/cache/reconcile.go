@@ -49,10 +49,18 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 	// the generic netinst Artifacts path below (which would cache throwaway
 	// linux/initrd files for a target that's meant to serve the DVD tree).
 	if t.OS == "debian" && wantsDVD(t) {
-		version, verr := debianDVDVersion(ctx, o, params) // newest point release for the suite
-		if verr != nil {
-			slog.Warn("cache: debian dvd version resolve failed; retry next tick", "target", t.ID, "err", verr)
-			return nil
+		// A settled DVD target resolves its version from disk/DB (no network,
+		// no re-resolve against upstream every tick) — this is what freezes
+		// the archive (NEW-6). Only a target with NO existing settled version
+		// (a fresh promote/first setup) discovers the newest point release.
+		version, have := existingDVDVersion(store, t)
+		if !have {
+			v, verr := debianDVDVersion(ctx, o, params) // newest point release for the suite
+			if verr != nil {
+				slog.Warn("cache: debian dvd version resolve failed; retry next tick", "target", t.ID, "err", verr)
+				return nil
+			}
+			version = v
 		}
 		if err := ensureDebianDVD(ctx, store, t, version); err != nil {
 			slog.Warn("cache: debian dvd ensure failed; retry next tick", "target", t.ID, "err", err)

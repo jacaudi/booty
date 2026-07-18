@@ -63,9 +63,18 @@ config file.
 > are seeded disabled specifically so upgrading downloads nothing extra by default: a full offline
 > 11+12 dvd set is **~44 GB** (two point releases × two DVDs each, design
 > `2026-07-14-debian-image-support-design.md` §6.1), and no operator should get that on disk without
-> asking for it. Opt in per-release via `POST /api/v1/targets/{id}/promote-dvd` (design §8.5) — or
-> declare `sourceMode: dvd` directly in your own `catalog.yaml` (see
-> [schema/CATALOG.md](schema/CATALOG.md#example-3)) if you want it enabled from first boot.
+> asking for it.
+>
+> **Two separate opt-in mechanisms exist — they are not interchangeable:**
+>
+> - **Enable a seeded 11/12 dvd target.** These are already `sourceMode: dvd`, just `enabled: false`.
+>   The catalog is authoritative for `enabled` on catalog-managed targets (reconciled every tick), so
+>   `PATCH enabled=true` reverts on the next pass — you must set `enabled: true` for that entry in your
+>   own `catalog.yaml` (see [schema/CATALOG.md](schema/CATALOG.md#example-3)) instead.
+> - **`POST /api/v1/targets/{id}/promote-dvd`** promotes an already-**enabled netinst** target (e.g.
+>   the seeded Debian 13 amd64 target) to dvd mode. It requires `sourceMode == "netinst"` and returns
+>   `409` on a target that is already `dvd` — so it does **not** apply to the seeded 11/12 entries,
+>   which start life already in dvd mode.
 
 ### Retention windows for single-version-discovery OSes
 

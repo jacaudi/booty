@@ -133,6 +133,20 @@ func (s *Store) SetCachePinnedByTargetVersion(tvID int64, pinned bool) error {
 	return nil
 }
 
+// CacheEntryExists reports whether a cache_entries row exists for
+// targetVersionID — used by the Debian DVD reconciler's fully-settled
+// short-circuit to distinguish "sentinel present + rows recorded" (true
+// no-op) from "sentinel present + rows missing" (self-heal still required).
+func (s *Store) CacheEntryExists(targetVersionID int64) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM cache_entries WHERE target_version_id = ?)`, targetVersionID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("db: cache entry exists tv=%d: %w", targetVersionID, err)
+	}
+	return exists, nil
+}
+
 func (s *Store) ListCacheEntries(f CacheFilter) ([]CacheEntryRow, error) {
 	q := cacheEntryJoin + " WHERE 1=1"
 	var args []any

@@ -68,6 +68,42 @@ func TestDownloadLargeFile_ServerIgnoresRangeRestartsClean(t *testing.T) {
 	}
 }
 
+// TestDownloadLargeFile_416AlreadyCompleteRenamesAndReturns covers #3/NEW-1's
+// sibling: a crash between io.Copy finishing and os.Rename running on a prior
+// attempt leaves a FULL-SIZE .download file. The next attempt sends
+// Range: bytes=<size>- past EOF, and a compliant server replies 416. That must
+// be treated as "already fully downloaded" — rename and return nil — not a
+// permanent per-tick failure (isoVerify's checksum step is the correctness
+// gate for a truly corrupt file).
+func TestDownloadLargeFile_416AlreadyCompleteRenamesAndReturns(t *testing.T) {
+	payload := bytes.Repeat([]byte("finished-iso-bytes\n"), 4096)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "x.iso")
+	// pre-seed the in-progress file with the FULL payload, simulating a crash
+	// between io.Copy completing and os.Rename running on a prior attempt.
+	if err := os.WriteFile(dest+".download", payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := downloadLargeFile(t.Context(), srv.URL+"/x.iso", dest); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("416 path corrupted the file: got %d bytes, want %d", len(got), len(payload))
+	}
+	if _, err := os.Stat(dest + ".download"); !os.IsNotExist(err) {
+		t.Fatal(".download should be removed after rename on 416")
+	}
+}
+
 func TestDownloadLargeFile_CancelStops(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done() // never responds

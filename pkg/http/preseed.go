@@ -14,6 +14,7 @@ import (
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
 
@@ -93,17 +94,23 @@ func appendDVDMirror(out []byte, mirrorHost, dir string) []byte {
 // not Debian, or its resolved target is not (yet) dvd-mode — the netinst
 // (and non-Debian) case, which must serve its preseed unchanged.
 //
-// arch is hardcoded "amd64" and the suite falls back to the literal "13"
+// arch is hardcoded "amd64" and the suite falls back to ostype.DefaultDebianChannel
 // absent an assigned channel, mirroring pkg/tftp's bootTokens debian case
 // (Task 8): Debian has no config.DebianArchitecture/DebianChannel flag, so
 // there is no other per-deployment default to read.
+//
+// arch is NOT read from host.AssignedArch (#1), matching pkg/tftp's
+// bootTokens: the only production writer of that column always passes "" for
+// arch, so it is never actually populated — wiring it through here would be
+// dead code. Real per-host arch resolution for the assigned-boot path is
+// separate multi-arch work.
 func debianDVDMirrorDir(store *db.Store, host *hardware.Host) (string, bool) {
 	if host == nil || host.OS != "debian" {
 		return "", false
 	}
 	const arch = "amd64"
 	params, _ := cache.DecodeParams(host.AssignedParams)
-	suite := cmp.Or(params["channel"], "13")
+	suite := cmp.Or(params["channel"], ostype.DefaultDebianChannel)
 
 	encoded, err := cache.EncodeParams(map[string]string{"channel": suite})
 	if err != nil {

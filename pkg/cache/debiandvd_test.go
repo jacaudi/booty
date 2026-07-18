@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
@@ -296,6 +297,49 @@ func TestEnsureDebianDVD_SentinelPresentButRowsMissingSelfHeals(t *testing.T) {
 	}
 }
 
+// TestEnsureDebianDVD_VerifyFailureClearsISOsForRefetch guards against a stall
+// introduced by the NEW-1 skip-already-downloaded optimization: a full-size but
+// wrong-content ISO (e.g. a divergent mirror / re-spun point release) fails
+// isoVerify, but isoVerify only DETECTS the mismatch — it doesn't remove the bad
+// file. Without cleanup, the next tick would os.Stat the still-present destPath,
+// SKIP the re-download, and fail verify again forever. So on a verify failure
+// ensureDebianDVD must REMOVE the downloaded ISOs (+ SHA256SUMS/.sign) before
+// returning the error, letting the next tick re-download clean. This is still a
+// pre-flip failure path: source_mode stays netinst, desired_mode stays dvd, and
+// no extracted tree exists yet.
+func TestEnsureDebianDVD_VerifyFailureClearsISOsForRefetch(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error { return os.WriteFile(dest, []byte("bad"), 0o644) },
+		func(ctx context.Context, dir string, names []string) error { return errors.New("checksum mismatch") },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error { return nil })
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 2})
+	_ = store.SetTargetDesiredMode(id, "dvd", 2)
+	tgt, _ := store.GetTarget(id)
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err == nil {
+		t.Fatal("expected verify failure")
+	}
+
+	// Every ISO plus SHA256SUMS/.sign must be gone so the next tick re-downloads
+	// them clean (the skip-if-destPath-exists path would otherwise loop forever).
+	dir := cacheDir("debian", "12", "amd64", "12.15.0")
+	isoNames, _, _, _ := debianDVDSources("12", "amd64", "12.15.0", 2)
+	for _, name := range append(isoNames, "SHA256SUMS", "SHA256SUMS.sign") {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("verify-rejected %s must be removed for a clean re-fetch; still present (err=%v)", name, err)
+		}
+	}
+
+	// Still a pre-flip failure: netinst preserved, desired_mode still dvd.
+	got, _ := store.GetTarget(id)
+	if got.SourceMode != "netinst" || got.DesiredMode != "dvd" {
+		t.Fatalf("verify failure must leave source=netinst, desired=dvd; got %q/%q", got.SourceMode, got.DesiredMode)
+	}
+}
+
 func TestEnsureDebianDVD_FailedDownloadLeavesNetinst(t *testing.T) {
 	store := newEnsureDVDStore(t)
 	swapDVDSeams(t,
@@ -313,5 +357,223 @@ func TestEnsureDebianDVD_FailedDownloadLeavesNetinst(t *testing.T) {
 	got, _ := store.GetTarget(id)
 	if got.SourceMode != "netinst" || got.DesiredMode != "dvd" {
 		t.Fatalf("failure must leave source=netinst, desired=dvd (retry next tick); got %q/%q", got.SourceMode, got.DesiredMode)
+	}
+}
+
+// TestExistingDVDVersion covers the reconciler's network-avoidance lookup
+// (NEW-6): it must find a target's already-settled DVD version — a manual,
+// cached target_versions row whose on-disk dir still carries the completion
+// sentinel — WITHOUT any network access (no ctx is even accepted), and must
+// report ok=false for every case that requires a fresh discovery instead:
+// no rows at all, a discovered (non-manual) row, an uncached manual row, and
+// a manual+cached row whose dir lost its sentinel.
+func TestExistingDVDVersion(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 1})
+	tgt, _ := store.GetTarget(id)
+
+	if _, ok := existingDVDVersion(store, *tgt); ok {
+		t.Fatal("no rows yet: want ok=false")
+	}
+
+	// A discovered (not manual) row must be ignored even if cached.
+	_ = store.UpsertTargetVersion(db.TargetVersion{TargetID: id, Version: "12.14.0", Source: "discovered", Cached: true})
+	if _, ok := existingDVDVersion(store, *tgt); ok {
+		t.Fatal("discovered row must not count as a settled DVD version")
+	}
+
+	// A manual but uncached row (e.g. mid-promote, before ensureDebianDVD ever
+	// ran) must be ignored.
+	_ = store.PinManualVersion(id, "12.15.0")
+	if _, ok := existingDVDVersion(store, *tgt); ok {
+		t.Fatal("manual+uncached row must not count as a settled DVD version")
+	}
+
+	// Manual + cached, but the on-disk sentinel is missing (a stale DB row
+	// outliving its tree) — must not be trusted either.
+	_ = store.UpsertTargetVersion(db.TargetVersion{TargetID: id, Version: "12.15.0", Source: "manual", Cached: true})
+	if _, ok := existingDVDVersion(store, *tgt); ok {
+		t.Fatal("manual+cached row with no on-disk sentinel must not count as settled")
+	}
+
+	// Write the sentinel: now it must resolve, with no network involved.
+	dir := cacheDir("debian", "12", "amd64", "12.15.0")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, dvdSentinelName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	version, ok := existingDVDVersion(store, *tgt)
+	if !ok || version != "12.15.0" {
+		t.Fatalf("want settled version 12.15.0/true, got %q/%v", version, ok)
+	}
+}
+
+// TestEnsureDebianDVD_FullySettledIsNoOp covers NEW-4: once a DVD target is
+// fully settled (sentinel present, source_mode=dvd, cache_entries row
+// recorded), a second ensureDebianDVD call for the SAME version must be a
+// true no-op — no downloads, and no re-walk/re-upsert of the DB row. Proven
+// by mutating the on-disk tree between calls (adding a file that would
+// change dirSize if re-walked) and asserting the recorded size is untouched.
+func TestEnsureDebianDVD_FullySettledIsNoOp(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	var downloads int
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error { downloads++; return os.WriteFile(dest, []byte("iso"), 0o644) },
+		func(ctx context.Context, dir string, names []string) error { return nil },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error {
+			if err := os.MkdirAll(final, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(final, dvdSentinelName), nil, 0o644)
+		})
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 1})
+	_ = store.SetTargetDesiredMode(id, "dvd", 1)
+	tgt, _ := store.GetTarget(id)
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.GetTarget(id) // now source_mode == "dvd"
+	rowsBefore, _ := store.ListCacheEntries(db.CacheFilter{OS: "debian"})
+	if len(rowsBefore) != 1 {
+		t.Fatalf("want 1 cache entry after first ensure, got %d", len(rowsBefore))
+	}
+	sizeBefore := rowsBefore[0].Size
+
+	// Mutate the on-disk tree: if the second call re-walks it, the recorded
+	// size will change; if it's a true no-op, it won't.
+	dir := cacheDir("debian", "12", "amd64", "12.15.0")
+	if err := os.WriteFile(filepath.Join(dir, "extra.bin"), []byte("EXTRA-BYTES"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	downloads = 0
+	if err := ensureDebianDVD(t.Context(), store, *got, "12.15.0"); err != nil {
+		t.Fatal(err)
+	}
+	if downloads != 0 {
+		t.Fatalf("fully-settled target must not download: got %d", downloads)
+	}
+	rowsAfter, _ := store.ListCacheEntries(db.CacheFilter{OS: "debian"})
+	if len(rowsAfter) != 1 || rowsAfter[0].Size != sizeBefore {
+		t.Fatalf("fully-settled short-circuit must not re-walk/re-upsert: before=%d after=%+v", sizeBefore, rowsAfter)
+	}
+}
+
+// TestEnsureDebianDVD_RemovesStaleNetinstArtifactsForSameVersion covers
+// NEW-5: when the DVD version's dir also happens to be the version a prior
+// netinst caching pass used, the bare linux/initrd.gz netboot files left
+// behind must be removed once the DVD tree is settled — superseded by
+// install.<arch>/ inside the merged tree (design §8.5).
+func TestEnsureDebianDVD_RemovesStaleNetinstArtifactsForSameVersion(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error { return os.WriteFile(dest, []byte("iso"), 0o644) },
+		func(ctx context.Context, dir string, names []string) error { return nil },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error {
+			if err := os.MkdirAll(filepath.Join(final, "install."+arch), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(final, "install."+arch, "linux"), []byte("K"), 0o644); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(final, dvdSentinelName), nil, 0o644)
+		})
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"13"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 1})
+	_ = store.SetTargetDesiredMode(id, "dvd", 1)
+	tgt, _ := store.GetTarget(id)
+
+	// Same version's dir already carries netinst artifacts (a prior netinst
+	// cache pass for the same point release before it was promoted).
+	dir := cacheDir("debian", "13", "amd64", "13.1.0")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "linux"), []byte("OLD-KERNEL"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "initrd.gz"), []byte("OLD-INITRD"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "13.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "linux")); !os.IsNotExist(err) {
+		t.Fatal("stale bare netinst linux must be removed after DVD extract for the same version")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "initrd.gz")); !os.IsNotExist(err) {
+		t.Fatal("stale bare netinst initrd.gz must be removed after DVD extract for the same version")
+	}
+	// install.<arch>/ tree (the DVD's own boot source) must be untouched.
+	if _, err := os.Stat(filepath.Join(dir, "install.amd64", "linux")); err != nil {
+		t.Fatalf("install.amd64/linux must remain: %v", err)
+	}
+}
+
+// TestEnsureDebianDVD_SkipsAlreadyDownloadedISO covers NEW-1: an ISO whose
+// final destPath already exists on disk (a completed disc from a prior,
+// interrupted attempt — e.g. disc-2 of a multi-disc set failed, or extract
+// failed after every disc landed) must not be re-downloaded on retry.
+func TestEnsureDebianDVD_SkipsAlreadyDownloadedISO(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	var downloadedURLs []string
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error {
+			downloadedURLs = append(downloadedURLs, url)
+			return os.WriteFile(dest, []byte("data"), 0o644)
+		},
+		func(ctx context.Context, dir string, names []string) error { return nil },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error {
+			if err := os.MkdirAll(final, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(final, dvdSentinelName), nil, 0o644)
+		})
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 2})
+	_ = store.SetTargetDesiredMode(id, "dvd", 2)
+	tgt, _ := store.GetTarget(id)
+
+	dir := cacheDir("debian", "12", "amd64", "12.15.0")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	isoNames, _, _, _ := debianDVDSources("12", "amd64", "12.15.0", 2)
+	if err := os.WriteFile(filepath.Join(dir, isoNames[0]), []byte("already-here"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range downloadedURLs {
+		if strings.Contains(u, isoNames[0]) {
+			t.Fatalf("already-downloaded disc-1 must not be re-downloaded; got download of %s", u)
+		}
+	}
+	found := false
+	for _, u := range downloadedURLs {
+		if strings.Contains(u, isoNames[1]) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("disc-2 must still be downloaded; got %v", downloadedURLs)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, isoNames[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "already-here" {
+		t.Fatalf("pre-existing ISO content must be preserved untouched, got %q", body)
 	}
 }

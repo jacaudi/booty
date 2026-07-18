@@ -205,7 +205,7 @@ catalog:
     spec: { channel: "13" }
   - os: debian
     arch: amd64
-    enabled: false               # seeded but OFF — an operator opts in via promote-dvd
+    enabled: false               # seeded but OFF — an operator opts in by setting enabled: true here
     retain: 1
     sourceMode: dvd
     dvdCount: 1
@@ -222,9 +222,14 @@ catalog:
 **Fedora CoreOS is intentionally not in this default.** Add it via a
 `catalog.yaml` (see [example 1](#example-1) below) or the API (`source=api`,
 untouched by the catalog pass) if you want it. **Debian 12/11 `dvd` entries
-are seeded disabled** — zero download until you promote them (see
-[Upgrade notes](#upgrade-notes) for the disk-cost implications and the
-`promote-dvd` flow).
+are seeded disabled** — zero download until an operator sets `enabled: true`
+for that entry in their own `catalog.yaml` (the catalog is authoritative for
+`enabled` on catalog-managed targets, so a `PATCH enabled=true` reverts on the
+next tick). `promote-dvd` is a *separate* mechanism — it promotes an
+already-**enabled netinst** target (e.g. the seeded Debian 13 target) to dvd
+mode, and returns `409` on a target that is already `dvd` like these seeded
+entries — see [Upgrade notes](#upgrade-notes) for the disk-cost implications
+and the full opt-in story.
 
 A copy of this default, plus commented illustrative entries, ships at
 [`docs/examples/catalog.yaml`](../examples/catalog.yaml) — copy it to
@@ -314,8 +319,11 @@ catalog:
 ### Example 3
 
 Debian: 13 (trixie) netinst on both architectures, plus 12 (bookworm) and 11
-(bullseye) dvd mode for a fully offline install set — 12 seeded enabled
-(operator already promoted it), 11 seeded disabled (not yet promoted):
+(bullseye) dvd mode for a fully offline install set — 12 enabled (dvd caching
+active), 11 disabled (`enabled: false`, cached only if you flip it to `true`
+here). Enabling a dvd target is purely `enabled: true` in this file; a disabled
+dvd entry is simply off, not "un-promoted" (`promote-dvd` is a separate flow
+for enabled *netinst* targets):
 
 ```yaml
 schemaVersion: 1
@@ -386,8 +394,10 @@ should know about:
 - **Debian added to the default set.** A fresh default catalog now also
   creates an **enabled** Debian 13 netinst target (amd64+arm64, small — just
   installer images) and two **disabled** Debian 12/11 dvd targets (zero
-  download until promoted — see [CONFIGURATION.md](../CONFIGURATION.md) for
-  the ~44 GB disk cost of a full 11+12 dvd set and the `promote-dvd` flow).
+  download until an operator sets `enabled: true` for that entry in their own
+  `catalog.yaml` — see [CONFIGURATION.md](../CONFIGURATION.md) for the ~44 GB
+  disk cost of a full 11+12 dvd set and how this differs from `promote-dvd`,
+  which only promotes an already-enabled **netinst** target).
 - **Curated default-set change (breaking).** The shipped default **drops
   Fedora CoreOS** and **adds Flatcar `lts`** (see
   [The default catalog](#the-default-catalog-no-file-present)). If you had no

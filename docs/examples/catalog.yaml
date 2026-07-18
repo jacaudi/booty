@@ -51,7 +51,8 @@ catalog:
 
   - os: debian
     arch: amd64
-    enabled: false          # seeded but OFF — promote via the API/UI when you want it
+    enabled: false          # seeded but OFF — set enabled: true here to opt in (promote-dvd
+                             # does NOT apply: it only promotes an already-enabled netinst target)
     retain: 1
     sourceMode: dvd
     dvdCount: 1
@@ -92,11 +93,14 @@ catalog:
   #   retain: 3
   #   spec: { schematic: 376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba }
 
-  # Debian dvd, pre-enabled at catalog-authoring time instead of promoting via
-  # the API/UI after the fact — e.g. if you already know you want the full
-  # offline install set from first boot (~44 GB for a full 11+12 dvd set;
-  # see docs/CONFIGURATION.md). channel must be "11", "12", or "13"; dvd mode
-  # is amd64-only (Debian ships no arm64 DVD ISOs).
+  # Debian dvd, pre-enabled at catalog-authoring time — e.g. if you already
+  # know you want the full offline install set from first boot (~44 GB for a
+  # full 11+12 dvd set; see docs/CONFIGURATION.md). This is the ONLY way to
+  # enable a dvd-mode target that starts life disabled (like the seeded 12/11
+  # entries above): promote-dvd does not apply — it promotes an already-
+  # enabled NETINST target (like the seeded 13 entries), and 409s on a target
+  # that is already dvd. channel must be "11", "12", or "13"; dvd mode is
+  # amd64-only (Debian ships no arm64 DVD ISOs).
   # - os: debian
   #   arch: amd64
   #   retain: 1

@@ -54,6 +54,15 @@ func downloadLargeFile(ctx context.Context, url, destPath string) error {
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			return err
 		}
+	case http.StatusRequestedRangeNotSatisfiable: // 416 — offset is already past EOF: a
+		// crash between io.Copy finishing and os.Rename running on a PRIOR attempt left
+		// a full-size .download file. Treat it as already-downloaded and rename;
+		// isoVerify's checksum step downstream is the correctness gate for a truly
+		// corrupt file, not this transport layer.
+		if err := f.Close(); err != nil {
+			return err
+		}
+		return os.Rename(partial, destPath)
 	default:
 		return fmt.Errorf("cache: download %s: unexpected status %s", url, resp.Status)
 	}

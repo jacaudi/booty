@@ -163,7 +163,9 @@ func ValidateTargetParams(o ostype.OS, params map[string]string) error {
 // the default set (design §5). The *set* is curated: Flatcar (primary channel +
 // lts), Talos, and Debian (13 netinst amd64+arm64, enabled; 12 and 11 dvd
 // amd64, seeded but DISABLED so a fresh install downloads nothing until an
-// operator opts in via promote-dvd — a full DVD set is ~44 GB, design §6.1).
+// operator opts in by setting enabled:true for that entry in catalog.yaml —
+// a full DVD set is ~44 GB, design §6.1. promote-dvd does NOT apply to these:
+// it promotes an already-enabled netinst target, not a disabled dvd one).
 // Fedora CoreOS is intentionally NOT in the default (operators add it via
 // catalog.yaml or the API). retain 1 for flatcar/debian is a code constant (no
 // flag exists); talos retain follows --talosRetainMinors.
@@ -184,8 +186,12 @@ func defaultCatalog() []CatalogEntry {
 		Retain: new(viper.GetInt(config.TalosRetainMinors)), Spec: map[string]string{"schematic": viper.GetString(config.TalosSchematic)}})
 
 	// Debian: 13 (trixie) netinst on both arches, enabled by default. 12 and 11
-	// dvd amd64, seeded but disabled — an operator promotes via the API/UI when
-	// they want the full offline install set.
+	// dvd amd64, seeded but disabled — an operator opts in by setting
+	// enabled:true for that entry in their own catalog.yaml (the catalog is
+	// authoritative for enabled, so a PATCH would revert). promote-dvd is a
+	// SEPARATE mechanism: it promotes an already-enabled netinst target (like
+	// the seeded 13 entries) to dvd, and does not apply to these — they start
+	// life already in dvd mode.
 	entries = append(entries,
 		CatalogEntry{OS: "debian", Arch: "amd64", Enabled: new(true), Retain: new(1), Spec: map[string]string{"channel": "13"}},
 		CatalogEntry{OS: "debian", Arch: "arm64", Enabled: new(true), Retain: new(1), Spec: map[string]string{"channel": "13"}},

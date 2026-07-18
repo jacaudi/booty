@@ -9,6 +9,15 @@ import (
 
 func init() { register(debian{}) }
 
+// DefaultDebianChannel is the release channel used when a Debian target has
+// no per-deployment default to read from (no config.DebianChannel flag exists
+// — targets are catalog-declared, potentially multiple channels at once) and
+// no host-assigned channel either. Single-sourced here so pkg/tftp's
+// bootTokens and pkg/http's debianDVDMirrorDir — which both need this same
+// fallback — can't drift from each other or from this package's own internal
+// default (the "13" stable/current suite).
+const DefaultDebianChannel = "13"
+
 type debian struct{}
 
 func (debian) Name() string             { return "debian" }
@@ -45,10 +54,26 @@ func fetchDebianIndex(ctx context.Context, url string) (string, error) {
 	return string(body), nil
 }
 
+// debianPointReleaseRE precompiles, once at init, the point-release matcher
+// for each known Debian major channel (the same set debianCodenames
+// validates) — a bare "<major>.x.y" token anywhere in a directory index body
+// — instead of calling regexp.MustCompile on every newestDebianPointRelease
+// call.
+var debianPointReleaseRE = func() map[string]*regexp.Regexp {
+	m := make(map[string]*regexp.Regexp, len(debianCodenames))
+	for major := range debianCodenames {
+		m[major] = regexp.MustCompile(`\b` + regexp.QuoteMeta(major) + `\.\d+\.\d+\b`)
+	}
+	return m
+}()
+
 // newestDebianPointRelease returns the highest <major>.x.y token found in
-// body, or "" if none match.
+// body, or "" if none match (including an unrecognized major).
 func newestDebianPointRelease(body, major string) string {
-	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(major) + `\.\d+\.\d+\b`)
+	re, ok := debianPointReleaseRE[major]
+	if !ok {
+		return ""
+	}
 	matches := re.FindAllString(body, -1)
 	if len(matches) == 0 {
 		return ""
@@ -62,7 +87,7 @@ func newestDebianPointRelease(body, major string) string {
 func (debian) DiscoverVersions(ctx context.Context, params map[string]string) ([]string, error) {
 	major := params["channel"]
 	if debianCodenames[major] == "" {
-		return nil, fmt.Errorf("debian: unknown release channel %q (want 11/12/13)", major)
+		return nil, fmt.Errorf("ostype: debian: unknown release channel %q (want 11/12/13)", major)
 	}
 	var indexURL string
 	switch major {
@@ -73,11 +98,11 @@ func (debian) DiscoverVersions(ctx context.Context, params map[string]string) ([
 	}
 	body, err := debianIndexFetcher(ctx, indexURL)
 	if err != nil {
-		return nil, fmt.Errorf("debian: fetch index %s: %w", indexURL, err)
+		return nil, fmt.Errorf("ostype: debian: fetch index %s: %w", indexURL, err)
 	}
 	v := newestDebianPointRelease(body, major)
 	if v == "" {
-		return nil, fmt.Errorf("debian: no point release for %s in %s", major, indexURL)
+		return nil, fmt.Errorf("ostype: debian: no point release for %s in %s", major, indexURL)
 	}
 	return []string{v}, nil
 }

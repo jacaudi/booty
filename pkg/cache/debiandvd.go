@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/diskfs/go-diskfs"
@@ -243,6 +245,86 @@ func debianDVDVersion(ctx context.Context, o ostype.OS, params map[string]string
 	return versions[0], nil
 }
 
+// existingDVDVersion looks up target t's already-settled DVD version WITHOUT
+// touching the network: the manual, cached target_versions row (the one
+// ensureDebianDVD writes on a successful promote/self-heal) whose on-disk dir
+// still carries the completion sentinel. ok=false means there is no settled
+// tree yet — a fresh promote, or a stale DB row whose tree was lost — and the
+// caller must fall back to discovering the newest version instead. This is
+// what freezes the archive (NEW-6): once settled, the effective version is
+// read from disk/DB, never re-resolved against upstream each tick.
+func existingDVDVersion(store *db.Store, t db.Target) (version string, ok bool) {
+	versions, err := store.ListTargetVersions(t.ID)
+	if err != nil {
+		return "", false
+	}
+	params, err := decodeParams(t.Params)
+	if err != nil {
+		return "", false
+	}
+	cacheName := canonicalToCacheName(t.OS)
+	segment := paramSegment(params)
+	for _, v := range versions {
+		if v.Source != "manual" || !v.Cached {
+			continue
+		}
+		if dvdSentinelPresent(cacheDir(cacheName, segment, t.Arch, v.Version)) {
+			return v.Version, true
+		}
+	}
+	return "", false
+}
+
+// removeStaleNetinstArtifacts best-effort deletes the bare linux/initrd.gz
+// netboot files from a DVD version dir — leftover ONLY when the DVD version
+// happens to equal a version this target (or its netinst predecessor) also
+// cached netinst artifacts for (design §8.5: the DVD tree serves
+// install.<arch>/ instead, so the bare files are superseded). An absent file
+// is not an error; a real removal failure is logged and non-fatal — wasted
+// disk space, not a correctness problem.
+func removeStaleNetinstArtifacts(dir string) {
+	for _, name := range []string{"linux", "initrd.gz"} {
+		path := filepath.Join(dir, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			slog.Warn("cache: debian dvd: remove stale netinst artifact", "path", path, "err", err)
+		}
+	}
+}
+
+// removeUnverifiedISOs deletes the just-downloaded DVD set (isoNames +
+// SHA256SUMS/.sign) from dir after isoVerify rejected it, so the next
+// reconcile tick re-downloads clean instead of skipping the still-present
+// (bad) files and re-failing verify forever (the NEW-1 skip's failure mode).
+// Best-effort: an absent file is fine; a real removal failure is logged and
+// non-fatal (the tick already returns the verify error regardless).
+func removeUnverifiedISOs(dir string, isoNames []string) {
+	for _, name := range append(slices.Clone(isoNames), "SHA256SUMS", "SHA256SUMS.sign") {
+		path := filepath.Join(dir, name)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			slog.Warn("cache: debian dvd: remove unverified ISO", "path", path, "err", err)
+		}
+	}
+}
+
+// fullyDVDSettled reports whether ensureDebianDVD has nothing left to do for
+// (t, version): the extraction sentinel is present, source_mode has already
+// been flipped to "dvd", AND the cache_entries row for this version exists —
+// i.e. a prior run completed the heavy work AND the accounting+pin+flip. Only
+// then is it safe to skip the dirSize walk and DB upserts entirely (NEW-4). A
+// missing target_versions/cache_entries row (self-heal still pending) or
+// source_mode not yet flipped both report false, so the accounting block below
+// still runs and self-heals as before.
+func fullyDVDSettled(store *db.Store, t db.Target, dir, version string) (bool, error) {
+	if t.SourceMode != "dvd" || !dvdSentinelPresent(dir) {
+		return false, nil
+	}
+	tvID, err := store.TargetVersionID(t.ID, version)
+	if err != nil {
+		return false, nil // no row yet: self-heal path, not settled
+	}
+	return store.CacheEntryExists(tvID)
+}
+
 // debianDVDSources builds the cdimage.debian.org URLs for one DVD set (design
 // §5): the current stable suite (segment=="13") is served live from
 // debian-cd/current/; older suites are served from their point-release
@@ -307,13 +389,27 @@ func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version 
 	segment := paramSegment(params)         // channel, e.g. "12"
 	dir := cacheDir(cacheName, segment, t.Arch, version)
 
+	// Fully-settled short-circuit (NEW-4): nothing left to do — no dirSize
+	// walk, no DB upserts, no network. This must run BEFORE the heavy-work
+	// gate below so a settled target never even stats the tree beyond the
+	// sentinel check.
+	if settled, err := fullyDVDSettled(store, t, dir, version); err != nil {
+		return err
+	} else if settled {
+		return nil
+	}
+
 	if !dvdSentinelPresent(dir) { // heavy work only when the tree is not yet settled
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 		isoNames, isoURLs, sumsURL, sigURL := debianDVDSources(segment, t.Arch, version, t.DvdCount)
 		for i := range isoURLs {
-			if err := isoDownload(ctx, isoURLs[i], filepath.Join(dir, isoNames[i])); err != nil {
+			destPath := filepath.Join(dir, isoNames[i])
+			if _, err := os.Stat(destPath); err == nil {
+				continue // already downloaded in a prior attempt (NEW-1); isoVerify below is the correctness gate
+			}
+			if err := isoDownload(ctx, isoURLs[i], destPath); err != nil {
 				return fmt.Errorf("cache: download %s: %w", isoNames[i], err)
 			}
 		}
@@ -324,12 +420,25 @@ func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version 
 			return err
 		}
 		if err := isoVerify(ctx, dir, isoNames); err != nil {
+			// isoVerify only DETECTS a mismatch — it leaves the bad files in place.
+			// Combined with the skip-if-destPath-exists path above, a full-size but
+			// wrong-content ISO (divergent mirror / re-spun point release) would be
+			// skipped and re-rejected every tick forever. Remove the downloaded ISOs
+			// + sums/sig so the next tick re-downloads them clean and can self-heal
+			// once mirrors converge. Pre-flip failure: no sentinel/extracted tree
+			// exists yet, source_mode stays netinst.
+			removeUnverifiedISOs(dir, isoNames)
 			return err
 		}
 		if err := isoExtract(ctx, dir, isoNames, dir, t.Arch); err != nil { // writes sentinel LAST
 			return err
 		}
 	}
+
+	// The DVD version's dir may be the SAME dir a prior netinst caching pass
+	// used (NEW-5, design §8.5): remove any leftover bare linux/initrd.gz —
+	// superseded by install.<arch>/ inside the now-settled DVD tree.
+	removeStaleNetinstArtifacts(dir)
 
 	// Sentinel now guaranteed present (pre-existing or just written). Idempotently
 	// record the DB rows the generic path would have made: manual source (never

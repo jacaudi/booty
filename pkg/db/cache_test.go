@@ -80,6 +80,35 @@ func TestSetCachePinnedByTargetVersion(t *testing.T) {
 	}
 }
 
+// TestCacheEntryExists covers the Debian DVD reconciler's fully-settled
+// short-circuit lookup: false before any cache_entries row exists for a
+// target_version, true once one has been upserted.
+func TestCacheEntryExists(t *testing.T) {
+	s := newTestStore(t)
+	tgtID, _ := s.CreateTarget(Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`, Mode: "manual", RetainN: 1, Source: "catalog", Enabled: true})
+	_ = s.UpsertTargetVersion(TargetVersion{TargetID: tgtID, Version: "12.15.0", Source: "manual", Cached: true})
+	tvID := mustVersionID(t, s, tgtID, "12.15.0")
+
+	exists, err := s.CacheEntryExists(tvID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("no cache_entries row yet: want false")
+	}
+
+	if err := s.UpsertCacheEntry(tvID, 100); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = s.CacheEntryExists(tvID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("cache_entries row now present: want true")
+	}
+}
+
 func TestCacheEntryArchiveAndCascade(t *testing.T) {
 	s := newTestStore(t)
 	tgtID, _ := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"abc"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})

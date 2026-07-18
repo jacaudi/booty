@@ -17,6 +17,7 @@ import (
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/pin/tftp"
 	"github.com/spf13/viper"
 )
@@ -362,10 +363,20 @@ func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string
 		// Debian has no config.DebianChannel/DebianArchitecture flag (unlike the
 		// other OSes): targets are catalog-declared, potentially multiple
 		// channels/arches at once (#1/#3), so there is no single per-deployment
-		// default to read from viper. Fall back to literal defaults matching
-		// ostype/debian.go's own internal default (channel "13"/trixie, arch
-		// "amd64") when the host has no assigned channel.
-		suite := cmp.Or(hostParams(host)["channel"], "13")
+		// default to read from viper. Fall back to ostype.DefaultDebianChannel
+		// (arch stays a literal "amd64", see below) when the host has no
+		// assigned channel.
+		suite := cmp.Or(hostParams(host)["channel"], ostype.DefaultDebianChannel)
+		// arch is hardcoded, NOT read from host.AssignedArch (#1): the only
+		// production writer of that column (POST /hosts/{mac}/approve,
+		// pkg/http/api_hosts.go) always passes "" for arch, so the field is
+		// never actually populated — reading it here would be dead code, not
+		// a real fix. The menu boot path (renderMenuSelection/bootTokensFor)
+		// DOES serve arm64 correctly, since it carries arch through the
+		// parsed menu-selection tuple instead of this per-OS default; only
+		// the assigned-boot path is amd64-only. Wiring real per-host arch
+		// (populating AssignedArch on approve/assign and reading it here) is
+		// separate multi-arch work, not a one-line fix.
 		arch := "amd64"
 		version := cache.NewestCached("debian", arch, map[string]string{"channel": suite})
 		return bootTokensFor("debian", suite, arch, version, urlHost)
