@@ -62,6 +62,24 @@ func TestCacheEntryUpsertAndList(t *testing.T) {
 	}
 }
 
+// TestSetCachePinnedByTargetVersion covers the DVD branch's pin path, which
+// has a target_version_id but not the cache_entries.id SetCachePinned keys on.
+func TestSetCachePinnedByTargetVersion(t *testing.T) {
+	s := newTestStore(t)
+	tgtID, _ := s.CreateTarget(Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`, Mode: "manual", RetainN: 1, Source: "catalog", Enabled: true})
+	_ = s.UpsertTargetVersion(TargetVersion{TargetID: tgtID, Version: "12.15.0", Source: "manual", Cached: true})
+	tvID := mustVersionID(t, s, tgtID, "12.15.0")
+	_ = s.UpsertCacheEntry(tvID, 100)
+
+	if err := s.SetCachePinnedByTargetVersion(tvID, true); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := s.ListCacheEntries(CacheFilter{})
+	if len(rows) != 1 || !rows[0].Pinned {
+		t.Fatalf("want pinned row, got %+v", rows)
+	}
+}
+
 func TestCacheEntryArchiveAndCascade(t *testing.T) {
 	s := newTestStore(t)
 	tgtID, _ := s.CreateTarget(Target{OS: "talos", Arch: "amd64", Params: `{"schematic":"abc"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})

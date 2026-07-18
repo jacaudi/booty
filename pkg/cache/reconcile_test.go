@@ -2,6 +2,7 @@ package cache
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -788,4 +789,69 @@ func TestReconcileFCOSVerification(t *testing.T) {
 			t.Fatal("prior cached version dir must survive the newest version's rejection (D13/AC#4)")
 		}
 	})
+}
+
+// TestReconcileTarget_DebianDVDDivergesFromGenericNetinstPath asserts the
+// wantsDVD dispatch added by the Debian DVD reconciler branch: a
+// source_mode=dvd debian target is intercepted BEFORE the generic per-version
+// loop runs (no target_versions row is ever written for it), while a
+// source_mode=netinst sibling proceeds into the generic loop exactly as
+// before (its manually-pinned version's target_versions row IS written).
+//
+// Both calls use an ALREADY-CANCELLED context. ostype/debian.go's
+// DiscoverVersions and pkg/config's DownloadStaged both hardcode live
+// cdimage.debian.org/deb.debian.org URLs with no viper-injectable seam (a
+// pre-existing gap in ostype/debian.go — out of Task 7's file scope, which
+// touches only debiandvd.go/reconcile.go/db/cache.go). A cancelled context
+// makes both fail instantly with context.Canceled (net/http short-circuits
+// before dialing) instead of hitting the network or blocking on their
+// multi-second/-minute timeouts, keeping this test hermetic and fast while
+// still exercising the real `if t.OS == "debian" && wantsDVD(t)` dispatch.
+// The DVD branch's full success path (download→verify→extract→flip→pin) is
+// already covered end-to-end, offline, by
+// TestEnsureDebianDVD_PromoteFlipsPinsAndIsIdempotent, which calls
+// ensureDebianDVD directly with a literal version string (no discovery
+// involved).
+func TestReconcileTarget_DebianDVDDivergesFromGenericNetinstPath(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	store := newReconcileStore(t)
+
+	cancelledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	dvdID, err := store.CreateTarget(db.Target{
+		OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "manual", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "dvd", DvdCount: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dvdTgt, _ := store.GetTarget(dvdID)
+	if err := reconcileTarget(cancelledCtx, store, 4, *dvdTgt); err != nil {
+		t.Fatalf("reconcileTarget (dvd): %v", err)
+	}
+	if rows, _ := store.ListTargetVersions(dvdID); len(rows) != 0 {
+		t.Fatalf("dvd-mode target must be intercepted before the generic netinst path; got versions %+v", rows)
+	}
+
+	netID, err := store.CreateTarget(db.Target{
+		OS: "debian", Arch: "amd64", Params: `{"channel":"13"}`, // distinct identity from the dvd target above
+		Mode: "manual", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PinManualVersion(netID, "12.15.0"); err != nil {
+		t.Fatal(err)
+	}
+	netTgt, _ := store.GetTarget(netID)
+	if err := reconcileTarget(cancelledCtx, store, 4, *netTgt); err != nil {
+		t.Fatalf("reconcileTarget (netinst): %v", err)
+	}
+	rows, _ := store.ListTargetVersions(netID)
+	if len(rows) != 1 || rows[0].Version != "12.15.0" || rows[0].Source != "manual" {
+		t.Fatalf("netinst-mode target must proceed into the generic path (manual pin upserted); got %+v", rows)
+	}
 }

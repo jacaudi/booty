@@ -121,6 +121,18 @@ func (s *Store) SetCachePinned(id int64, pinned bool) error {
 	return nil
 }
 
+// SetCachePinnedByTargetVersion pins by target_version_id (SetCachePinned
+// keys on cache_entries.id, which the Debian DVD reconciler branch does not
+// hold — it only has the target_version_id it just upserted).
+func (s *Store) SetCachePinnedByTargetVersion(tvID int64, pinned bool) error {
+	if _, err := s.db.Exec(
+		`UPDATE cache_entries SET pinned = ? WHERE target_version_id = ?`,
+		boolToInt(pinned), tvID); err != nil {
+		return fmt.Errorf("db: pin tv=%d: %w", tvID, err)
+	}
+	return nil
+}
+
 func (s *Store) ListCacheEntries(f CacheFilter) ([]CacheEntryRow, error) {
 	q := cacheEntryJoin + " WHERE 1=1"
 	var args []any

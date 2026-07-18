@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
+	"github.com/spf13/viper"
 )
 
 // newTestPGPEntity generates a throwaway keypair for signing test fixtures.
@@ -155,5 +159,159 @@ func TestVerifyDVDChecksums_HappyAndTamper(t *testing.T) {
 	}
 	if err := verifyDVDChecksums(t.Context(), dir, names); err == nil {
 		t.Fatal("tampered ISO must fail checksum")
+	}
+}
+
+// swapDVDSeams injects fakes for the three isoDownload/isoVerify/isoExtract
+// package-var seams for the duration of a test (same strategy as
+// swapDebianKeyring/swapISOExtractor above), returning them via t.Cleanup.
+func swapDVDSeams(t *testing.T,
+	download func(context.Context, string, string) error,
+	verify func(context.Context, string, []string) error,
+	extract func(context.Context, string, []string, string, string) error) {
+	t.Helper()
+	od, ov, oe := isoDownload, isoVerify, isoExtract
+	isoDownload, isoVerify, isoExtract = download, verify, extract
+	t.Cleanup(func() { isoDownload, isoVerify, isoExtract = od, ov, oe })
+}
+
+// newEnsureDVDStore sets DataDir to a fresh t.TempDir() (cacheDir resolves
+// under it) and opens a temp SQLite store, mirroring the fixture pattern used
+// throughout reconcile_test.go.
+func newEnsureDVDStore(t *testing.T) *db.Store {
+	t.Helper()
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	store, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	return store
+}
+
+func TestEnsureDebianDVD_PromoteFlipsPinsAndIsIdempotent(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	var downloads int
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error { downloads++; return os.WriteFile(dest, []byte("iso"), 0o644) },
+		func(ctx context.Context, dir string, names []string) error { return nil },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error {
+			if err := os.MkdirAll(final, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(final, dvdSentinelName), nil, 0o644) // sentinel
+		})
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 1})
+	_ = store.SetTargetDesiredMode(id, "dvd", 1)
+
+	// Seed a prior netinst-cached version (row + cache_entries + on-disk dir) that
+	// the DVD tree supersedes; after promotion it must be fully reconciled away
+	// (dir removed AND row/cache_entries deleted), not left as an orphaned
+	// cached=1/size>0 row that permanently overcounts SumCacheBytes.
+	_ = store.UpsertTargetVersion(db.TargetVersion{TargetID: id, Version: "12.14.0", Source: "discovered", Cached: true})
+	oldTvID, _ := store.TargetVersionID(id, "12.14.0")
+	_ = store.UpsertCacheEntry(oldTvID, 999)
+	if err := os.MkdirAll(cacheDir("debian", "12", "amd64", "12.14.0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tgt, _ := store.GetTarget(id)
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.GetTarget(id)
+	if got.SourceMode != "dvd" || got.DesiredMode != "" {
+		t.Fatalf("post-promote: source=%q desired=%q, want dvd/empty", got.SourceMode, got.DesiredMode)
+	}
+	rows, _ := store.ListCacheEntries(db.CacheFilter{OS: "debian"})
+	if len(rows) != 1 || !rows[0].Pinned || rows[0].Version != "12.15.0" {
+		t.Fatalf("want 1 pinned cache entry for 12.15.0 (never-evict §11.2), got %+v", rows)
+	}
+	// Superseded netinst version fully gone from the DB (dir + row + cache_entries).
+	tvs, _ := store.ListTargetVersions(id)
+	for _, v := range tvs {
+		if v.Version == "12.14.0" {
+			t.Fatalf("superseded netinst version 12.14.0 must be deleted, still present: %+v", tvs)
+		}
+	}
+	if cacheDirExists("debian", "12", "amd64", "12.14.0") {
+		t.Fatal("superseded netinst version dir must be removed from disk")
+	}
+	downloads = 0 // idempotent: sentinel present → no re-download
+	if err := ensureDebianDVD(t.Context(), store, *got, "12.15.0"); err != nil {
+		t.Fatal(err)
+	}
+	if downloads != 0 {
+		t.Fatalf("second ensure re-downloaded %d files; sentinel must short-circuit", downloads)
+	}
+}
+
+// TestEnsureDebianDVD_SentinelPresentButRowsMissingSelfHeals covers the crash
+// window between isoExtract writing the sentinel and the DB mutations landing:
+// if a prior tick died there (or a transient SQLITE_BUSY aborted the writes),
+// the sentinel is on disk but the target_versions/cache_entries rows and the
+// source_mode flip never happened. The next tick must SELF-HEAL — record the
+// (idempotent) rows, pin, and flip — WITHOUT re-downloading (the sentinel
+// short-circuits the heavy work).
+func TestEnsureDebianDVD_SentinelPresentButRowsMissingSelfHeals(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	var downloads int
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error { downloads++; return os.WriteFile(dest, []byte("iso"), 0o644) },
+		func(ctx context.Context, dir string, names []string) error { return nil },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error { return nil })
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 1})
+	_ = store.SetTargetDesiredMode(id, "dvd", 1)
+	tgt, _ := store.GetTarget(id)
+
+	// Pre-create the version dir WITH the completion sentinel but NO rows —
+	// simulating an interrupted prior run (sentinel written, DB writes lost).
+	dir := cacheDir("debian", "12", "amd64", "12.15.0")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, dvdSentinelName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err != nil {
+		t.Fatal(err)
+	}
+	if downloads != 0 {
+		t.Fatalf("sentinel present must skip ALL downloads; got %d", downloads)
+	}
+	got, _ := store.GetTarget(id)
+	if got.SourceMode != "dvd" || got.DesiredMode != "" {
+		t.Fatalf("self-heal: source=%q desired=%q, want dvd/empty", got.SourceMode, got.DesiredMode)
+	}
+	rows, _ := store.ListCacheEntries(db.CacheFilter{OS: "debian"})
+	if len(rows) != 1 || !rows[0].Pinned {
+		t.Fatalf("self-heal must create the pinned cache entry, got %+v", rows)
+	}
+}
+
+func TestEnsureDebianDVD_FailedDownloadLeavesNetinst(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error { return errors.New("boom") },
+		func(ctx context.Context, dir string, names []string) error { return nil },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error { return nil })
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 1})
+	_ = store.SetTargetDesiredMode(id, "dvd", 1)
+	tgt, _ := store.GetTarget(id)
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err == nil {
+		t.Fatal("expected download failure")
+	}
+	got, _ := store.GetTarget(id)
+	if got.SourceMode != "netinst" || got.DesiredMode != "dvd" {
+		t.Fatalf("failure must leave source=netinst, desired=dvd (retry next tick); got %q/%q", got.SourceMode, got.DesiredMode)
 	}
 }
