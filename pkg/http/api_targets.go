@@ -23,6 +23,13 @@ type TargetDTO struct {
 	RetainN int               `json:"retainN"`
 	Source  string            `json:"source"`
 	Enabled bool              `json:"enabled"`
+
+	// SourceMode/DvdCount/DesiredMode surface a target's effective serving mode
+	// and any pending promote (design I3), so operators can see promote-dvd
+	// intent land and complete without querying the DB directly.
+	SourceMode  string `json:"sourceMode"`
+	DvdCount    int    `json:"dvdCount"`
+	DesiredMode string `json:"desiredMode"`
 }
 
 type listTargetsOutput struct {
@@ -36,6 +43,7 @@ func toTargetDTO(t db.Target) TargetDTO {
 	return TargetDTO{
 		ID: t.ID, OS: t.OS, Arch: t.Arch, Params: params, Mode: t.Mode,
 		RetainN: t.RetainN, Source: t.Source, Enabled: t.Enabled,
+		SourceMode: t.SourceMode, DvdCount: t.DvdCount, DesiredMode: t.DesiredMode,
 	}
 }
 
@@ -200,6 +208,46 @@ func registerTargets(api huma.API, deps APIDeps) {
 			TargetID: in.ID, Version: in.Body.Version, Source: "manual",
 		}); err != nil {
 			return nil, huma.Error500InternalServerError("pin version", err)
+		}
+		trigger()
+		return nil, nil
+	})
+
+	// POST /targets/{id}/promote-dvd — records promote intent and enqueues a
+	// reconcile; never downloads inline (design B3). The reconciler stages the
+	// DVD tree and flips source_mode to "dvd" on success (async).
+	huma.Register(api, huma.Operation{
+		OperationID: "promote-target-dvd", Method: http.MethodPost, Path: "/targets/{id}/promote-dvd",
+		Summary: "Promote a Debian netinst target to DVD mode", Tags: []string{"targets"},
+		DefaultStatus: http.StatusOK,
+	}, func(ctx context.Context, in *struct {
+		ID   int64 `path:"id"`
+		Body struct {
+			DvdCount int `json:"dvdCount,omitempty" minimum:"0"`
+		}
+	}) (*struct{}, error) {
+		t, err := deps.Store.GetTarget(in.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, huma.Error404NotFound("target not found")
+		}
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get target", err)
+		}
+		if t.OS != "debian" {
+			return nil, huma.Error422UnprocessableEntity("promote-dvd is only valid for debian targets")
+		}
+		if t.Arch != "amd64" {
+			return nil, huma.Error422UnprocessableEntity("DVD images are amd64-only")
+		}
+		if t.SourceMode != "netinst" {
+			return nil, huma.Error409Conflict("target is already dvd or a promote is already in progress")
+		}
+		dvdCount := in.Body.DvdCount
+		if dvdCount <= 0 {
+			dvdCount = 1
+		}
+		if err := deps.Store.SetTargetDesiredMode(in.ID, "dvd", dvdCount); err != nil {
+			return nil, huma.Error500InternalServerError("set desired mode", err)
 		}
 		trigger()
 		return nil, nil
