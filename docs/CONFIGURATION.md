@@ -55,6 +55,17 @@ config file.
 > See [schema/API.md](schema/API.md#targets) for the target create/PATCH contract, and
 > [schema/CATALOG.md](schema/CATALOG.md#upgrade-notes) for what changes on an upgrade from a
 > pre-catalog booty.
+>
+> **Upgrade note: Debian joins the default catalog.** On an upgrade to a booty version with Debian
+> image support, a fresh default catalog (no `catalog.yaml` present) now also creates an **enabled**
+> Debian 13 (trixie) netinst target for both amd64 and arm64 — small, installer images only — plus
+> two **disabled** Debian dvd targets, 12 (bookworm) and 11 (bullseye), amd64 only. The dvd targets
+> are seeded disabled specifically so upgrading downloads nothing extra by default: a full offline
+> 11+12 dvd set is **~44 GB** (two point releases × two DVDs each, design
+> `2026-07-14-debian-image-support-design.md` §6.1), and no operator should get that on disk without
+> asking for it. Opt in per-release via `POST /api/v1/targets/{id}/promote-dvd` (design §8.5) — or
+> declare `sourceMode: dvd` directly in your own `catalog.yaml` (see
+> [schema/CATALOG.md](schema/CATALOG.md#example-3)) if you want it enabled from first boot.
 
 ### Retention windows for single-version-discovery OSes
 

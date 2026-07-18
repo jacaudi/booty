@@ -50,10 +50,51 @@ func TestParseCatalog_RejectsUnknownEntryKey(t *testing.T) {
 	}
 }
 
-func TestParseCatalog_RejectsDebian(t *testing.T) {
+func TestParseCatalog_RejectsDebianUnknownChannel(t *testing.T) {
+	// debian IS a supported catalog OS; "stable" is rejected because the
+	// debian-specific channel check requires one of 11/12/13.
 	_, err := parseCatalog([]byte("schemaVersion: 1\ncatalog:\n  - os: debian\n    arch: amd64\n    spec: {channel: stable}\n"))
 	if err == nil {
-		t.Fatal("want error: debian not yet supported in catalog")
+		t.Fatal("want error: debian channel must be 11, 12, or 13")
+	}
+}
+
+func TestCatalog_DebianAccepted(t *testing.T) {
+	entries := []CatalogEntry{
+		{OS: "debian", Arch: "amd64", Enabled: new(true), Retain: new(1), Spec: map[string]string{"channel": "13"}},
+		{OS: "debian", Arch: "arm64", Enabled: new(true), Retain: new(1), Spec: map[string]string{"channel": "13"}},
+		{OS: "debian", Arch: "amd64", Enabled: new(false), Retain: new(1), Spec: map[string]string{"channel": "12"}, SourceMode: "dvd", DvdCount: 1},
+	}
+	if err := validateCatalog(catalogFile{SchemaVersion: catalogSchemaVersion, Entries: entries}); err != nil {
+		t.Fatalf("valid debian entries rejected: %v", err)
+	}
+}
+
+func TestCatalog_DebianDVDArm64Rejected(t *testing.T) {
+	entries := []CatalogEntry{
+		{OS: "debian", Arch: "arm64", Enabled: new(false), Retain: new(1), Spec: map[string]string{"channel": "12"}, SourceMode: "dvd", DvdCount: 1},
+	}
+	if err := validateCatalog(catalogFile{SchemaVersion: catalogSchemaVersion, Entries: entries}); err == nil {
+		t.Fatal("dvd on arm64 must be rejected (DVDs are amd64-only)")
+	}
+}
+
+func TestDefaultCatalog_DebianSeeds(t *testing.T) {
+	byChannel := map[string]CatalogEntry{}
+	for _, e := range defaultCatalog() { // no args
+		if e.OS == "debian" {
+			byChannel[e.Spec["channel"]] = e
+		}
+	}
+	net13, ok := byChannel["13"]
+	if !ok || !net13.enabledOrDefault() || net13.SourceMode == "dvd" {
+		t.Fatalf("debian 13 must be seeded netinst + enabled: %+v", net13)
+	}
+	for _, ch := range []string{"12", "11"} {
+		e, ok := byChannel[ch]
+		if !ok || e.enabledOrDefault() || e.SourceMode != "dvd" || e.Arch != "amd64" {
+			t.Fatalf("debian %s must be seeded dvd + disabled + amd64: %+v", ch, e)
+		}
 	}
 }
 
@@ -89,9 +130,10 @@ func TestDefaultCatalog_CuratedSet(t *testing.T) {
 	viper.Set(config.TalosRetainMinors, 3)
 
 	got := defaultCatalog()
-	// Flatcar stable + Flatcar lts + Talos; NO fedora-coreos.
-	if len(got) != 3 {
-		t.Fatalf("defaultCatalog() = %d entries, want 3: %+v", len(got), got)
+	// Flatcar stable + Flatcar lts + Talos + 4 Debian (13 netinst amd64/arm64,
+	// 12 dvd amd64, 11 dvd amd64); NO fedora-coreos.
+	if len(got) != 7 {
+		t.Fatalf("defaultCatalog() = %d entries, want 7: %+v", len(got), got)
 	}
 	channels := map[string]bool{}
 	for _, e := range got {
@@ -120,9 +162,9 @@ func TestDefaultCatalog_PrimaryLtsDoesNotDuplicate(t *testing.T) {
 	viper.Set(config.TalosRetainMinors, 3)
 
 	got := defaultCatalog()
-	// One flatcar (lts) + one talos; the lts entry is not duplicated.
-	if len(got) != 2 {
-		t.Fatalf("defaultCatalog() = %d entries, want 2 (no lts dup): %+v", len(got), got)
+	// One flatcar (lts) + one talos + 4 debian; the lts entry is not duplicated.
+	if len(got) != 6 {
+		t.Fatalf("defaultCatalog() = %d entries, want 6 (no lts dup): %+v", len(got), got)
 	}
 	if err := validateCatalog(catalogFile{SchemaVersion: 1, Entries: got}); err != nil {
 		t.Fatalf("must validate (no duplicate-identity error): %v", err)

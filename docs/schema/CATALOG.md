@@ -52,25 +52,29 @@ a silent fallback could mass-download or mass-disable targets unexpectedly.
 ## Schema
 
 ```yaml
-schemaVersion: 1                        # must be 1 (the only version this build accepts)
+schemaVersion: 1                                # must be 1 (the only version this build accepts)
 catalog:
-  - os: flatcar | fedora-coreos | talos  # debian: not yet supported, see below
-    arch: amd64 | arm64 | x86_64         # per-OS allowed token, see table below
-    enabled: true                        # optional, default true
-    retain: 1                            # optional, default 1; must be >= 0
-    spec:                                # OS-specific selector, maps 1:1 to the
-                                          # target's identity params
-      channel: stable                    # flatcar / fedora-coreos
-      schematic: <factory-id>            # talos
+  - os: flatcar | fedora-coreos | talos | debian
+    arch: amd64 | arm64 | x86_64                # per-OS allowed token, see table below
+    enabled: true                               # optional, default true
+    retain: 1                                   # optional, default 1; must be >= 0
+    spec:                                       # OS-specific selector, maps 1:1 to the
+                                                 # target's identity params
+      channel: stable                           # flatcar / fedora-coreos / debian
+      schematic: <factory-id>                   # talos
+    sourceMode: netinst                         # debian only, optional; netinst | dvd, default netinst
+    dvdCount: 1                                 # debian dvd only, optional; number of DVD images to mirror
 ```
 
 | Field | Required | Meaning |
 |-------|----------|---------|
-| `os` | yes | One of `flatcar`, `fedora-coreos`, `talos` (see [per-OS arch](#per-os-arch-tokens)). |
+| `os` | yes | One of `flatcar`, `fedora-coreos`, `talos`, `debian` (see [per-OS arch](#per-os-arch-tokens)). |
 | `arch` | yes | The OS's arch token — validated against the OS (below). |
 | `enabled` | no, default `true` | Whether the target is active. |
 | `retain` | no, default `1` | Newest-N versions to keep (Talos: newest-N **minor lines**, per [STORAGE.md](STORAGE.md)). Must be `>= 0`. |
 | `spec` | yes | OS-specific map building the target's **identity params** — the same value the `/api/v1/targets` create API validates against `RequiredParams` (`ValidateTargetParams`, shared by both paths). |
+| `sourceMode` | no, default `netinst` | **Debian only.** `netinst` or `dvd`. Top-level (not a `spec` key) so it doesn't perturb `spec`'s identity-param contract. `dvd` requires `arch: amd64` (Debian ships no arm64 DVD ISOs). |
+| `dvdCount` | no, default `1` | **Debian `dvd` mode only.** Number of DVD images to mirror. Top-level, same reason as `sourceMode`. Must be `>= 0`. |
 
 **`spec` keys, per OS today:**
 
@@ -79,12 +83,15 @@ catalog:
 | `flatcar` | `channel` |
 | `fedora-coreos` | `channel` |
 | `talos` | `schematic` |
+| `debian` | `channel` — must be `"11"`, `"12"`, or `"13"` (Debian's numeric release, **not** `stable`/`bookworm`/etc.) |
 
-`channel`/`schematic` are **not** enum-validated — any non-empty, path-safe
-value is accepted (values shown above, e.g. `stable`/`beta`/`lts`, are
-convention, not an enforced list). A value must be path-safe because it
-becomes a cache-directory and URL segment (`ValidatePathParam`); an unsafe
-value is rejected.
+`channel`/`schematic` are **not** enum-validated for `flatcar`/`fedora-coreos`/
+`talos` — any non-empty, path-safe value is accepted (values shown above, e.g.
+`stable`/`beta`/`lts`, are convention, not an enforced list). Debian's
+`channel` **is** enum-validated (`"11"`/`"12"`/`"13"` only), because it maps to
+a specific point-release discovery and codename, not an arbitrary path
+segment. A value must be path-safe because it becomes a cache-directory and
+URL segment (`ValidatePathParam`); an unsafe value is rejected.
 
 ### Per-OS arch tokens
 
@@ -92,19 +99,13 @@ value is rejected.
 flatcar        amd64, arm64
 fedora-coreos  x86_64
 talos          amd64, arm64
+debian         amd64, arm64   (dvd sourceMode: amd64 only)
 ```
 
 A mismatched arch (e.g. `os: fedora-coreos, arch: amd64`) is rejected at load
 time — an unvalidated mismatch would otherwise mint a valid-looking cache
-segment that 404s on download.
-
-### Debian — not yet supported
-
-`os: debian` is rejected by the loader today. Debian **target** support
-(`release`→codename mapping, `sourceMode`/`dvdCount` mutable columns) does not
-exist yet — it lands with the separate Debian image-support feature. Once it
-does, Debian becomes a supported catalog `os` like the others above; until
-then, a `debian` entry in `catalog.yaml` fails validation at startup.
+segment that 404s on download. A Debian `dvd`-mode entry with `arch: arm64` is
+rejected for the same reason: Debian does not publish arm64 DVD ISOs.
 
 ## Validation (fail-fast)
 
@@ -113,12 +114,15 @@ then, a `debian` entry in `catalog.yaml` fails validation at startup.
 - `schemaVersion` other than `1`.
 - An unknown top-level or entry key (unknown-fields decoding — a typo'd key is
   a hard error, not silently ignored).
-- An unsupported `os` (anything other than `flatcar`/`fedora-coreos`/`talos`;
-  see [Debian](#debian--not-yet-supported)).
+- An unsupported `os` (anything other than `flatcar`/`fedora-coreos`/`talos`/`debian`).
 - An `arch` not valid for that `os` (see [table above](#per-os-arch-tokens)).
 - A `spec` with a missing required key, an unexpected key, an empty value, or a
   value that isn't path-safe.
 - A negative `retain`.
+- A Debian `channel` not in `"11"`/`"12"`/`"13"`.
+- A Debian `sourceMode` other than `""`/`"netinst"`/`"dvd"`.
+- A Debian `sourceMode: dvd` entry with `arch` other than `amd64`.
+- A negative `dvdCount`.
 - A duplicate entry — two entries with the same `(os, arch, spec)` identity.
 
 ## `source` semantics (`source`)
@@ -189,13 +193,38 @@ catalog:
     arch: amd64           # --talosArchitecture
     retain: 3              # --talosRetainMinors
     spec: { schematic: 376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba }  # --talosSchematic
+  - os: debian
+    arch: amd64
+    enabled: true
+    retain: 1
+    spec: { channel: "13" }     # trixie, netinst (small — just installer images)
+  - os: debian
+    arch: arm64
+    enabled: true
+    retain: 1
+    spec: { channel: "13" }
+  - os: debian
+    arch: amd64
+    enabled: false               # seeded but OFF — an operator opts in via promote-dvd
+    retain: 1
+    sourceMode: dvd
+    dvdCount: 1
+    spec: { channel: "12" }     # bookworm, dvd
+  - os: debian
+    arch: amd64
+    enabled: false
+    retain: 1
+    sourceMode: dvd
+    dvdCount: 1
+    spec: { channel: "11" }     # bullseye, dvd
 ```
 
 **Fedora CoreOS is intentionally not in this default.** Add it via a
 `catalog.yaml` (see [example 1](#example-1) below) or the API (`source=api`,
-untouched by the catalog pass) if you want it. See
-[Upgrade notes](#upgrade-notes) for what this means on an upgrade from a
-pre-catalog booty.
+untouched by the catalog pass) if you want it. **Debian 12/11 `dvd` entries
+are seeded disabled** — zero download until you promote them (see
+[Upgrade notes](#upgrade-notes) for the disk-cost implications and the
+`promote-dvd` flow).
 
 A copy of this default, plus commented illustrative entries, ships at
 [`docs/examples/catalog.yaml`](../examples/catalog.yaml) — copy it to
@@ -204,8 +233,13 @@ A copy of this default, plus commented illustrative entries, ships at
 ## Examples
 
 These correspond to the design's worked examples
-(`docs/designs/2026-07-16-declarative-catalog-config-design.md` §7); all three
+(`docs/designs/2026-07-16-declarative-catalog-config-design.md` §7); all four
 are covered by round-trip acceptance tests (`TestCatalog_RoundTripDesignExamples`).
+Example 3 (Debian) used an illustrative `spec.release`/`spec.sourceMode` shape
+in the original design draft, written before the separate Debian
+image-support feature settled on the real Debian ostype contract; the shape
+below (`spec.channel` + top-level `sourceMode`/`dvdCount`) is what actually
+ships.
 
 ### Example 1
 
@@ -277,8 +311,37 @@ catalog:
     spec: { channel: testing }
 ```
 
-(Design example 3, a Debian catalog, is forward-looking and not yet valid —
-see [Debian — not yet supported](#debian--not-yet-supported).)
+### Example 3
+
+Debian: 13 (trixie) netinst on both architectures, plus 12 (bookworm) and 11
+(bullseye) dvd mode for a fully offline install set — 12 seeded enabled
+(operator already promoted it), 11 seeded disabled (not yet promoted):
+
+```yaml
+schemaVersion: 1
+catalog:
+  - os: debian
+    arch: amd64
+    retain: 1
+    spec: { channel: "13" }
+  - os: debian
+    arch: arm64
+    retain: 1
+    spec: { channel: "13" }
+  - os: debian
+    arch: amd64
+    retain: 1
+    sourceMode: dvd
+    dvdCount: 1
+    spec: { channel: "12" }
+  - os: debian
+    arch: amd64
+    enabled: false
+    retain: 1
+    sourceMode: dvd
+    dvdCount: 1
+    spec: { channel: "11" }
+```
 
 ## Known limitation: a host-managed Talos schematic listed in the catalog
 
@@ -320,6 +383,11 @@ existing targets are migrated (see [DATABASE.md](DATABASE.md#targets) for the
 exactly like any other tick. This has several distinct effects an operator
 should know about:
 
+- **Debian added to the default set.** A fresh default catalog now also
+  creates an **enabled** Debian 13 netinst target (amd64+arm64, small — just
+  installer images) and two **disabled** Debian 12/11 dvd targets (zero
+  download until promoted — see [CONFIGURATION.md](../CONFIGURATION.md) for
+  the ~44 GB disk cost of a full 11+12 dvd set and the `promote-dvd` flow).
 - **Curated default-set change (breaking).** The shipped default **drops
   Fedora CoreOS** and **adds Flatcar `lts`** (see
   [The default catalog](#the-default-catalog-no-file-present)). If you had no

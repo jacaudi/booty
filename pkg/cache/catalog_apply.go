@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"cmp"
 	"fmt"
 
 	"github.com/jeefy/booty/pkg/db"
@@ -13,6 +14,12 @@ import (
 //     (mode and any non-declared field are preserved); mark source='catalog'.
 //   - source='catalog' row not in the desired set -> disable (row + bytes kept).
 //   - source='api' / source='host' rows -> never touched.
+//
+// A newly-created row also carries the entry's SourceMode/DvdCount (default
+// netinst/1), so a catalog can declare a Debian dvd target at creation. Those
+// two columns are NOT declared fields for an *existing* row: the UPDATE path
+// never touches them, so an operator-promoted source_mode survives a re-apply
+// of the same (now netinst-looking) entry — see UpdateTargetFromCatalog.
 //
 // Identity is (os,arch,params); it is never re-keyed, so nothing re-downloads.
 func applyCatalog(store *db.Store, entries []CatalogEntry) error {
@@ -46,6 +53,7 @@ func applyCatalog(store *db.Store, entries []CatalogEntry) error {
 		if _, err := store.CreateTarget(db.Target{
 			OS: e.OS, Arch: e.Arch, Params: params, Mode: "discovery",
 			RetainN: retain, Source: "catalog", Enabled: enabled,
+			SourceMode: cmp.Or(e.SourceMode, "netinst"), DvdCount: cmp.Or(e.DvdCount, 1),
 		}); err != nil {
 			return fmt.Errorf("cache: catalog apply: create %s/%s: %w", e.OS, e.Arch, err)
 		}

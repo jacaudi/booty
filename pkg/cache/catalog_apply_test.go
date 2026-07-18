@@ -100,3 +100,63 @@ func TestApplyCatalog_Idempotent_NoWritesSecondPass(t *testing.T) {
 		t.Errorf("second identical apply mutated the row: before=%+v after=%+v", before, after)
 	}
 }
+
+func TestApplyCatalog_SetsDebianModeColumnsOnCreate(t *testing.T) {
+	store := seedTestStore(t)
+	if err := applyCatalog(store, []CatalogEntry{
+		{OS: "debian", Arch: "amd64", Enabled: new(false), Retain: new(1), Spec: map[string]string{"channel": "12"}, SourceMode: "dvd", DvdCount: 2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p12 := mustEncode(t, map[string]string{"channel": "12"})
+	got, err := store.GetTargetByIdentity("debian", "amd64", p12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceMode != "dvd" || got.DvdCount != 2 {
+		t.Fatalf("create must carry source_mode/dvd_count: %q/%d", got.SourceMode, got.DvdCount)
+	}
+}
+
+func TestApplyCatalog_DoesNotRevertPromotedMode(t *testing.T) {
+	store := seedTestStore(t)
+	// 1. Create the row (source_mode defaults to netinst).
+	if err := applyCatalog(store, []CatalogEntry{
+		{OS: "debian", Arch: "amd64", Enabled: new(true), Retain: new(1), Spec: map[string]string{"channel": "13"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p13 := mustEncode(t, map[string]string{"channel": "13"})
+	n, err := store.GetTargetByIdentity("debian", "amd64", p13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2. Simulate a completed promote: the reconciler flipped source_mode to dvd.
+	if err := store.SetTargetSourceMode(n.ID, "dvd"); err != nil {
+		t.Fatal(err)
+	}
+	// 3. Re-apply the SAME identity but with a CHANGED declared field (retain
+	//    1 -> 2) so the diff-condition fires and UpdateTargetFromCatalog
+	//    actually runs the UPDATE branch. (Re-applying an identical entry would
+	//    short-circuit to a no-op and make the source_mode assertion below
+	//    vacuous — it must pass BECAUSE the UPDATE preserves source_mode, not
+	//    because nothing touched the row.)
+	if err := applyCatalog(store, []CatalogEntry{
+		{OS: "debian", Arch: "amd64", Enabled: new(true), Retain: new(2), Spec: map[string]string{"channel": "13"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.GetTargetByIdentity("debian", "amd64", p13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The UPDATE genuinely ran (retain changed 1 -> 2) AND did NOT revert the
+	// promoted source_mode. The retain assertion is what makes the source_mode
+	// assertion non-vacuous: it proves UpdateTargetFromCatalog executed.
+	if after.RetainN != 2 {
+		t.Fatalf("UPDATE branch did not run: retain_n = %d, want 2", after.RetainN)
+	}
+	if after.SourceMode != "dvd" {
+		t.Fatal("re-apply UPDATE must not revert a promoted source_mode (catalog owns declared fields only)")
+	}
+}
