@@ -1,6 +1,7 @@
 package http
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,5 +134,72 @@ func TestCreateFlatcarTargetRequiresChannel(t *testing.T) {
 	})
 	if resp.Code != 201 || !strings.Contains(resp.Body.String(), `"channel":"beta"`) {
 		t.Errorf("flatcar with channel = %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestGetTargetDTOIncludesModeState covers toTargetDTO surfacing the mode
+// state (source_mode/dvd_count/desired_mode) added for the promote-dvd
+// endpoint (I3), so operators can see a target's serving mode and any
+// pending promote via GET /targets/{id}.
+func TestGetTargetDTOIncludesModeState(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	id, err := deps.Store.CreateTarget(db.Target{
+		OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "api", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	resp := api.Get(fmt.Sprintf("/api/v1/targets/%d", id))
+	if resp.Code != 200 {
+		t.Fatalf("GET /targets/%d = %d: %s", id, resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	if !strings.Contains(body, `"sourceMode":"netinst"`) {
+		t.Errorf("body missing sourceMode=netinst: %s", body)
+	}
+	if !strings.Contains(body, `"dvdCount":1`) {
+		t.Errorf("body missing dvdCount=1: %s", body)
+	}
+	if !strings.Contains(body, `"desiredMode":""`) {
+		t.Errorf("body missing desiredMode empty: %s", body)
+	}
+}
+
+func TestPromoteDVD_HappyPath(t *testing.T) {
+	deps, calls := targetsTestDeps(t) // existing harness (api_targets_test.go:11)
+	api := newTestAPI(t, deps)
+	id, _ := deps.Store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "api", Enabled: true, SourceMode: "netinst", DvdCount: 1})
+	resp := api.Post(fmt.Sprintf("/api/v1/targets/%d/promote-dvd", id), map[string]any{"dvdCount": 3})
+	if resp.Code != 200 {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	got, _ := deps.Store.GetTarget(id)
+	if got.DesiredMode != "dvd" || got.DvdCount != 3 {
+		t.Fatalf("desired=%q dvd_count=%d", got.DesiredMode, got.DvdCount)
+	}
+	if *calls != 1 {
+		t.Fatalf("promote must Trigger() a reconcile once, got %d", *calls)
+	}
+}
+
+func TestPromoteDVD_RejectsArm64NonDebianAndAlreadyDVD(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	mk := func(tg db.Target) int64 { id, _ := deps.Store.CreateTarget(tg); return id }
+
+	arm := mk(db.Target{OS: "debian", Arch: "arm64", Params: `{"channel":"13"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true, SourceMode: "netinst"})
+	if api.Post(fmt.Sprintf("/api/v1/targets/%d/promote-dvd", arm), map[string]any{}).Code == 200 {
+		t.Fatal("arm64 must be rejected (DVDs are amd64-only)")
+	}
+	flat := mk(db.Target{OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
+	if api.Post(fmt.Sprintf("/api/v1/targets/%d/promote-dvd", flat), map[string]any{}).Code == 200 {
+		t.Fatal("non-debian must be rejected")
+	}
+	dvd := mk(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true, SourceMode: "dvd"})
+	if api.Post(fmt.Sprintf("/api/v1/targets/%d/promote-dvd", dvd), map[string]any{}).Code == 200 {
+		t.Fatal("already-dvd must be rejected (409)")
 	}
 }

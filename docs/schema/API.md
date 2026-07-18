@@ -122,6 +122,23 @@ Cache targets represent an (OS, arch, params) tuple that the reconciler discover
 | `DELETE` | `/api/v1/targets/{id}` | **403 until auth (P10).** | `403` |
 | `POST` | `/api/v1/targets/{id}/versions` | Pin a manual version on a target. Triggers async cache. **OPEN.** | `201` |
 | `DELETE` | `/api/v1/targets/{id}/versions/{v}` | **403 until auth (P10).** | `403` |
+| `POST` | `/api/v1/targets/{id}/promote-dvd` | **Debian only.** Promote an already-**enabled netinst** target to `dvd` mode. Body: `{"dvdCount"?}` (`minimum:0`; `<=0` coerces to `1`). Records the promote intent and enqueues an async reconcile — never downloads inline; the reconciler stages the DVD tree and flips `sourceMode` to `dvd` on success. `422` if `os != "debian"` or `arch != "amd64"` (DVD images are amd64-only); `409` if `sourceMode != "netinst"` (already `dvd`, or a promote is already in progress); `404` if the target doesn't exist. Does **not** apply to a seeded-disabled `dvd`-mode target (already `sourceMode: dvd`) — enable that one via `catalog.yaml` instead, see [CONFIGURATION.md](../CONFIGURATION.md). **OPEN.** | `200` / `404` / `409` / `422` |
+
+**`TargetDTO`:**
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | integer | `targets.id`. |
+| `os` | string | Registered OS name (`ostype.Lookup`). |
+| `arch` | string | Target architecture. |
+| `params` | object | Decoded required params (e.g. `{"channel":"12"}`, `{"schematic":"…"}`). |
+| `mode` | string | `discovery` \| `manual` — the catalog never touches this field. |
+| `retainN` | integer | Retention window size (see [above](#retention-windows-for-single-version-discovery-oses)). |
+| `source` | string | `catalog` \| `api` — whether a catalog entry or `POST /targets` created this row. |
+| `enabled` | bool | Whether the reconciler actively caches this target. |
+| `sourceMode` | string | **Debian only.** `netinst` (default) \| `dvd` — the target's *effective* serving mode. |
+| `dvdCount` | integer | **Debian `dvd` mode only.** Number of DVD images in the set (default `1`). |
+| `desiredMode` | string | **Debian only.** Set to `dvd` by `promote-dvd` while a promote is pending; empty once the reconciler completes it and `sourceMode` reflects the new mode. Lets an operator see a promote land without querying the DB directly. |
 
 **Required params, per OS** (as of #48, `flatcar` and `fedora-coreos` join `debian` in requiring a
 channel; `talos` requires a schematic):

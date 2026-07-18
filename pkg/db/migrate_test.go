@@ -28,8 +28,8 @@ func TestMigrate_CreatesTablesAndSetsUserVersion(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 7 {
-		t.Errorf("user_version = %d, want 7 after all migrations", uv)
+	if uv != 8 {
+		t.Errorf("user_version = %d, want 8 after all migrations", uv)
 	}
 }
 
@@ -52,21 +52,21 @@ func TestMigrate_IsIdempotentAcrossReopen(t *testing.T) {
 	if err := s2.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 7 {
-		t.Errorf("user_version = %d after reopen, want 7", uv)
+	if uv != 8 {
+		t.Errorf("user_version = %d after reopen, want 8", uv)
 	}
 }
 
 func TestMigration0003ConfigsRoles(t *testing.T) {
 	s := newTestStore(t) // Open() runs every migration, incl. 0003
 
-	// user_version reached 7 (seven migrations applied).
+	// user_version reached 8 (eight migrations applied).
 	var uv int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if uv != 7 {
-		t.Fatalf("user_version = %d, want 7", uv)
+	if uv != 8 {
+		t.Fatalf("user_version = %d, want 8", uv)
 	}
 
 	// The four new tables + the hosts.config_id column exist.
@@ -297,8 +297,8 @@ func TestMigration0006DebianConfig(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if uv != 7 {
-		t.Fatalf("user_version = %d, want 7", uv)
+	if uv != 8 {
+		t.Fatalf("user_version = %d, want 8", uv)
 	}
 
 	// The rebuilt kind CHECK admits 'debianconfig' and still rejects junk.
@@ -450,5 +450,35 @@ func TestMigrate0007BackfillsSource_Upgrade(t *testing.T) {
 		if got[params] != want {
 			t.Errorf("source for %s = %q, want %q", params, got[params], want)
 		}
+	}
+}
+
+func TestMigrate0008_DebianColumns(t *testing.T) {
+	s := newTestStore(t) // existing helper: opens + migrates fully
+	var uv int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&uv); err != nil {
+		t.Fatal(err)
+	}
+	if uv != 8 {
+		t.Fatalf("user_version = %d, want 8", uv)
+	}
+	// defaults apply to a row inserted without the new columns
+	if _, err := s.db.Exec(`INSERT INTO targets (os,arch,params,mode,retain_n,source,enabled)
+		VALUES ('debian','amd64','{"channel":"13"}','discovery',3,'catalog',1)`); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	var sm, dm sql.NullString
+	var dc int
+	if err := s.db.QueryRow(`SELECT source_mode, dvd_count, desired_mode FROM targets
+		WHERE params='{"channel":"13"}'`).Scan(&sm, &dc, &dm); err != nil {
+		t.Fatal(err)
+	}
+	if sm.String != "netinst" || dc != 1 || dm.Valid {
+		t.Fatalf("defaults: source_mode=%q dvd_count=%d desired_mode(valid=%v)=%q, want netinst/1/NULL",
+			sm.String, dc, dm.Valid, dm.String)
+	}
+	// CHECK rejects a bad source_mode
+	if _, err := s.db.Exec(`UPDATE targets SET source_mode='bogus' WHERE params='{"channel":"13"}'`); err == nil {
+		t.Fatal("expected CHECK to reject source_mode='bogus'")
 	}
 }

@@ -121,6 +121,32 @@ func (s *Store) SetCachePinned(id int64, pinned bool) error {
 	return nil
 }
 
+// SetCachePinnedByTargetVersion pins by target_version_id (SetCachePinned
+// keys on cache_entries.id, which the Debian DVD reconciler branch does not
+// hold — it only has the target_version_id it just upserted).
+func (s *Store) SetCachePinnedByTargetVersion(tvID int64, pinned bool) error {
+	if _, err := s.db.Exec(
+		`UPDATE cache_entries SET pinned = ? WHERE target_version_id = ?`,
+		boolToInt(pinned), tvID); err != nil {
+		return fmt.Errorf("db: pin tv=%d: %w", tvID, err)
+	}
+	return nil
+}
+
+// CacheEntryExists reports whether a cache_entries row exists for
+// targetVersionID — used by the Debian DVD reconciler's fully-settled
+// short-circuit to distinguish "sentinel present + rows recorded" (true
+// no-op) from "sentinel present + rows missing" (self-heal still required).
+func (s *Store) CacheEntryExists(targetVersionID int64) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM cache_entries WHERE target_version_id = ?)`, targetVersionID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("db: cache entry exists tv=%d: %w", targetVersionID, err)
+	}
+	return exists, nil
+}
+
 func (s *Store) ListCacheEntries(f CacheFilter) ([]CacheEntryRow, error) {
 	q := cacheEntryJoin + " WHERE 1=1"
 	var args []any

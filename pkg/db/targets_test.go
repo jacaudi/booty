@@ -50,6 +50,51 @@ func TestCreateTarget_UniqueConflict(t *testing.T) {
 	}
 }
 
+// TestUpsertTarget_DoesNotRevertPromotedModes locks a load-bearing guarantee:
+// the catalog reconciler re-upserts host rows every tick, so a repeat
+// UpsertTarget on an already-promoted Debian target must NOT revert its
+// source_mode/desired_mode/dvd_count. This guard catches a regression that
+// would (wrongly) add those columns to UpsertTarget's ON CONFLICT DO UPDATE SET
+// clause and silently break promotes.
+func TestUpsertTarget_DoesNotRevertPromotedModes(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.CreateTarget(Target{OS: "debian", Arch: "amd64",
+		Params: `{"channel":"12"}`, Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true,
+		SourceMode: "netinst", DvdCount: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Promote to a DVD source with a distinctive dvd_count (3, not the default 1),
+	// then flip the effective mode and clear the pending intent.
+	if err := s.SetTargetDesiredMode(id, "dvd", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTargetSourceMode(id, "dvd"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The reconciler's tick re-upsert: same identity, NO mode fields set.
+	if err := s.UpsertTarget(Target{OS: "debian", Arch: "amd64",
+		Params: `{"channel":"12"}`, Mode: "discovery", RetainN: 2, Source: "catalog", Enabled: true}); err != nil {
+		t.Fatalf("re-upsert: %v", err)
+	}
+
+	got, err := s.GetTargetByIdentity("debian", "amd64", `{"channel":"12"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The ON CONFLICT branch updated retain_n (proving the upsert ran)...
+	if got.RetainN != 2 {
+		t.Errorf("RetainN = %d after re-upsert, want 2 (upsert did not run)", got.RetainN)
+	}
+	// ...but must NOT have reverted the promoted serving-mode state.
+	if got.SourceMode != "dvd" || got.DesiredMode != "" || got.DvdCount != 3 {
+		t.Fatalf("re-upsert reverted promote: source_mode=%q desired_mode=%q dvd_count=%d, want dvd/\"\"/3",
+			got.SourceMode, got.DesiredMode, got.DvdCount)
+	}
+}
+
 func TestUpsertTarget_IdempotentOnConflict(t *testing.T) {
 	s := newTestStore(t)
 	base := Target{OS: "flatcar", Arch: "amd64", Params: "{}", Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true}
@@ -136,5 +181,67 @@ func TestListTargets(t *testing.T) {
 	}
 	if len(all) != 2 {
 		t.Errorf("ListTargets returned %d, want 2", len(all))
+	}
+}
+
+func TestCreateTarget_PersistsExplicitModesAndDefaults(t *testing.T) {
+	s := newTestStore(t)
+
+	// Explicit serving-mode values (as Task 11's catalog CREATE passes) must persist.
+	dvdID, err := s.CreateTarget(Target{OS: "debian", Arch: "amd64",
+		Params: `{"channel":"12"}`, Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true,
+		SourceMode: "dvd", DvdCount: 2})
+	if err != nil {
+		t.Fatalf("CreateTarget (explicit dvd): %v", err)
+	}
+	got, err := s.GetTarget(dvdID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceMode != "dvd" || got.DvdCount != 2 {
+		t.Fatalf("explicit modes: source_mode=%q dvd_count=%d, want dvd/2", got.SourceMode, got.DvdCount)
+	}
+
+	// A zero-valued caller (as every existing flatcar/talos caller passes) must
+	// get the netinst/1 defaults and NOT trip the source_mode CHECK.
+	defID, err := s.CreateTarget(Target{OS: "flatcar", Arch: "amd64",
+		Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTarget (zero-valued): %v", err)
+	}
+	got, err = s.GetTarget(defID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceMode != "netinst" || got.DvdCount != 1 {
+		t.Fatalf("defaults: source_mode=%q dvd_count=%d, want netinst/1", got.SourceMode, got.DvdCount)
+	}
+}
+
+func TestSetTargetModes_RoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.CreateTarget(Target{OS: "debian", Arch: "amd64",
+		Params: `{"channel":"12"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTargetDesiredMode(id, "dvd", 3); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetTarget(id) // existing ctx-less accessor
+	if got.DesiredMode != "dvd" || got.DvdCount != 3 {
+		t.Fatalf("after SetTargetDesiredMode: desired=%q dvd_count=%d", got.DesiredMode, got.DvdCount)
+	}
+	if err := s.SetTargetSourceMode(id, "dvd"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetTarget(id)
+	if got.SourceMode != "dvd" || got.DesiredMode != "" {
+		t.Fatalf("after SetTargetSourceMode: source=%q desired=%q (want dvd/empty)", got.SourceMode, got.DesiredMode)
+	}
+	// by-identity lookup used by boot/preseed resolution (Tasks 8/9)
+	byID, err := s.GetTargetByIdentity("debian", "amd64", `{"channel":"12"}`)
+	if err != nil || byID.ID != id {
+		t.Fatalf("GetTargetByIdentity = %+v, %v", byID, err)
 	}
 }

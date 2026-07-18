@@ -39,6 +39,33 @@ catalog:
     retain: 3
     spec: { schematic: 376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba }
 
+  - os: debian
+    arch: amd64
+    retain: 1
+    spec: { channel: "13" }
+
+  - os: debian
+    arch: arm64
+    retain: 1
+    spec: { channel: "13" }
+
+  - os: debian
+    arch: amd64
+    enabled: false          # seeded but OFF — set enabled: true here to opt in (promote-dvd
+                             # does NOT apply: it only promotes an already-enabled netinst target)
+    retain: 1
+    sourceMode: dvd
+    dvdCount: 1
+    spec: { channel: "12" }
+
+  - os: debian
+    arch: amd64
+    enabled: false
+    retain: 1
+    sourceMode: dvd
+    dvdCount: 1
+    spec: { channel: "11" }
+
   # ── The entries below are commented out — illustrative, not active. Uncomment
   # ── and adjust any you want; each is a fully valid, independently addable entry.
 
@@ -66,10 +93,17 @@ catalog:
   #   retain: 3
   #   spec: { schematic: 376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba }
 
-  # Debian — NOT YET SUPPORTED. Debian target support (release -> codename,
-  # sourceMode/dvdCount) does not exist yet; the loader rejects a `debian`
-  # entry today. This shape is forthcoming with Debian target support — do not
-  # uncomment it yet.
+  # Debian dvd, pre-enabled at catalog-authoring time — e.g. if you already
+  # know you want the full offline install set from first boot (~44 GB for a
+  # full 11+12 dvd set; see docs/CONFIGURATION.md). This is the ONLY way to
+  # enable a dvd-mode target that starts life disabled (like the seeded 12/11
+  # entries above): promote-dvd does not apply — it promotes an already-
+  # enabled NETINST target (like the seeded 13 entries), and 409s on a target
+  # that is already dvd. channel must be "11", "12", or "13"; dvd mode is
+  # amd64-only (Debian ships no arm64 DVD ISOs).
   # - os: debian
   #   arch: amd64
-  #   spec: { release: "13", sourceMode: netinst }
+  #   retain: 1
+  #   sourceMode: dvd
+  #   dvdCount: 1
+  #   spec: { channel: "12" }

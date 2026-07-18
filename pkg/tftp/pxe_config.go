@@ -45,4 +45,15 @@ func init() {
 	echo Booty: this host is not yet approved. Waiting...
 	sleep 30
 	chain tftp://[[server-ip]]/booty.ipxe || shell`
+
+	// Unlike the other OS templates, the boot URL is substituted directly into
+	// the kernel/initrd lines rather than via an iPXE "set BASEURL"/${BASEURL}
+	// indirection: [[debian-baseurl]] is already fully resolved server-side
+	// before the script is sent, and the direct form keeps the rendered script
+	// simpler with no runtime-only variable for iPXE to expand.
+	PXEConfig["debian.ipxe"] = `#!ipxe
+	echo Booting Debian installer from Booty
+	kernel [[debian-baseurl]]/linux auto=true priority=critical preseed/url=http://[[server]]/preseed vga=788 --- quiet
+	initrd [[debian-baseurl]]/initrd.gz
+	boot`
 }

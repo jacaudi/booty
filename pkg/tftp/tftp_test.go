@@ -380,3 +380,161 @@ func TestBootTokensTalosNonMemberUsesNewestCached(t *testing.T) {
 		t.Fatalf("non-member must use NewestCached v1.13.9, got %q", tokens["[[talos-version]]"])
 	}
 }
+
+func TestDebianIPXE_ExpandsPreseedAndBaseURL(t *testing.T) {
+	tmpl := PXEConfig["debian.ipxe"]
+	if tmpl == "" {
+		t.Fatal("PXEConfig[debian.ipxe] missing")
+	}
+	out := applyTokens(tmpl, map[string]string{
+		"[[server]]":         "10.0.0.1:8080",
+		"[[debian-baseurl]]": "http://10.0.0.1:8080/data/cache/debian/12/amd64/12.15.0/install.amd64",
+		"[[debian-arch]]":    "amd64",
+	})
+	if !strings.Contains(out, "preseed/url=http://10.0.0.1:8080/preseed") {
+		t.Fatalf("kernel line must fetch /preseed:\n%s", out)
+	}
+	if !strings.Contains(out, "/data/cache/debian/") || !strings.Contains(out, "install.amd64/linux") {
+		t.Fatalf("kernel must load from the /data/cache dvd install tree:\n%s", out)
+	}
+}
+
+func TestDebianBaseURL_ModeSuffix(t *testing.T) {
+	// dvd mode appends install.<arch>/ ; netinst points at the bare version dir.
+	dvd := debianBaseURL("10.0.0.1:8080", "12", "amd64", "12.15.0", "dvd")
+	if !strings.HasSuffix(dvd, "/data/cache/debian/12/amd64/12.15.0/install.amd64") {
+		t.Fatalf("dvd baseurl = %q", dvd)
+	}
+	net := debianBaseURL("10.0.0.1:8080", "13", "amd64", "13.6.0", "netinst")
+	if !strings.HasSuffix(net, "/data/cache/debian/13/amd64/13.6.0") || strings.Contains(net, "install.") {
+		t.Fatalf("netinst baseurl = %q", net)
+	}
+}
+
+// newDebianModeStore wires a DB store via SetStore (with cleanup) holding a
+// dvd-mode Debian target for channel "12" and a netinst-mode target for
+// channel "13", mirroring how Task 7's tests seed source_mode via CreateTarget.
+// This is the shared fixture the assigned-boot and menu-boot integration tests
+// use to exercise debianSourceMode's real GetTargetByIdentity lookup.
+func newDebianModeStore(t *testing.T) *db.Store {
+	t.Helper()
+	s, err := db.Open(filepath.Join(t.TempDir(), "booty.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { SetStore(nil); s.Close() })
+	SetStore(s)
+	if _, err := s.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "api", Enabled: true, SourceMode: "dvd"}); err != nil {
+		t.Fatalf("create dvd target: %v", err)
+	}
+	if _, err := s.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"13"}`,
+		Mode: "discovery", RetainN: 1, Source: "api", Enabled: true, SourceMode: "netinst"}); err != nil {
+		t.Fatalf("create netinst target: %v", err)
+	}
+	return s
+}
+
+// TestBootTokensDebianHonorsHostChannelAndMode exercises the ASSIGNED-boot arm
+// end-to-end: the host's channel param drives both the cache segment (via
+// NewestCached) and the source_mode lookup (via debianSourceMode), so a dvd
+// target's base URL carries the /install.<arch> suffix and a netinst target's
+// does not.
+func TestBootTokensDebianHonorsHostChannelAndMode(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	newDebianModeStore(t)
+
+	// Seed a cached version under each channel segment so NewestCached resolves.
+	for _, seg := range []struct{ ch, ver string }{{"12", "12.15.0"}, {"13", "13.6.0"}} {
+		if err := os.MkdirAll(filepath.Join(root, "cache", "debian", seg.ch, "amd64", seg.ver), 0o755); err != nil {
+			t.Fatalf("seed cache %s: %v", seg.ch, err)
+		}
+	}
+
+	const server = "10.0.0.1"
+
+	// channel 12 → dvd target → base URL carries /install.amd64.
+	dvd := bootTokens("debian", server, &hardware.Host{AssignedParams: `{"channel":"12"}`})
+	if dvd["[[debian-arch]]"] != "amd64" {
+		t.Errorf("[[debian-arch]] = %q, want amd64", dvd["[[debian-arch]]"])
+	}
+	wantDVD := "http://" + cache.CacheURLBase(server, "debian", "12", "amd64", "12.15.0") + "/install.amd64"
+	if dvd["[[debian-baseurl]]"] != wantDVD {
+		t.Errorf("dvd [[debian-baseurl]] = %q, want %q", dvd["[[debian-baseurl]]"], wantDVD)
+	}
+
+	// channel 13 → netinst target → bare version dir, no install. suffix.
+	net := bootTokens("debian", server, &hardware.Host{AssignedParams: `{"channel":"13"}`})
+	wantNet := "http://" + cache.CacheURLBase(server, "debian", "13", "amd64", "13.6.0")
+	if net["[[debian-baseurl]]"] != wantNet {
+		t.Errorf("netinst [[debian-baseurl]] = %q, want %q", net["[[debian-baseurl]]"], wantNet)
+	}
+	if strings.Contains(net["[[debian-baseurl]]"], "install.") {
+		t.Errorf("netinst base URL must not carry an install. suffix: %q", net["[[debian-baseurl]]"])
+	}
+}
+
+// TestBootTokensDebianFallbackNoChannel locks the current hardcoded assigned-boot
+// fallback: with no host channel param (and no store), bootTokens defaults to
+// channel "13" / arch "amd64" and debianSourceMode fails safe to netinst — a
+// valid token set with no panic. NOTE: "13"/"amd64" is a hardcoded default (no
+// config.DebianChannel/Architecture flag exists); this test pins that behavior.
+func TestBootTokensDebianFallbackNoChannel(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	SetStore(nil) // no store: debianSourceMode must fail safe to netinst, no panic.
+
+	// Seed under the fallback channel "13" so NewestCached resolves a version.
+	if err := os.MkdirAll(filepath.Join(root, "cache", "debian", "13", "amd64", "13.6.0"), 0o755); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	const server = "10.0.0.1"
+	tokens := bootTokens("debian", server, nil)
+	if tokens["[[server]]"] != server {
+		t.Errorf("[[server]] = %q, want %q", tokens["[[server]]"], server)
+	}
+	if tokens["[[debian-arch]]"] != "amd64" {
+		t.Errorf("[[debian-arch]] = %q, want amd64 (hardcoded fallback)", tokens["[[debian-arch]]"])
+	}
+	// Fallback resolves channel 13 / newest cached 13.6.0, netinst mode (no store).
+	want := "http://" + cache.CacheURLBase(server, "debian", "13", "amd64", "13.6.0")
+	if tokens["[[debian-baseurl]]"] != want {
+		t.Errorf("[[debian-baseurl]] = %q, want %q (channel 13 fallback, netinst)", tokens["[[debian-baseurl]]"], want)
+	}
+}
+
+// TestBootTokensForDebianModeSuffix exercises the MENU-selected boot arm
+// (bootTokensFor called directly with a fixed tuple, as renderMenuSelection
+// does) for both a dvd-mode and a netinst-mode target.
+func TestBootTokensForDebianModeSuffix(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	newDebianModeStore(t)
+
+	const server = "10.0.0.1"
+
+	dvd := bootTokensFor("debian", "12", "amd64", "12.15.0", server)
+	if dvd["[[debian-arch]]"] != "amd64" {
+		t.Errorf("[[debian-arch]] = %q, want amd64", dvd["[[debian-arch]]"])
+	}
+	wantDVD := "http://" + cache.CacheURLBase(server, "debian", "12", "amd64", "12.15.0") + "/install.amd64"
+	if dvd["[[debian-baseurl]]"] != wantDVD {
+		t.Errorf("dvd [[debian-baseurl]] = %q, want %q", dvd["[[debian-baseurl]]"], wantDVD)
+	}
+
+	net := bootTokensFor("debian", "13", "amd64", "13.6.0", server)
+	wantNet := "http://" + cache.CacheURLBase(server, "debian", "13", "amd64", "13.6.0")
+	if net["[[debian-baseurl]]"] != wantNet {
+		t.Errorf("netinst [[debian-baseurl]] = %q, want %q", net["[[debian-baseurl]]"], wantNet)
+	}
+	if strings.Contains(net["[[debian-baseurl]]"], "install.") {
+		t.Errorf("netinst base URL must not carry an install. suffix: %q", net["[[debian-baseurl]]"])
+	}
+}

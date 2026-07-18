@@ -17,6 +17,7 @@ import (
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/pin/tftp"
 	"github.com/spf13/viper"
 )
@@ -248,8 +249,37 @@ func bootTokensFor(osToLoad, segment, arch, version, urlHost string) map[string]
 		tokens["[[talos-arch]]"] = arch
 		tokens["[[talos-version]]"] = version
 		tokens["[[talos-baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, "talos", segment, arch, version)
+	case "debian":
+		tokens["[[debian-arch]]"] = arch
+		tokens["[[debian-baseurl]]"] = debianBaseURL(urlHost, segment, arch, version, debianSourceMode(arch, segment))
 	}
 	return tokens
+}
+
+// debianBaseURL is the single source of the Debian boot base URL: the cached
+// version dir for netinst, plus install.<arch>/ for dvd (where the DVD tree
+// keeps the installer kernel/initrd). segment is the channel (suite).
+func debianBaseURL(urlHost, segment, arch, version, sourceMode string) string {
+	base := "http://" + cache.CacheURLBase(urlHost, "debian", segment, arch, version)
+	if sourceMode == "dvd" {
+		return base + "/install." + arch
+	}
+	return base
+}
+
+// debianSourceMode resolves a Debian target's effective serving mode (default
+// netinst if unresolved). segment is the channel (suite).
+func debianSourceMode(arch, segment string) string {
+	store := currentStore()
+	if store == nil {
+		return "netinst"
+	}
+	params, _ := cache.EncodeParams(map[string]string{"channel": segment})
+	t, err := store.GetTargetByIdentity("debian", arch, params)
+	if err != nil || t == nil || t.SourceMode == "" {
+		return "netinst"
+	}
+	return t.SourceMode
 }
 
 // hostParams decodes host.AssignedParams (the P1c field; canonical JSON set by
@@ -296,7 +326,9 @@ func clusterPinnedTalosVersion(host *hardware.Host) (string, bool) {
 // boot path. Each OS resolves its path-discriminating variant the same way:
 // host override, else flag — schematic for talos (typed column), channel for
 // flatcar/coreos (AssignedParams) — then serves the newest cached version
-// under that segment.
+// under that segment. debian has no per-deployment config flag (catalog-
+// declared, potentially multiple channels/arches); it falls back to a
+// literal default channel/arch instead — see the "debian" case below.
 func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string {
 	switch osToLoad {
 	case "coreos":
@@ -327,6 +359,27 @@ func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string
 			version = cache.NewestCached("talos", arch, map[string]string{"schematic": schematic})
 		}
 		return bootTokensFor("talos", schematic, arch, version, urlHost)
+	case "debian":
+		// Debian has no config.DebianChannel/DebianArchitecture flag (unlike the
+		// other OSes): targets are catalog-declared, potentially multiple
+		// channels/arches at once (#1/#3), so there is no single per-deployment
+		// default to read from viper. Fall back to ostype.DefaultDebianChannel
+		// (arch stays a literal "amd64", see below) when the host has no
+		// assigned channel.
+		suite := cmp.Or(hostParams(host)["channel"], ostype.DefaultDebianChannel)
+		// arch is hardcoded, NOT read from host.AssignedArch (#1): the only
+		// production writer of that column (POST /hosts/{mac}/approve,
+		// pkg/http/api_hosts.go) always passes "" for arch, so the field is
+		// never actually populated — reading it here would be dead code, not
+		// a real fix. The menu boot path (renderMenuSelection/bootTokensFor)
+		// DOES serve arm64 correctly, since it carries arch through the
+		// parsed menu-selection tuple instead of this per-OS default; only
+		// the assigned-boot path is amd64-only. Wiring real per-host arch
+		// (populating AssignedArch on approve/assign and reading it here) is
+		// separate multi-arch work, not a one-line fix.
+		arch := "amd64"
+		version := cache.NewestCached("debian", arch, map[string]string{"channel": suite})
+		return bootTokensFor("debian", suite, arch, version, urlHost)
 	}
 	// unknown os: only the shared [[server]] token (identical to the old fall-through).
 	return bootTokensFor(osToLoad, "", "", "", urlHost)

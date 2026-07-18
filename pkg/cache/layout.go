@@ -35,10 +35,18 @@ func cacheDir(osName, schematic, arch, version string) string {
 	return filepath.Join(append([]string{cacheRoot()}, cacheSegments(osName, schematic, arch, version)...)...)
 }
 
+// CacheURLPath is the host-less client path for a version dir — the single
+// source shared by CacheURLBase (boot URLs) and the preseed dvd-mirror
+// directory (pkg/http), so disk layout and client-facing paths can never
+// diverge.
+func CacheURLPath(osName, schematic, arch, version string) string {
+	return "/data/cache/" + path.Join(cacheSegments(osName, schematic, arch, version)...)
+}
+
 // CacheURLBase returns the client-facing base URL for the same directory:
 // <server>/data/cache/<os>/<schematic>/<arch>/<version>.
 func CacheURLBase(server, osName, schematic, arch, version string) string {
-	return server + "/data/cache/" + path.Join(cacheSegments(osName, schematic, arch, version)...)
+	return server + CacheURLPath(osName, schematic, arch, version)
 }
 
 // artifactPath returns the on-disk path an artifact URL resolves to inside dir,

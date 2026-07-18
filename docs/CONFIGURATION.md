@@ -55,6 +55,26 @@ config file.
 > See [schema/API.md](schema/API.md#targets) for the target create/PATCH contract, and
 > [schema/CATALOG.md](schema/CATALOG.md#upgrade-notes) for what changes on an upgrade from a
 > pre-catalog booty.
+>
+> **Upgrade note: Debian joins the default catalog.** On an upgrade to a booty version with Debian
+> image support, a fresh default catalog (no `catalog.yaml` present) now also creates an **enabled**
+> Debian 13 (trixie) netinst target for both amd64 and arm64 — small, installer images only — plus
+> two **disabled** Debian dvd targets, 12 (bookworm) and 11 (bullseye), amd64 only. The dvd targets
+> are seeded disabled specifically so upgrading downloads nothing extra by default: a full offline
+> 11+12 dvd set is **~44 GB** (two point releases × two DVDs each, design
+> `2026-07-14-debian-image-support-design.md` §6.1), and no operator should get that on disk without
+> asking for it.
+>
+> **Two separate opt-in mechanisms exist — they are not interchangeable:**
+>
+> - **Enable a seeded 11/12 dvd target.** These are already `sourceMode: dvd`, just `enabled: false`.
+>   The catalog is authoritative for `enabled` on catalog-managed targets (reconciled every tick), so
+>   `PATCH enabled=true` reverts on the next pass — you must set `enabled: true` for that entry in your
+>   own `catalog.yaml` (see [schema/CATALOG.md](schema/CATALOG.md#example-3)) instead.
+> - **`POST /api/v1/targets/{id}/promote-dvd`** promotes an already-**enabled netinst** target (e.g.
+>   the seeded Debian 13 amd64 target) to dvd mode. It requires `sourceMode == "netinst"` and returns
+>   `409` on a target that is already `dvd` — so it does **not** apply to the seeded 11/12 entries,
+>   which start life already in dvd mode.
 
 ### Retention windows for single-version-discovery OSes
 

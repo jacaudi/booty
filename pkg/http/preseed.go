@@ -1,6 +1,7 @@
 package http
 
 import (
+	"cmp"
 	"fmt"
 	"log/slog"
 	"net"
@@ -9,9 +10,11 @@ import (
 	"path/filepath"
 
 	"github.com/j-keck/arping"
+	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
 
@@ -30,11 +33,13 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 			// on the RESOLVED kind (M2) — the guard and the family contract are
 			// single-sourced in familyAllowsKind.
 			if src, kind, ok := resolveConfig(store, host); ok && familyAllowsKind("preseed", kind) {
-				out, ct, _, err := renderConfig(kind, src, preseedVars(store, host))
+				vars := preseedVars(store, host)
+				out, ct, _, err := renderConfig(kind, src, vars)
 				if err != nil {
 					writeError(w, http.StatusInternalServerError, "render bound preseed", err)
 					return
 				}
+				out = withDVDMirror(store, host, vars.ServerIP, out)
 				w.Header().Set("Content-Type", ct)
 				_, _ = w.Write(out)
 				return
@@ -48,14 +53,75 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, "preseed template unavailable", err)
 			return
 		}
-		out, ct, _, err := renderConfig("preseed", src, preseedVars(store, host))
+		vars := preseedVars(store, host)
+		out, ct, _, err := renderConfig("preseed", src, vars)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "preseed render failed", err)
 			return
 		}
+		out = withDVDMirror(store, host, vars.ServerIP, out)
 		w.Header().Set("Content-Type", ct)
 		_, _ = w.Write(out)
 	}
+}
+
+// withDVDMirror appends booty's local apt mirror directives to a rendered
+// preseed when the requesting host boots a dvd-mode Debian target — covering
+// raw preseed, debianconfig, and the server default alike (design: appending
+// is safe for debconf since a later directive overrides an earlier one, so
+// this needs no TemplateVars field and render.go/debiangen.go stay untouched).
+// A netinst / non-debian / unidentified host is unaffected: out is returned
+// as-is. mirrorHost is vars.ServerIP (already host:port) — reused rather than
+// recomputed, since preseedVars is the single source of that construction.
+func withDVDMirror(store *db.Store, host *hardware.Host, mirrorHost string, out []byte) []byte {
+	dir, ok := debianDVDMirrorDir(store, host)
+	if !ok {
+		return out
+	}
+	return appendDVDMirror(out, mirrorHost, dir)
+}
+
+// appendDVDMirror appends the three d-i mirror directives that point apt at
+// booty's local extracted DVD tree — the single source of that directive
+// template.
+func appendDVDMirror(out []byte, mirrorHost, dir string) []byte {
+	return fmt.Appendf(out, "\nd-i mirror/country string manual\nd-i mirror/http/hostname string %s\nd-i mirror/http/directory string %s\n",
+		mirrorHost, dir)
+}
+
+// debianDVDMirrorDir resolves the client-facing cache directory for a
+// dvd-mode Debian host's local mirror, or ok=false when the host is nil,
+// not Debian, or its resolved target is not (yet) dvd-mode — the netinst
+// (and non-Debian) case, which must serve its preseed unchanged.
+//
+// arch is hardcoded "amd64" and the suite falls back to ostype.DefaultDebianChannel
+// absent an assigned channel, mirroring pkg/tftp's bootTokens debian case
+// (Task 8): Debian has no config.DebianArchitecture/DebianChannel flag, so
+// there is no other per-deployment default to read.
+//
+// arch is NOT read from host.AssignedArch (#1), matching pkg/tftp's
+// bootTokens: the only production writer of that column always passes "" for
+// arch, so it is never actually populated — wiring it through here would be
+// dead code. Real per-host arch resolution for the assigned-boot path is
+// separate multi-arch work.
+func debianDVDMirrorDir(store *db.Store, host *hardware.Host) (string, bool) {
+	if host == nil || host.OS != "debian" {
+		return "", false
+	}
+	const arch = "amd64"
+	params, _ := cache.DecodeParams(host.AssignedParams)
+	suite := cmp.Or(params["channel"], ostype.DefaultDebianChannel)
+
+	encoded, err := cache.EncodeParams(map[string]string{"channel": suite})
+	if err != nil {
+		return "", false
+	}
+	t, err := store.GetTargetByIdentity("debian", arch, encoded)
+	if err != nil || t.SourceMode != "dvd" {
+		return "", false
+	}
+	version := cache.NewestCached("debian", arch, map[string]string{"channel": suite})
+	return cache.CacheURLPath("debian", suite, arch, version), true
 }
 
 func preseedVars(store *db.Store, host *hardware.Host) TemplateVars {

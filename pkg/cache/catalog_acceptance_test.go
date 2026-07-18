@@ -149,7 +149,8 @@ func TestCatalog_UpgradeTransition_RevertsDeclaredFieldsKeepsMode(t *testing.T) 
 
 // TestCatalog_AbsentFileReproducesDefaultSet is the design §11 back-compat
 // requirement: LoadCatalog with no catalog.yaml present, under default flags,
-// reproduces the curated default set (Flatcar stable+lts, Talos; no FCOS).
+// reproduces the curated default set (Flatcar stable+lts, Talos, Debian
+// 13 netinst amd64+arm64 + 11/12 dvd amd64; no FCOS).
 func TestCatalog_AbsentFileReproducesDefaultSet(t *testing.T) {
 	store := seedTestStore(t)
 	viperSetDefaultFlags(t)
@@ -167,19 +168,34 @@ func TestCatalog_AbsentFileReproducesDefaultSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTargets: %v", err)
 	}
-	if len(all) != 3 {
-		t.Fatalf("targets = %d, want 3 (flatcar stable+lts, talos)", len(all))
+	if len(all) != 7 {
+		t.Fatalf("targets = %d, want 7 (flatcar stable+lts, talos, debian 13x2+12+11)", len(all))
 	}
 	for _, want := range []struct{ os, arch, params string }{
 		{"flatcar", "amd64", `{"channel":"stable"}`},
 		{"flatcar", "amd64", `{"channel":"lts"}`},
 		{"talos", "amd64", `{"schematic":"` + config.DefaultTalosSchematic + `"}`},
+		{"debian", "amd64", `{"channel":"13"}`},
+		{"debian", "arm64", `{"channel":"13"}`},
+		{"debian", "amd64", `{"channel":"12"}`},
+		{"debian", "amd64", `{"channel":"11"}`},
 	} {
 		found := slices.ContainsFunc(all, func(tg db.Target) bool {
 			return tg.OS == want.os && tg.Arch == want.arch && tg.Params == want.params && tg.Source == "catalog"
 		})
 		if !found {
 			t.Errorf("missing default target %s/%s/%s", want.os, want.arch, want.params)
+		}
+	}
+	byKey := indexByIdentity(all)
+	deb13 := byKey[identityKey("debian", "amd64", `{"channel":"13"}`)]
+	if !deb13.Enabled || deb13.SourceMode != "netinst" {
+		t.Errorf("debian 13 must be enabled+netinst: %+v", deb13)
+	}
+	for _, ch := range []string{"12", "11"} {
+		deb := byKey[identityKey("debian", "amd64", `{"channel":"`+ch+`"}`)]
+		if deb.Enabled || deb.SourceMode != "dvd" {
+			t.Errorf("debian %s must be disabled+dvd: %+v", ch, deb)
 		}
 	}
 	// FCOS is not in the default set.
@@ -190,9 +206,13 @@ func TestCatalog_AbsentFileReproducesDefaultSet(t *testing.T) {
 
 // TestCatalog_RoundTripDesignExamples is the design §11 round-trip
 // requirement: each §7 example parses, validates, and produces the expected
-// target rows. Example 3 (Debian) is not yet catalog-expressible (design B1)
-// and must be rejected by parseCatalog — this also confirms example 1's FCOS
-// entry (dropped from the shipped default, TestCatalog_AbsentFileReproducesDefaultSet)
+// target rows. Example 3 (Debian) is now catalog-expressible (design B1 was
+// resolved by the separate Debian image-support spec) — the design doc's
+// illustrative spec.release/spec.sourceMode shape was superseded by the real
+// Debian ostype (spec.channel, top-level sourceMode/dvdCount), so this also
+// covers that the *real* shape round-trips and the design doc's now-outdated
+// shape is correctly rejected. This also confirms example 1's FCOS entry
+// (dropped from the shipped default, TestCatalog_AbsentFileReproducesDefaultSet)
 // remains fully usable via an explicit operator catalog.
 func TestCatalog_RoundTripDesignExamples(t *testing.T) {
 	tests := []struct {
@@ -307,12 +327,12 @@ catalog:
 		})
 	}
 
-	// Example 3 (Debian) is FORWARD-LOOKING per the design (§7, B1): Debian
-	// target support does not exist yet, so parseCatalog must reject it, exactly
-	// as TestParseCatalog_RejectsDebian (Task 2) already asserts for a minimal
-	// debian entry. This drives the literal §7 example 3 text through the same
-	// gate for full-document round-trip coverage.
-	t.Run("example 3: Debian rejected (not yet catalog-expressible)", func(t *testing.T) {
+	// Example 3 (Debian) as originally drafted in the design doc used the
+	// pre-implementation illustrative shape (spec.release + spec.sourceMode in
+	// Spec). The real Debian ostype settled on spec.channel with top-level
+	// sourceMode/dvdCount fields (this task), so that draft shape is correctly
+	// rejected — "release" is not debian's RequiredParams key ("channel").
+	t.Run("example 3 (design draft shape): rejected, spec.release is not debian's param", func(t *testing.T) {
 		yaml := `schemaVersion: 1
 catalog:
   - os: debian
@@ -327,7 +347,45 @@ catalog:
     spec: {release: "11", sourceMode: dvd, dvdCount: 3}
 `
 		if _, err := parseCatalog([]byte(yaml)); err == nil {
-			t.Fatal("want error: debian is not yet a supported catalog os (design B1)")
+			t.Fatal("want error: debian requires spec.channel, not spec.release")
+		}
+	})
+
+	// Example 3 (real shape): the actual Debian catalog contract this task
+	// ships — spec.channel + top-level sourceMode/dvdCount — round-trips.
+	t.Run("example 3 (real shape): Debian netinst+dvd round-trips", func(t *testing.T) {
+		yaml := `schemaVersion: 1
+catalog:
+  - os: debian
+    arch: amd64
+    spec: {channel: "13"}
+  - os: debian
+    arch: amd64
+    enabled: false
+    sourceMode: dvd
+    dvdCount: 3
+    spec: {channel: "12"}
+`
+		entries, err := parseCatalog([]byte(yaml))
+		if err != nil {
+			t.Fatalf("parseCatalog: %v", err)
+		}
+		store := seedTestStore(t)
+		if err := applyCatalog(store, entries); err != nil {
+			t.Fatalf("applyCatalog: %v", err)
+		}
+		all, err := store.ListTargets()
+		if err != nil {
+			t.Fatalf("ListTargets: %v", err)
+		}
+		byKey := indexByIdentity(all)
+		net := byKey[identityKey("debian", "amd64", `{"channel":"13"}`)]
+		if net.SourceMode != "netinst" || !net.Enabled {
+			t.Errorf("debian 13 = %+v, want netinst+enabled", net)
+		}
+		dvd := byKey[identityKey("debian", "amd64", `{"channel":"12"}`)]
+		if dvd.SourceMode != "dvd" || dvd.DvdCount != 3 || dvd.Enabled {
+			t.Errorf("debian 12 = %+v, want dvd+dvdCount=3+disabled", dvd)
 		}
 	})
 }
