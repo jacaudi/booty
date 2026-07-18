@@ -145,9 +145,17 @@ func hashFile(filePath string) (string, error) {
 // warn-lands).
 var errKeyringParse = errors.New("keyring parse")
 
+// pgpArmorHeader is the leading line of an ASCII-armored OpenPGP signature
+// block. checkDetachedSignature sniffs for it to pick the armored vs binary
+// verifier — Flatcar's detached .sig sidecars are binary, but Debian's
+// cdimage SHA256SUMS.sign is ASCII-armored, and CheckDetachedSignature
+// rejects armored input outright (fails on the leading '-' byte).
+var pgpArmorHeader = []byte("-----BEGIN PGP")
+
 // checkDetachedSignature is the shared openpgp core for detached-signature
-// verification: parse the armored keyring, then check sig (binary, detached)
-// over signed. Both verifyDetachedGPG (fetches the signature over HTTP) and
+// verification: parse the armored keyring, then check sig (armored or binary,
+// detected by sniffing for the ASCII-armor header) over signed. Both
+// verifyDetachedGPG (fetches the signature over HTTP) and
 // verifyDetachedGPGLocal (reads it from disk) call this single helper so "how
 // we check a detached sig" stays single-sourced (DRY). A keyring-parse failure
 // is wrapped with errKeyringParse so callers can distinguish it from a genuine
@@ -156,6 +164,10 @@ func checkDetachedSignature(key []byte, signed io.Reader, sig []byte) error {
 	keyring, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(key))
 	if err != nil {
 		return fmt.Errorf("%w: %v", errKeyringParse, err)
+	}
+	if bytes.HasPrefix(bytes.TrimSpace(sig), pgpArmorHeader) {
+		_, err = openpgp.CheckArmoredDetachedSignature(keyring, signed, bytes.NewReader(sig), nil)
+		return err
 	}
 	_, err = openpgp.CheckDetachedSignature(keyring, signed, bytes.NewReader(sig), nil)
 	return err

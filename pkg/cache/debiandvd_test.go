@@ -44,6 +44,26 @@ func writeDetachedSig(t *testing.T, signedPath, sigPath string, ent *openpgp.Ent
 	}
 }
 
+// writeArmoredDetachedSig ASCII-armor-detach-signs signedPath with ent and
+// writes the signature to sigPath. Debian's cdimage SHA256SUMS.sign is
+// ASCII-armored (begins "-----BEGIN PGP SIGNATURE-----"), unlike Flatcar's
+// binary detached sigs covered by writeDetachedSig above — this fixture
+// reproduces the real cdimage on-disk format.
+func writeArmoredDetachedSig(t *testing.T, signedPath, sigPath string, ent *openpgp.Entity) {
+	t.Helper()
+	body, err := os.ReadFile(signedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sig bytes.Buffer
+	if err := openpgp.ArmoredDetachSign(&sig, ent, bytes.NewReader(body), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sigPath, sig.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // swapDebianKeyring injects a fixture keyring in place of the embedded Debian
 // CD key for the duration of a test, returning a restore func.
 func swapDebianKeyring(key []byte) func() {
@@ -160,6 +180,39 @@ func TestVerifyDVDChecksums_HappyAndTamper(t *testing.T) {
 	}
 	if err := verifyDVDChecksums(t.Context(), dir, names); err == nil {
 		t.Fatal("tampered ISO must fail checksum")
+	}
+}
+
+// TestVerifyDVDChecksums_ArmoredSignature reproduces a CONFIRMED live-run
+// blocker: Debian's real cdimage SHA256SUMS.sign is ASCII-armored (begins
+// "-----BEGIN PGP SIGNATURE-----"), but verifyDVDChecksums (via
+// verifyDetachedGPGLocal -> the shared checkDetachedSignature core) called
+// openpgp.CheckDetachedSignature, which expects a BINARY detached signature.
+// Feeding it armored bytes fails immediately on the leading '-' (0x2D, no MSB
+// set) with "openpgp: invalid data: tag byte does not have MSB set" — so no
+// DVD set could ever verify, and removeUnverifiedISOs re-downloaded the ~4GB
+// set every reconcile tick. This test signs SHA256SUMS with an ARMORED
+// detached signature (mirroring the real cdimage format) and must PASS once
+// checkDetachedSignature sniffs and handles both armored and binary sigs.
+func TestVerifyDVDChecksums_ArmoredSignature(t *testing.T) {
+	dir := t.TempDir()
+	iso := []byte("pretend-iso-contents")
+	if err := os.WriteFile(filepath.Join(dir, "debian-12.15.0-amd64-DVD-1.iso"), iso, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(iso)
+	sums := fmt.Sprintf("%x  debian-12.15.0-amd64-DVD-1.iso\n", sum[:])
+	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte(sums), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ent := newTestPGPEntity(t)
+	writeArmoredDetachedSig(t, filepath.Join(dir, "SHA256SUMS"), filepath.Join(dir, "SHA256SUMS.sign"), ent)
+	restore := swapDebianKeyring(armorPublicKey(t, ent))
+	defer restore()
+
+	names := []string{"debian-12.15.0-amd64-DVD-1.iso"}
+	if err := verifyDVDChecksums(t.Context(), dir, names); err != nil {
+		t.Fatalf("ASCII-armored SHA256SUMS.sign (the real cdimage format) must verify: %v", err)
 	}
 }
 
