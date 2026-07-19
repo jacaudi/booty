@@ -48,7 +48,11 @@ export default function ClustersView() {
   }
 
   const submitImport = async () => {
-    const v = await importForm.validateFields()
+    // validateFields() REJECTS on invalid input; catch it to an early return so an
+    // incomplete row surfaces inline errors instead of leaking an unhandled promise
+    // rejection (which fails the vitest CI run even though every assertion passes).
+    const v = await importForm.validateFields().catch(() => undefined)
+    if (!v) return
     try {
       await importCluster(v)
       message.success(`Imported ${v.name}`)
@@ -183,8 +187,29 @@ export default function ClustersView() {
       <Modal title="Import Cluster" open={importOpen} onOk={submitImport} onCancel={() => setImportOpen(false)} destroyOnHidden>
         <Form form={importForm} layout="vertical">
           <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="controlplaneMac" label="Control-plane host MAC" rules={[{ required: true }]}><Input placeholder="aa:bb:cc:dd:ee:ff" /></Form.Item>
-          <Form.Item name="controlplane" label="controlplane.yaml" rules={[{ required: true }]}><Input.TextArea rows={10} /></Form.Item>
+          <Form.List name="controlPlanes" initialValue={[{ mac: '', controlplane: '' }]}>
+            {(fields, { add, remove }) => (
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {fields.map((field, idx) => (
+                  <Space key={field.key} direction="vertical" style={{ width: '100%' }}>
+                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                      <span>Control-plane host {idx + 1}</span>
+                      {fields.length > 1 && (
+                        <Button size="small" danger onClick={() => remove(field.name)}>Remove</Button>
+                      )}
+                    </Space>
+                    <Form.Item name={[field.name, 'mac']} label="MAC" rules={[{ required: true }]}>
+                      <Input placeholder="aa:bb:cc:dd:ee:ff" />
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'controlplane']} label="controlplane.yaml" rules={[{ required: true }]}>
+                      <Input.TextArea rows={8} placeholder="Paste this node's controlplane.yaml" />
+                    </Form.Item>
+                  </Space>
+                ))}
+                <Button onClick={() => add({ mac: '', controlplane: '' })}>Add control-plane host</Button>
+              </Space>
+            )}
+          </Form.List>
         </Form>
       </Modal>
 

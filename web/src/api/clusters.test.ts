@@ -33,11 +33,17 @@ describe('clusters api client', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/clusters/1/members/aa:bb', expect.objectContaining({ method: 'DELETE' }))
   })
 
-  it('importCluster POSTs /clusters/import', async () => {
+  it('importCluster POSTs /clusters/import with the control-plane array', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 1 }), { status: 201 }))
     vi.stubGlobal('fetch', fetchMock)
-    await importCluster({ name: 'a', controlplane: 'yaml', controlplaneMac: 'aa:bb' })
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/clusters/import', expect.objectContaining({ method: 'POST' }))
+    await importCluster({ name: 'a', controlPlanes: [{ mac: 'aa:bb', controlplane: 'yaml' }] })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/clusters/import',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'a', controlPlanes: [{ mac: 'aa:bb', controlplane: 'yaml' }] }),
+      }),
+    )
   })
 
   it('exportClusterSecrets POSTs /clusters/{id}/export and unwraps', async () => {

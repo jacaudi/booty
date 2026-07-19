@@ -500,6 +500,42 @@ func clusterHasWorker(store *db.Store, clusterID int64) bool {
 	return false
 }
 
+// importBind is the bind step of the import loop, indirected through a package
+// var so a test can force a mid-loop failure and exercise the compensating
+// rollback (design §6). It defaults to the real freezeAndBind. Only the import
+// handler routes through it; addMember calls freezeAndBind directly.
+var importBind = freezeAndBind
+
+// importCPEntry is one validated control-plane entry, fully resolved BEFORE any
+// row is written (design §4.3). rawBytes are the operator's verbatim
+// controlplane.yaml; each host is frozen to its own bytes.
+type importCPEntry struct {
+	mac       string
+	rawBytes  []byte
+	fields    importedClusterFields
+	schematic string
+}
+
+// rollbackImport compensates a failed multi-host import: it unbinds every host
+// the import touched (idempotent — clearing an unbound host is a no-op) and then
+// deletes the freshly-created cluster row via the store-level DeleteCluster (the
+// HTTP delete-cluster handler is 403 until P10). Best-effort: it presses past
+// individual errors so one failing unbind cannot strand the cluster row. Order
+// mirrors remove-cluster-member (clear node_config first, prune revisions, clear
+// type, clear cluster) so no row references a deleted config mid-sequence, and it
+// iterates ALL entries so a partially-written frozen revision (row present, host
+// columns absent) is cleaned too — DeleteClusterNodeConfigs keys on (mac,
+// clusterID), not node_config_id.
+func rollbackImport(deps APIDeps, clusterID int64, entries []importCPEntry) {
+	for _, e := range entries {
+		_ = hardware.SetHostNodeConfig(e.mac, nil)
+		_ = deps.Store.DeleteClusterNodeConfigs(e.mac, clusterID)
+		_ = hardware.SetHostMachineType(e.mac, "")
+		_ = hardware.SetHostCluster(e.mac, nil)
+	}
+	_ = deps.Store.DeleteCluster(clusterID)
+}
+
 func registerClusterMembers(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "add-cluster-member", Method: http.MethodPost, Path: "/clusters/{id}/members",
@@ -612,57 +648,113 @@ func registerClusterMembers(api huma.API, deps APIDeps) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "import-cluster", Method: http.MethodPost, Path: "/clusters/import",
-		Summary: "Adopt an existing cluster from its controlplane.yaml", Tags: []string{"clusters"}, DefaultStatus: http.StatusCreated,
+		Summary: "Adopt an existing cluster from its control-plane configs", Tags: []string{"clusters"}, DefaultStatus: http.StatusCreated,
 	}, func(ctx context.Context, in *struct {
 		Body struct {
-			Name            string `json:"name"`
-			Controlplane    string `json:"controlplane"`
-			ControlplaneMAC string `json:"controlplaneMac"`
+			Name          string `json:"name"`
+			ControlPlanes []struct {
+				MAC          string `json:"mac"`
+				Controlplane string `json:"controlplane"`
+			} `json:"controlPlanes" minItems:"1"`
 		}
 	}) (*struct{ Body ClusterDTO }, error) {
-		if in.Body.Name == "" || in.Body.Controlplane == "" || in.Body.ControlplaneMAC == "" {
-			return nil, huma.Error422UnprocessableEntity("name, controlplane, and controlplaneMac are required")
+		if in.Body.Name == "" {
+			return nil, huma.Error422UnprocessableEntity("name is required")
 		}
-		prov, err := parseImportedConfig([]byte(in.Body.Controlplane))
-		if err != nil {
-			return nil, huma.Error422UnprocessableEntity("invalid controlplane config: "+err.Error(), err)
+		// huma's minItems:"1" tag already 422s an empty array before the handler
+		// runs (design m2); this len check is defensive belt-and-suspenders so the
+		// invariant holds even if the tag is ever dropped.
+		if len(in.Body.ControlPlanes) == 0 {
+			return nil, huma.Error422UnprocessableEntity("at least one control-plane host is required")
 		}
-		fields, err := extractClusterFields(prov)
-		if err != nil {
-			return nil, huma.Error422UnprocessableEntity(err.Error(), err) // worker-only rejected here
+
+		// Pass 1: parse + extract + resolve host for EVERY entry, before any write.
+		// No cluster row exists yet, so any rejection here leaves nothing behind.
+		// (The same-cluster / endpoint guard is added in a later step.)
+		entries := make([]importCPEntry, 0, len(in.Body.ControlPlanes))
+		seenMAC := make(map[string]bool, len(in.Body.ControlPlanes))
+		var (
+			firstProv                    talosconfig.Provider
+			firstIdentity, firstEndpoint string
+		)
+		for i, cp := range in.Body.ControlPlanes {
+			if cp.MAC == "" || cp.Controlplane == "" {
+				return nil, huma.Error422UnprocessableEntity("each control-plane entry needs a mac and a controlplane config")
+			}
+			// Dedup on the NORMALIZED MAC, not the raw request string, so two
+			// textual forms of the same NIC (e.g. upper vs lower case) can't
+			// both slip past this guard and double-bind the same host below.
+			normMAC, err := hardware.NormalizeMAC(cp.MAC)
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity("invalid control-plane MAC "+cp.MAC, err)
+			}
+			if seenMAC[normMAC] {
+				return nil, huma.Error422UnprocessableEntity("duplicate control-plane MAC in request: " + cp.MAC)
+			}
+			seenMAC[normMAC] = true
+
+			prov, err := parseImportedConfig([]byte(cp.Controlplane))
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity("invalid controlplane config: "+err.Error(), err)
+			}
+			fields, err := extractClusterFields(prov) // worker configs rejected here
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity(err.Error(), err)
+			}
+			if fields.TalosVersion == "" {
+				return nil, huma.Error422UnprocessableEntity("could not determine Talos version from install image (" + cp.MAC + ")")
+			}
+			if fields.K8sVersion == "" {
+				return nil, huma.Error422UnprocessableEntity("could not determine Kubernetes version from the control-plane config (" + cp.MAC + ")")
+			}
+			identity, err := clusterIdentity(prov) // rejects empty/missing identity
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity(err.Error(), err)
+			}
+			if i == 0 {
+				firstProv, firstIdentity, firstEndpoint = prov, identity, fields.Endpoint
+			} else {
+				if identity != firstIdentity {
+					return nil, huma.Error422UnprocessableEntity("all control-plane configs must belong to the same cluster")
+				}
+				if fields.Endpoint != firstEndpoint {
+					return nil, huma.Error422UnprocessableEntity("all control-plane configs must share the same endpoint")
+				}
+			}
+			schematic := fields.Schematic
+			if schematic == "" {
+				schematic = viper.GetString(config.TalosSchematic)
+			}
+
+			h, err := hardware.GetMacAddress(cp.MAC)
+			if errors.Is(err, hardware.ErrNotFound) {
+				return nil, huma.Error404NotFound("control-plane host not found: " + cp.MAC)
+			}
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity("invalid control-plane MAC "+cp.MAC, err)
+			}
+			if h.OS != "talos" {
+				return nil, huma.Error422UnprocessableEntity("cluster membership applies to Talos hosts only: " + cp.MAC)
+			}
+			if h.ClusterID != nil {
+				return nil, huma.Error422UnprocessableEntity("host already belongs to a cluster: " + cp.MAC)
+			}
+			entries = append(entries, importCPEntry{
+				mac: h.MAC, rawBytes: []byte(cp.Controlplane), fields: fields, schematic: schematic,
+			})
 		}
-		if fields.TalosVersion == "" {
-			return nil, huma.Error422UnprocessableEntity("could not determine Talos version from install image")
-		}
-		if fields.K8sVersion == "" {
-			return nil, huma.Error422UnprocessableEntity("could not determine Kubernetes version from the control-plane config")
-		}
-		schematic := fields.Schematic
-		if schematic == "" {
-			schematic = viper.GetString(config.TalosSchematic)
-		}
-		// Resolve + validate the control-plane host BEFORE creating the cluster, so
-		// a failed/guarded import never leaves an orphan cluster row (name is UNIQUE
-		// and DELETE is 403 until P10). Same host guards add-member enforces, plus:
-		// import always creates a NEW cluster, so a host already in ANY cluster is a
-		// conflict — never silently steal it from another cluster.
-		h, err := hardware.GetMacAddress(in.Body.ControlplaneMAC)
-		if errors.Is(err, hardware.ErrNotFound) {
-			return nil, huma.Error404NotFound("controlplane host not found")
-		}
-		if err != nil {
-			return nil, huma.Error422UnprocessableEntity("invalid controlplane MAC", err)
-		}
-		if h.OS != "talos" {
-			return nil, huma.Error422UnprocessableEntity("cluster membership applies to Talos hosts only")
-		}
-		if h.ClusterID != nil {
-			return nil, huma.Error422UnprocessableEntity("host already belongs to a cluster")
-		}
-		// Reconstruct + persist the encrypted secrets bundle from the CP config.
-		// Reuse the already-parsed prov (Fold 5): secrets.NewBundleFromConfig takes
-		// the config.Config that config.Provider embeds — no second parse.
-		bundle := secrets.NewBundleFromConfig(secrets.NewFixedClock(fixedBundleClock), prov)
+		first := entries[0] // cluster-level fields come from the first entry (§4.3)
+
+		// Pass 2: HOIST all fail-prone work BEFORE CreateCluster, so no failure can
+		// leave an orphan cluster. Reconstruct + encrypt the shared bundle from the
+		// first entry, and pre-run each entry's schematic-target ensure.
+		// (EnsureSchematicTarget also runs again inside freezeAndBind →
+		// pinClusterMemberVersion; it is create-if-absent + idempotent, so the double
+		// call is harmless and the hoist just guarantees the later call can't fail
+		// post-create. A pre-create rejection may leave a benign shared cache-target
+		// row — cluster-independent, desired regardless of import outcome, never an
+		// orphan cluster, matching add-member semantics.)
+		bundle := secrets.NewBundleFromConfig(secrets.NewFixedClock(fixedBundleClock), firstProv)
 		bundleRaw, err := marshalBundle(bundle)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("marshal bundle", err)
@@ -674,21 +766,23 @@ func registerClusterMembers(api huma.API, deps APIDeps) {
 			}
 			return nil, huma.Error500InternalServerError("encrypt bundle", err)
 		}
-		cid, err := deps.Store.CreateCluster(in.Body.Name, fields.Endpoint, fields.TalosVersion, fields.K8sVersion, encBundle)
+		for _, e := range entries {
+			if err := cache.EnsureSchematicTarget(deps.Store, e.schematic); err != nil {
+				return nil, huma.Error422UnprocessableEntity("ensure schematic cache target for "+e.mac+": "+err.Error(), err)
+			}
+		}
+
+		// Create the cluster ONCE, then bind every host; a bind failure triggers rollbackImport.
+		cid, err := deps.Store.CreateCluster(in.Body.Name, first.fields.Endpoint, first.fields.TalosVersion, first.fields.K8sVersion, encBundle)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("create cluster (duplicate name?)", err)
 		}
-		cluster, err := deps.Store.GetCluster(cid)
-		if err != nil {
-			return nil, huma.Error500InternalServerError("read cluster", err)
-		}
-		// Bind the CP host (resolved + validated above) to the VERBATIM imported
-		// bytes (source='imported', byte-identical recreation, D8). Reuse
-		// freezeAndBind so the host is wired exactly like a generated member.
-		// Imported bytes are verbatim; there is no separate per-host patch, so
-		// host_patch is "" (Fold 3).
-		if err := freezeAndBind(deps, cluster.ID, h.MAC, "controlplane", schematic, cluster.TalosVersion, []byte(in.Body.Controlplane), "imported", ""); err != nil {
-			return nil, err
+		// Bind EVERY host to its OWN verbatim bytes.
+		for _, e := range entries {
+			if err := importBind(deps, cid, e.mac, "controlplane", e.schematic, first.fields.TalosVersion, e.rawBytes, "imported", ""); err != nil {
+				rollbackImport(deps, cid, entries)
+				return nil, err
+			}
 		}
 		return clusterDTOResp(deps.Store, cid)
 	})

@@ -155,4 +155,52 @@ describe('ClustersView', () => {
     const select = (await screen.findByRole('combobox', { name: 'Spec config' })).closest('.ant-select')
     expect(select?.querySelector('.ant-select-clear')).not.toBeInTheDocument()
   })
+
+  it('import adds control-plane rows and submits them as an array', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([])
+    vi.mocked(clustersApi.importCluster).mockResolvedValue(undefined)
+    render(<ClustersView />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Import' }))
+    await userEvent.type(await screen.findByLabelText(/name/i), 'adopted')
+    // First (default) row.
+    await userEvent.type(screen.getAllByPlaceholderText('aa:bb:cc:dd:ee:ff')[0], 'aa:bb:cc:dd:ee:00')
+    await userEvent.type(screen.getAllByPlaceholderText(/paste this node/i)[0], 'CONFIG-0')
+    // Add a second row and fill it.
+    await userEvent.click(screen.getByRole('button', { name: /add control-plane host/i }))
+    await userEvent.type(screen.getAllByPlaceholderText('aa:bb:cc:dd:ee:ff')[1], 'aa:bb:cc:dd:ee:01')
+    await userEvent.type(screen.getAllByPlaceholderText(/paste this node/i)[1], 'CONFIG-1')
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(clustersApi.importCluster).toHaveBeenCalledWith({
+      name: 'adopted',
+      controlPlanes: [
+        { mac: 'aa:bb:cc:dd:ee:00', controlplane: 'CONFIG-0' },
+        { mac: 'aa:bb:cc:dd:ee:01', controlplane: 'CONFIG-1' },
+      ],
+    }))
+  })
+
+  it('import will not submit while a row is missing its config', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([])
+    vi.mocked(clustersApi.importCluster).mockResolvedValue(undefined)
+    render(<ClustersView />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Import' }))
+    await userEvent.type(await screen.findByLabelText(/name/i), 'adopted')
+    // Fill only the MAC; leave the controlplane.yaml empty → required validation blocks submit.
+    await userEvent.type(screen.getAllByPlaceholderText('aa:bb:cc:dd:ee:ff')[0], 'aa:bb:cc:dd:ee:00')
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(clustersApi.importCluster).not.toHaveBeenCalled())
+  })
+
+  it('import can remove an added control-plane row', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([])
+    vi.mocked(clustersApi.importCluster).mockResolvedValue(undefined)
+    render(<ClustersView />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Import' }))
+    // One row by default; add a second → two MAC inputs.
+    await userEvent.click(screen.getByRole('button', { name: /add control-plane host/i }))
+    expect(screen.getAllByPlaceholderText('aa:bb:cc:dd:ee:ff')).toHaveLength(2)
+    // Remove it → back to one.
+    await userEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0])
+    expect(screen.getAllByPlaceholderText('aa:bb:cc:dd:ee:ff')).toHaveLength(1)
+  })
 })

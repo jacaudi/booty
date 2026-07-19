@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/spf13/viper"
 )
 
@@ -21,6 +22,30 @@ func genControlPlaneBytes(t *testing.T, machineType string) []byte {
 		TalosVersion: "v1.13.5", K8sVersion: "v1.34.0",
 		Schematic: config.DefaultTalosSchematic, MachineType: machineType,
 		SinglePlaneScheduling: machineType == "controlplane",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// genCPFromBundle builds a control-plane machineconfig from a SHARED secrets
+// bundle. Two calls with the SAME bundle produce configs that belong to the same
+// cluster (identical CA); a non-empty installDisk applies a machine.install.disk
+// patch so those configs differ byte-for-byte (the "2 nodes share a config
+// except disk IDs" case). A distinct bundle per call yields a distinct cluster.
+func genCPFromBundle(t *testing.T, b *secrets.Bundle, endpoint, installDisk string) []byte {
+	t.Helper()
+	viper.Set(config.TalosFactoryURL, "https://factory.talos.dev")
+	var patches []string
+	if installDisk != "" {
+		patches = []string{"machine:\n  install:\n    disk: " + installDisk + "\n"}
+	}
+	out, err := generateNodeConfig(nodeGenInput{
+		Bundle: b, Name: "imp", Endpoint: endpoint,
+		TalosVersion: "v1.13.5", K8sVersion: "v1.34.0",
+		Schematic: config.DefaultTalosSchematic, MachineType: "controlplane",
+		SinglePlaneScheduling: true, PatchSources: patches,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -86,5 +111,33 @@ func TestImportRejectsWorkerOnly(t *testing.T) {
 func TestParseImportedConfigRejectsGarbage(t *testing.T) {
 	if _, err := parseImportedConfig([]byte("not a talos config\n")); err == nil {
 		t.Fatal("unparseable import must be rejected")
+	}
+}
+
+func TestClusterIdentityKey(t *testing.T) {
+	// Empty identity (no CA and no id) is rejected — prevents two identity-less
+	// configs from false-matching as the "same cluster".
+	if _, err := clusterIdentityKey(nil, ""); err == nil {
+		t.Fatal("empty identity must be rejected")
+	}
+	if _, err := clusterIdentityKey([]byte{}, "   "); err == nil {
+		t.Fatal("whitespace-only id with no CA must be rejected")
+	}
+	// Same CA + id → same key (deterministic).
+	k1, err := clusterIdentityKey([]byte("CA-A"), "id-1")
+	if err != nil {
+		t.Fatalf("valid identity errored: %v", err)
+	}
+	k2, _ := clusterIdentityKey([]byte("CA-A"), "id-1")
+	if k1 != k2 {
+		t.Fatal("same identity must yield the same key")
+	}
+	// Different CA → different key (the CA is the discriminator).
+	if k3, _ := clusterIdentityKey([]byte("CA-B"), "id-1"); k1 == k3 {
+		t.Fatal("different CA must yield a different key")
+	}
+	// A CA with no id is still a valid identity (CA is primary).
+	if _, err := clusterIdentityKey([]byte("CA-A"), ""); err != nil {
+		t.Fatalf("CA-only identity must be valid: %v", err)
 	}
 }

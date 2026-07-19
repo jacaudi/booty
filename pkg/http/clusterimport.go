@@ -1,6 +1,9 @@
 package http
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -81,4 +84,36 @@ func k8sVersionFromAPIServerImage(image string) string {
 		return image[colon+1:]
 	}
 	return ""
+}
+
+// errEmptyClusterIdentity is returned when a control-plane config carries no
+// usable cluster identity (neither an issuing CA nor a cluster id). Rejecting it
+// stops two identity-less configs from false-matching as the "same cluster"
+// (design §4.4 same-cluster guard, SGE M1).
+var errEmptyClusterIdentity = errors.New("http: control-plane config has no cluster identity (empty issuing CA and id)")
+
+// clusterIdentityKey derives a stable key identifying the cluster a control-plane
+// config belongs to, from the issuing-CA certificate bytes (primary) and the
+// cluster id (secondary discriminator). Configs from one cluster share both;
+// configs from different clusters differ in the CA. Both empty → error.
+func clusterIdentityKey(caCrt []byte, id string) (string, error) {
+	if len(caCrt) == 0 && strings.TrimSpace(id) == "" {
+		return "", errEmptyClusterIdentity
+	}
+	h := sha256.New()
+	h.Write([]byte(id))
+	h.Write([]byte{0}) // separator so id||crt is unambiguous
+	h.Write(caCrt)
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// clusterIdentity adapts a parsed control-plane provider to clusterIdentityKey,
+// reading the issuing-CA cert bytes and cluster id the secrets bundle is built
+// from (secrets.NewBundleFromConfig), so the guard and the bundle source agree.
+func clusterIdentity(prov talosconfig.Provider) (string, error) {
+	var caCrt []byte
+	if ca := prov.Cluster().IssuingCA(); ca != nil {
+		caCrt = ca.Crt
+	}
+	return clusterIdentityKey(caCrt, prov.Cluster().ID())
 }
