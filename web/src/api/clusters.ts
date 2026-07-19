@@ -40,7 +40,7 @@ export function removeMember(id: number, mac: string): Promise<unknown> {
   return request(`/clusters/${id}/members/${mac}`, { method: 'DELETE' })
 }
 
-export function importCluster(input: { name: string; controlplane: string; controlplaneMac: string }): Promise<Cluster | undefined> {
+export function importCluster(input: { name: string; controlPlanes: { mac: string; controlplane: string }[] }): Promise<Cluster | undefined> {
   return request<Cluster>('/clusters/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) })
 }
 
