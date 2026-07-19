@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/siderolabs/talos/pkg/machinery/config/generate/secrets"
 	"github.com/spf13/viper"
 )
 
@@ -21,6 +22,30 @@ func genControlPlaneBytes(t *testing.T, machineType string) []byte {
 		TalosVersion: "v1.13.5", K8sVersion: "v1.34.0",
 		Schematic: config.DefaultTalosSchematic, MachineType: machineType,
 		SinglePlaneScheduling: machineType == "controlplane",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// genCPFromBundle builds a control-plane machineconfig from a SHARED secrets
+// bundle. Two calls with the SAME bundle produce configs that belong to the same
+// cluster (identical CA); a non-empty installDisk applies a machine.install.disk
+// patch so those configs differ byte-for-byte (the "2 nodes share a config
+// except disk IDs" case). A distinct bundle per call yields a distinct cluster.
+func genCPFromBundle(t *testing.T, b *secrets.Bundle, endpoint, installDisk string) []byte {
+	t.Helper()
+	viper.Set(config.TalosFactoryURL, "https://factory.talos.dev")
+	var patches []string
+	if installDisk != "" {
+		patches = []string{"machine:\n  install:\n    disk: " + installDisk + "\n"}
+	}
+	out, err := generateNodeConfig(nodeGenInput{
+		Bundle: b, Name: "imp", Endpoint: endpoint,
+		TalosVersion: "v1.13.5", K8sVersion: "v1.34.0",
+		Schematic: config.DefaultTalosSchematic, MachineType: "controlplane",
+		SinglePlaneScheduling: true, PatchSources: patches,
 	})
 	if err != nil {
 		t.Fatal(err)
