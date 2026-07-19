@@ -96,6 +96,21 @@ func (s *Store) UpdateCluster(id int64, endpoint, talosVersion, k8sVersion strin
 	return nil
 }
 
+// DeleteCluster removes a cluster row by id. It is the store-level primitive the
+// multi-host import rollback uses to undo a failed adoption — the HTTP
+// delete-cluster handler is 403 until auth (P10), so rollback cannot go through
+// it. Callers MUST clear child rows first (member hosts' cluster_id +
+// cluster_node_configs): with foreign_keys=ON a row still referenced by
+// hosts.cluster_id or cluster_node_configs.cluster_id will not delete. Deleting
+// an absent id is a no-op (SQLite DELETE affects zero rows without error), so
+// rollback can call it unconditionally.
+func (s *Store) DeleteCluster(id int64) error {
+	if _, err := s.db.Exec(`DELETE FROM clusters WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("db: delete cluster %d: %w", id, err)
+	}
+	return nil
+}
+
 // ListClusterMembers returns the cluster's member hosts ordered by mac —
 // membership lives on hosts columns (design §3), so this is a hosts
 // projection, reusing the standard host scan.

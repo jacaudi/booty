@@ -58,6 +58,23 @@ func TestClusterCRUD(t *testing.T) {
 	}
 }
 
+func TestDeleteCluster(t *testing.T) {
+	s := newTestStore(t)
+	id := testCluster(t, s, "doomed")
+
+	if err := s.DeleteCluster(id); err != nil {
+		t.Fatalf("DeleteCluster: %v", err)
+	}
+	if _, err := s.GetCluster(id); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetCluster after delete = %v, want ErrNotFound", err)
+	}
+	// Deleting a non-existent id is a no-op (no error): rollback runs it
+	// best-effort and must tolerate an already-absent row.
+	if err := s.DeleteCluster(9999); err != nil {
+		t.Fatalf("DeleteCluster(absent) = %v, want nil", err)
+	}
+}
+
 func TestListClusterMembers(t *testing.T) {
 	s := newTestStore(t)
 	id := testCluster(t, s, "members")
