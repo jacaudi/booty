@@ -48,7 +48,11 @@ export default function ClustersView() {
   }
 
   const submitImport = async () => {
-    const v = await importForm.validateFields()
+    // validateFields() REJECTS on invalid input; catch it to an early return so an
+    // incomplete row surfaces inline errors instead of leaking an unhandled promise
+    // rejection (which fails the vitest CI run even though every assertion passes).
+    const v = await importForm.validateFields().catch(() => undefined)
+    if (!v) return
     try {
       await importCluster(v)
       message.success(`Imported ${v.name}`)
