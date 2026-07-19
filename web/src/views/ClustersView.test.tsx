@@ -49,6 +49,31 @@ describe('ClustersView', () => {
     ))
   })
 
+  it('create will not submit while required fields are empty', async () => {
+    // validateFields() REJECTS on the empty required inputs; clicking OK must
+    // surface inline errors and early-return, not leak an unhandled promise
+    // rejection (which fails the vitest CI run even when this assertion passes).
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([])
+    vi.mocked(clustersApi.createCluster).mockResolvedValue(undefined)
+    render(<ClustersView />)
+    await userEvent.click(await screen.findByRole('button', { name: /create cluster/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(clustersApi.createCluster).not.toHaveBeenCalled())
+  })
+
+  it('Edit will not submit when a required field is cleared', async () => {
+    vi.mocked(clustersApi.listClusters).mockResolvedValue([
+      { id: 1, name: 'prod', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', members: [], updatedAt: '' },
+    ])
+    vi.mocked(clustersApi.updateCluster).mockResolvedValue(undefined)
+    render(<ClustersView />)
+    await screen.findByText('prod')
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    await userEvent.clear(screen.getByLabelText(/endpoint/i))
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(clustersApi.updateCluster).not.toHaveBeenCalled())
+  })
+
   it('Export shows the returned secrets yaml', async () => {
     vi.mocked(clustersApi.listClusters).mockResolvedValue([
       { id: 1, name: 'prod', endpoint: 'https://e:6443', talosVersion: 'v1.13.5', k8sVersion: 'v1.34.0', members: [], updatedAt: '' },

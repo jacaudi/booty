@@ -75,7 +75,11 @@ function ConfigsTab() {
   }
 
   const submitCreate = async () => {
-    const values = await createForm.validateFields()
+    // validateFields() REJECTS on invalid input; catch it to an early return so
+    // incomplete inputs surface inline errors instead of leaking an unhandled
+    // promise rejection (which fails the vitest CI run even when assertions pass).
+    const values = await createForm.validateFields().catch(() => undefined)
+    if (!values) return
     // familyKinds is undefined only for the brief window before the catalog
     // loader (fired on mount) resolves — or if that load failed (a transient
     // /families or /os outage). Rather than silently drop the submit, tell the
@@ -104,7 +108,10 @@ function ConfigsTab() {
 
   const submitEdit = async () => {
     if (!editing) return
-    const values = await editForm.validateFields()
+    // See submitCreate: guard the rejection so a cleared required field can't
+    // leak an unhandled rejection into the vitest CI run.
+    const values = await editForm.validateFields().catch(() => undefined)
+    if (!values) return
     await act(() => updateConfig(editing.id, values.source), `Updated ${editing.name}`)
     setEditing(null)
   }
@@ -389,7 +396,11 @@ function RolesTab() {
   }
 
   const submitCreate = async () => {
-    const values = await createForm.validateFields()
+    // validateFields() REJECTS on invalid input; catch it to an early return so
+    // an empty name surfaces inline errors instead of leaking an unhandled
+    // promise rejection (which fails the vitest CI run even when assertions pass).
+    const values = await createForm.validateFields().catch(() => undefined)
+    if (!values) return
     await act(() => createRole(values), `Created ${values.name}`)
     setCreateOpen(false)
   }
@@ -401,7 +412,10 @@ function RolesTab() {
 
   const submitEdit = async () => {
     if (!editing) return
-    const values = await editForm.validateFields()
+    // See submitCreate: guard the rejection so a cleared required name can't
+    // leak an unhandled rejection into the vitest CI run.
+    const values = await editForm.validateFields().catch(() => undefined)
+    if (!values) return
     await act(() => updateRole(editing.id, values), `Updated ${editing.name}`)
     setEditing(null)
   }
