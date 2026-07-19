@@ -88,3 +88,31 @@ func TestParseImportedConfigRejectsGarbage(t *testing.T) {
 		t.Fatal("unparseable import must be rejected")
 	}
 }
+
+func TestClusterIdentityKey(t *testing.T) {
+	// Empty identity (no CA and no id) is rejected — prevents two identity-less
+	// configs from false-matching as the "same cluster".
+	if _, err := clusterIdentityKey(nil, ""); err == nil {
+		t.Fatal("empty identity must be rejected")
+	}
+	if _, err := clusterIdentityKey([]byte{}, "   "); err == nil {
+		t.Fatal("whitespace-only id with no CA must be rejected")
+	}
+	// Same CA + id → same key (deterministic).
+	k1, err := clusterIdentityKey([]byte("CA-A"), "id-1")
+	if err != nil {
+		t.Fatalf("valid identity errored: %v", err)
+	}
+	k2, _ := clusterIdentityKey([]byte("CA-A"), "id-1")
+	if k1 != k2 {
+		t.Fatal("same identity must yield the same key")
+	}
+	// Different CA → different key (the CA is the discriminator).
+	if k3, _ := clusterIdentityKey([]byte("CA-B"), "id-1"); k1 == k3 {
+		t.Fatal("different CA must yield a different key")
+	}
+	// A CA with no id is still a valid identity (CA is primary).
+	if _, err := clusterIdentityKey([]byte("CA-A"), ""); err != nil {
+		t.Fatalf("CA-only identity must be valid: %v", err)
+	}
+}
