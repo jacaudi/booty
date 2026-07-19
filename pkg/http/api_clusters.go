@@ -681,10 +681,17 @@ func registerClusterMembers(api huma.API, deps APIDeps) {
 			if cp.MAC == "" || cp.Controlplane == "" {
 				return nil, huma.Error422UnprocessableEntity("each control-plane entry needs a mac and a controlplane config")
 			}
-			if seenMAC[cp.MAC] {
+			// Dedup on the NORMALIZED MAC, not the raw request string, so two
+			// textual forms of the same NIC (e.g. upper vs lower case) can't
+			// both slip past this guard and double-bind the same host below.
+			normMAC, err := hardware.NormalizeMAC(cp.MAC)
+			if err != nil {
+				return nil, huma.Error422UnprocessableEntity("invalid control-plane MAC "+cp.MAC, err)
+			}
+			if seenMAC[normMAC] {
 				return nil, huma.Error422UnprocessableEntity("duplicate control-plane MAC in request: " + cp.MAC)
 			}
-			seenMAC[cp.MAC] = true
+			seenMAC[normMAC] = true
 
 			prov, err := parseImportedConfig([]byte(cp.Controlplane))
 			if err != nil {
@@ -765,8 +772,7 @@ func registerClusterMembers(api huma.API, deps APIDeps) {
 			}
 		}
 
-		// Create the cluster ONCE, then bind (for now, only the first host — the
-		// full loop + rollback arrive in later steps).
+		// Create the cluster ONCE, then bind every host; a bind failure triggers rollbackImport.
 		cid, err := deps.Store.CreateCluster(in.Body.Name, first.fields.Endpoint, first.fields.TalosVersion, first.fields.K8sVersion, encBundle)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("create cluster (duplicate name?)", err)

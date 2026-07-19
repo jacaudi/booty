@@ -556,6 +556,38 @@ func TestImportRejectsDuplicateMAC(t *testing.T) {
 	}
 }
 
+// TestImportRejectsDuplicateMACDifferentFormat: the same physical NIC given
+// twice in the request, in two different textual MAC forms that
+// hardware.NormalizeMAC canonicalizes to the same value (lower-case vs
+// upper-case colon form), must still be rejected as a duplicate → 422. The
+// raw-string dedup in Pass 1 would miss this because the two request strings
+// differ textually even though they resolve to the same host.
+func TestImportRejectsDuplicateMACDifferentFormat(t *testing.T) {
+	deps := clustersTestSetup(t)
+	api := newTestAPI(t, deps)
+	b, _ := mintBundle("v1.13.5")
+	c := genCPFromBundle(t, b, "https://10.0.0.10:6443", "")
+	const lower = "aa:bb:cc:dd:ee:b7"
+	const upper = "AA:BB:CC:DD:EE:B7"
+	if norm, err := hardware.NormalizeMAC(upper); err != nil || norm != lower {
+		t.Fatalf("test precondition: NormalizeMAC(%q) = (%q, %v), want (%q, nil)", upper, norm, err, lower)
+	}
+	hardware.WriteMacAddress(lower, hardware.Host{MAC: lower, OS: "talos"})
+	resp := api.Post("/api/v1/clusters/import", map[string]any{
+		"name": "dup-format",
+		"controlPlanes": []map[string]any{
+			{"mac": lower, "controlplane": string(c)},
+			{"mac": upper, "controlplane": string(c)},
+		},
+	})
+	if resp.Code != 422 {
+		t.Fatalf("duplicate-MAC (different format) import = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+	if list, _ := deps.Store.ListClusters(); len(list) != 0 {
+		t.Fatalf("rejected import created a cluster: %+v", list)
+	}
+}
+
 // TestImportRollsBackOnBindFailure: with 3 same-cluster CP hosts, forcing the
 // 2nd bind to fail (after a partial frozen-revision write) must leave NO cluster
 // row, NO bound host, and NO orphaned cluster_node_config row.
