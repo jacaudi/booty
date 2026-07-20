@@ -312,6 +312,11 @@ func TestMigration0006DebianConfig(t *testing.T) {
 }
 
 func TestMigration0006PreservesData(t *testing.T) {
+	// Also guards migration 0009's configs-table rebuild (#59, drops the
+	// 'preseed' kind from the CHECK): Open() below runs every pending
+	// migration, so the FK/row-preservation assertions here cover 0009's
+	// copy -> drop -> rename just as much as 0006's.
+	//
 	// Build a v5 database BY HAND (raw handle, foreign_keys ON like production),
 	// seed rows, close, then Open() so ONLY 0006 runs — proving the third
 	// configs rebuild preserves configs/config_revisions/roles across the

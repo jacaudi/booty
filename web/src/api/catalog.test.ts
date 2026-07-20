@@ -29,4 +29,25 @@ describe('loadFamilyKinds', () => {
     expect(data.osFamily['talos']).toEqual(['machineconfig'])
     expect(data.osFamily['fedora-coreos']).toEqual(['butane'])
   })
+
+  it('retries after a rejected fetch instead of caching the rejection', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    fetchSpy.mockRejectedValueOnce(new Error('network blip'))
+    await expect(loadFamilyKinds()).rejects.toThrow('network blip')
+
+    fetchSpy.mockImplementation(async (url) => {
+      const path = String(url)
+      if (path.endsWith('/families')) {
+        return new Response(JSON.stringify({ families: [
+          { name: 'ignition', configKind: 'ignition', authoringKinds: ['butane'] },
+        ] }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ os: [
+        { name: 'flatcar', family: 'ignition', requiredParams: [] },
+      ] }), { status: 200 })
+    })
+    const data = await loadFamilyKinds()
+    expect(data.bootConfigKinds).toEqual(['butane'])
+    expect(data.osFamily['flatcar']).toEqual(['butane'])
+  })
 })

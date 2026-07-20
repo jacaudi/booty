@@ -64,7 +64,10 @@ one additive migration — re-running it is a no-op. P5 (migration `0004`) exten
 admit `'schematic'` and adds `config_revisions.derived_schematic_id` — see below. P6 (migration
 `0005`) adds `clusters` and `cluster_node_configs`, three nullable `hosts` membership columns, and
 extends `configs.kind` to admit `'taloscluster'` — see below. Migration `0006` extends `configs.kind`
-once more to admit `'debianconfig'` (the curated Debian preseed authoring kind) — see below.
+once more to admit `'debianconfig'` (the curated Debian preseed authoring kind) — see below. Migration
+`0009` (#59) retires the raw `'preseed'` config kind, dropping it from the `configs.kind` CHECK via
+the same copy → drop → rename table-rebuild, guarded by a Go pre-flight at startup that fails fast if
+any `kind='preseed'` row would be orphaned by the rebuild — see below.
 
 ### `targets`
 `id`, `os`, `arch`, `params` (JSON TEXT), `mode` (`discovery`|`manual`),
@@ -174,7 +177,7 @@ Boot-config identities (P4). The live source lives in the revision pointed at by
 |--------|------|---------|
 | `id` | INTEGER PK AUTOINCREMENT | Stable row ID used by the API (`/configs/{id}`). |
 | `name` | TEXT NOT NULL UNIQUE | Operator-chosen config name. |
-| `kind` | TEXT NOT NULL CHECK (`butane`\|`machineconfig`\|`preseed`\|`schematic`\|`taloscluster`\|`debianconfig`) | The config source dialect the operator authors (`schematic` added in P5, `taloscluster` added in P6, `debianconfig` added below). See "`kind` vs family `ConfigKind`" below. |
+| `kind` | TEXT NOT NULL CHECK (`butane`\|`machineconfig`\|`schematic`\|`taloscluster`\|`debianconfig`) | The config source dialect the operator authors (`schematic` added in P5, `taloscluster` added in P6, `debianconfig` added below; `preseed` retired by migration `0009`, #59). See "`kind` vs family `ConfigKind`" below. |
 | `active_revision_id` | INTEGER → `config_revisions(id)` | The currently-live revision. `NULL` until the first revision is added. |
 | `created_at`/`updated_at` | TEXT | Timestamps; `updated_at` bumps on every active-pointer move (create, edit, or rollback). |
 
@@ -207,6 +210,14 @@ Boot-config identities (P4). The live source lives in the revision pointed at by
   pattern, FK-off runner) to extend the `kind` CHECK with `'debianconfig'` —
   the curated Debian authoring kind booty translates into a flat d-i preseed.
   A `debianconfig` revision's `derived_schematic_id` is always NULL.
+
+- Migration **0009** (#59) rebuilds `configs` once more (copy → drop → rename,
+  the same FK-off runner) to **drop** `'preseed'` from the `kind` CHECK,
+  retiring the raw-preseed authorable kind. A Go pre-flight
+  (`preflightPreseedRemoval` in `pkg/db/migrate.go`) runs before this
+  migration and aborts with a helpful error if any `kind='preseed'` row
+  survives, so the `INSERT ... SELECT` never has to reject one. Rows and IDs
+  for every remaining kind are copied verbatim.
 
 ### `config_revisions`
 
@@ -306,7 +317,7 @@ deletion-driven pruning for `cluster_node_configs` waits for P10. `DELETE /clust
 does prune eagerly: it removes every frozen revision the mac holds for that cluster.
 
 **`kind` vs family `ConfigKind` (§3.1).** `configs.kind` is the dialect an operator *authors*
-(`butane`, `machineconfig`, `preseed`); each OS family separately declares a `ConfigKind` — the
+(`butane`, `machineconfig`, `debianconfig`); each OS family separately declares a `ConfigKind` — the
 boot-config-URL *mechanism* served at `/ignition.json`, `/machineconfig`, `/preseed`
 (`ignition`, `machineconfig`, `preseed`). `configKindForFamily` (`pkg/http/render.go`) is the single
 source of the relationship, and only the ignition family differs: the `ignition` family's

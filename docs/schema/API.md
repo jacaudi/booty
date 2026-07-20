@@ -239,9 +239,11 @@ own generator translates into a flat d-i preseed (the butane→ignition analog
 for Debian; no library exists, booty owns generation). It is *renderable*:
 create/update validate by a stub-var render (coherence violations 422),
 preview works, and a bound host serves the translated preseed at `/preseed`.
-It coexists with raw `preseed` — the family guard (`familyAllowsKind`) makes
-the preseed family the only 1:many family: `{preseed, debianconfig}`. The
-`--preseedFile` server default remains raw preseed. `accounts.user.password_hash`
+The Debian family authors `debianconfig` only — the family guard
+(`familyAllowsKind`) maps the preseed family to `{debianconfig}` exclusively;
+the raw `preseed` config kind was retired (#59). The raw-preseed serving
+surface is now solely the `--preseedFile` server default (resolve rung 4).
+`accounts.user.password_hash`
 is optional (a key-only account emits a locked `*` and requires an
 `ssh_authorized_keys` entry); `accounts.user.sudo` is a tri-state
 (`nopasswd`|`password`|`false`, `true` as a `nopasswd` alias); `late_command`

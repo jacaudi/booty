@@ -23,7 +23,10 @@ export function loadFamilyKinds(): Promise<FamilyKinds> {
       const osFamily: Record<string, string[]> = {}
       for (const o of os) osFamily[o.name] = byFamily.get(o.family) ?? []
       return { bootConfigKinds, osFamily }
-    })()
+    })().catch((e) => {
+      cache = undefined
+      throw e
+    })
   }
   return cache
 }

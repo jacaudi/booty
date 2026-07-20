@@ -317,7 +317,7 @@ func registerConfigs(api huma.API, deps APIDeps) {
 }
 
 // validateConfigSource is the per-kind validation gate shared by create-config
-// and update-config (SGE I3). Renderable kinds (butane/machineconfig/preseed/
+// and update-config (SGE I3). Renderable kinds (butane/machineconfig/
 // debianconfig) validate by a stub-var render; 'schematic' validates by
 // BUILDING against the Image Factory — the Factory owns schematic validation
 // (design §4) and the returned content-addressed ID becomes the revision's
