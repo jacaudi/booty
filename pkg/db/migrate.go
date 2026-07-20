@@ -2,10 +2,12 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 )
 
 //go:embed migrations/*.sql
@@ -49,6 +51,10 @@ func (s *Store) migrate() error {
 	var current int
 	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
+	}
+
+	if err := preflightPreseedRemoval(ctx, conn, current); err != nil {
+		return err
 	}
 
 	// Nothing to apply → the whole FK OFF/check/ON bracket is skipped, so a
@@ -109,6 +115,51 @@ func (s *Store) migrate() error {
 	}
 	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
 		return fmt.Errorf("re-enable foreign_keys: %w", err)
+	}
+	return nil
+}
+
+// preflightPreseedRemoval fails startup with an actionable error if the DB still
+// carries kind='preseed' rows when migration 0009 (the 9th, which drops 'preseed'
+// from the configs.kind CHECK) is pending. Without this, the 0009 rebuild's
+// INSERT...SELECT would fail with a cryptic "CHECK constraint failed", stranding
+// an operator; #59's contract is that they convert with `booty convert-preseed`
+// first. Gated on current < 9 AND the configs table existing (a fresh DB below
+// 0003 has no configs table yet), so it is a no-op on fresh and already-migrated DBs.
+func preflightPreseedRemoval(ctx context.Context, conn *sql.Conn, current int) error {
+	const migration0009Ordinal = 9
+	if current >= migration0009Ordinal {
+		return nil
+	}
+	var hasTable int
+	if err := conn.QueryRowContext(ctx,
+		`SELECT 1 FROM sqlite_master WHERE type='table' AND name='configs'`).Scan(&hasTable); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // fresh DB, no configs table yet
+		}
+		return fmt.Errorf("preflight preseed check: %w", err)
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT id, name FROM configs WHERE kind = 'preseed' ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("preflight preseed query: %w", err)
+	}
+	defer rows.Close()
+	var offenders []string
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return fmt.Errorf("preflight preseed scan: %w", err)
+		}
+		offenders = append(offenders, fmt.Sprintf("id=%d %q", id, name))
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("preflight preseed rows: %w", err)
+	}
+	if len(offenders) > 0 {
+		return fmt.Errorf("startup blocked: %d config(s) use the removed 'preseed' kind [%s]; "+
+			"convert each with 'booty convert-preseed', re-create it as a debianconfig and rebind, then upgrade",
+			len(offenders), strings.Join(offenders, ", "))
 	}
 	return nil
 }
