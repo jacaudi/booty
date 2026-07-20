@@ -43,6 +43,26 @@ func TestConfigsCRUDAndRevision(t *testing.T) {
 	}
 }
 
+// TestCreateConfigRejectsPreseedKind: the 'preseed' config kind was removed
+// (#59) — huma's enum validation on the create-config Body.Kind field must
+// reject it before any handler logic runs. Asserting only resp.Code==422
+// would also pass BEFORE this task's fix (Task 3's DB CHECK constraint
+// already 422s once the request reaches CreateConfig), so this additionally
+// pins the huma-level "validation failed" body — the schema-validation
+// response huma emits for an enum miss — to prove the enum, not the DB
+// constraint, is what rejected it.
+func TestCreateConfigRejectsPreseedKind(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	resp := api.Post("/api/v1/configs", map[string]any{"name": "np", "kind": "preseed", "source": "x"})
+	if resp.Code != 422 {
+		t.Fatalf("create preseed = %d, want 422 (huma enum rejects it)", resp.Code)
+	}
+	if !strings.Contains(resp.Body.String(), `"detail":"validation failed"`) {
+		t.Fatalf("create preseed body = %s, want huma schema-validation rejection", resp.Body.String())
+	}
+}
+
 func TestConfigCreateBadKindIs422(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)

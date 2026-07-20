@@ -86,8 +86,6 @@ func renderConfig(kind string, source []byte, vars TemplateVars) (out []byte, co
 		return ignCfg, "application/json", rep.String(), nil
 	case "machineconfig":
 		return rendered, "text/yaml", "", nil
-	case "preseed":
-		return rendered, "text/plain", "", nil
 	case "debianconfig":
 		// Curated Debian authoring: the post-template source is a structured
 		// YAML booty translates into a flat d-i preseed (debiangen.go). Same

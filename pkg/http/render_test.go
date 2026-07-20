@@ -64,20 +64,6 @@ func TestRenderConfigButaneFatalReportIsError(t *testing.T) {
 	}
 }
 
-func TestRenderConfigTemplateSubstitution(t *testing.T) {
-	src := []byte("hostname: {{ .Hostname }} server={{ .ServerIP }}")
-	out, ct, _, err := renderConfig("preseed", src, TemplateVars{Hostname: "node1", ServerIP: "10.0.0.1:80"})
-	if err != nil {
-		t.Fatalf("renderConfig(preseed): %v", err)
-	}
-	if ct != "text/plain" {
-		t.Errorf("contentType = %q, want text/plain", ct)
-	}
-	if string(out) != "hostname: node1 server=10.0.0.1:80" {
-		t.Errorf("rendered = %q", out)
-	}
-}
-
 func TestRenderConfigMachineConfigPassthrough(t *testing.T) {
 	src := []byte("version: v1alpha1\nmachine: {}\n")
 	out, ct, _, err := renderConfig("machineconfig", src, TemplateVars{})
@@ -95,9 +81,14 @@ func TestRenderConfigUnknownKindIsError(t *testing.T) {
 	}
 }
 
-func TestRenderConfigTemplateParseErrorIsError(t *testing.T) {
-	if _, _, _, err := renderConfig("preseed", []byte("{{ .Bad "), TemplateVars{}); err == nil {
-		t.Fatal("malformed template must return an error")
+// TestRenderConfigRejectsPreseedKind: the 'preseed' config kind was removed
+// (#59) — renderConfig's kind switch must fall through to the default
+// unknown-kind error. Template substitution + parse-error coverage for the
+// former preseed arm now lives in TestRenderPreseedFile /
+// TestRenderPreseedFileBadTemplate (renderPreseedFile, Task 1).
+func TestRenderConfigRejectsPreseedKind(t *testing.T) {
+	if _, _, _, err := renderConfig("preseed", []byte("x"), TemplateVars{}); err == nil {
+		t.Fatal("expected unknown-kind error for the removed 'preseed' kind")
 	}
 }
 

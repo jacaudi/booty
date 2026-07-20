@@ -72,7 +72,7 @@ func registerConfigs(api huma.API, deps APIDeps) {
 	}, func(ctx context.Context, in *struct {
 		Body struct {
 			Name   string `json:"name"`
-			Kind   string `json:"kind" enum:"butane,machineconfig,preseed,schematic,taloscluster,debianconfig"`
+			Kind   string `json:"kind" enum:"butane,machineconfig,schematic,taloscluster,debianconfig"`
 			Source string `json:"source"`
 		}
 	}) (*struct{ Body ConfigDTO }, error) {
