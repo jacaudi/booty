@@ -250,6 +250,7 @@ func init() {
 	)
 
 	Cmd.AddCommand(newVersionCmd())
+	Cmd.AddCommand(newConvertPreseedCmd())
 
 	viper.BindPFlags(flags)
 
