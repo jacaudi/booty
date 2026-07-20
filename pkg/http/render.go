@@ -42,6 +42,24 @@ func familyAllowsKind(familyConfigKind, kind string) bool {
 	}
 }
 
+// renderPreseedFile executes the operator-supplied server-default preseed FILE
+// (rung 4, --preseedFile) as a text/template and returns it verbatim. The
+// default file carries no config-kind marker — it is raw d-i preseed text — so
+// it does NOT go through renderConfig's kind switch; this is its dedicated
+// render path after the 'preseed' config kind was removed (#59). The caller
+// serves the result as text/plain.
+func renderPreseedFile(source []byte, vars TemplateVars) ([]byte, error) {
+	tpl, err := template.New("preseed-file").Parse(string(source))
+	if err != nil {
+		return nil, fmt.Errorf("http: parse preseed file template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, vars); err != nil {
+		return nil, fmt.Errorf("http: render preseed file template: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 // renderConfig executes source as a text/template against vars, then translates
 // per kind. It is the SHARED step consumed by both the serving handlers and
 // POST /configs/{id}/preview. vars must already be populated by the caller.

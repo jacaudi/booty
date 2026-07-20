@@ -54,13 +54,13 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 			return
 		}
 		vars := preseedVars(store, host)
-		out, ct, _, err := renderConfig("preseed", src, vars)
+		out, err := renderPreseedFile(src, vars)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "preseed render failed", err)
 			return
 		}
 		out = withDVDMirror(store, host, vars.ServerIP, out)
-		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write(out)
 	}
 }

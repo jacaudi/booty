@@ -130,3 +130,20 @@ func TestRenderConfigDebianConfigIncoherentIsError(t *testing.T) {
 		t.Fatal("incoherent debianconfig must return an error")
 	}
 }
+
+func TestRenderPreseedFile(t *testing.T) {
+	out, err := renderPreseedFile([]byte("d-i mirror/http/hostname string {{ .ServerIP }}\n"),
+		TemplateVars{ServerIP: "10.0.0.1:80"})
+	if err != nil {
+		t.Fatalf("renderPreseedFile: %v", err)
+	}
+	if got := string(out); got != "d-i mirror/http/hostname string 10.0.0.1:80\n" {
+		t.Fatalf("rendered = %q", got)
+	}
+}
+
+func TestRenderPreseedFileBadTemplate(t *testing.T) {
+	if _, err := renderPreseedFile([]byte("{{ .Bad "), TemplateVars{}); err == nil {
+		t.Fatal("expected parse error for malformed template")
+	}
+}
