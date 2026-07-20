@@ -1,6 +1,7 @@
 # Design: `preseed → debianconfig` converter (issue #60)
 
-**Status:** approved (brainstorming), pending spec review
+**Status:** approved (brainstorming); SGE (fable) design review folded (verdict
+AMEND-BEFORE-PLANNING → B1–B4 + non-blocking findings applied); pending user spec review
 **Date:** 2026-07-19
 **Issue:** #60 — CLI: preseed to debianconfig converter
 **Unblocks:** #59 — Remove the preseed config kind end-to-end
@@ -38,7 +39,9 @@ booty convert-preseed [FILE]
 
 Wired as `newConvertPreseedCmd()` in `cmd/convert_preseed.go`, added via
 `Cmd.AddCommand(...)` in `cmd/main.go` `init()`, matching the existing `newVersionCmd()`
-pattern.
+pattern. Use `RunE`, and set an `Example` block (go-standards §6.2), e.g.
+`booty convert-preseed preseed.cfg > debian.yaml` and the stdin form
+`booty convert-preseed < preseed.cfg`.
 
 ## 3. Architecture
 
@@ -80,7 +83,7 @@ A small preseed parser:
 | `keyboard-configuration/xkb-keymap` | `keyboard` |
 | `netcfg/get_hostname` / `netcfg/get_domain` | `hostname` / `domain` |
 | `netcfg/choose_interface` | `network.interface` |
-| `netcfg/disable_autoconfig`, `get_ipaddress`, `get_netmask`, `get_gateway`, `get_nameservers`, `confirm_static` | `network.static.*` (DHCP when absent) |
+| static block (`netcfg/disable_autoconfig true` + `get_ipaddress`/`get_netmask`/`get_gateway`/`get_nameservers`/`confirm_static`) | `network.static.*` (DHCP when the static markers are absent) |
 | `mirror/http/hostname` / `/directory` / `/proxy` | `mirror.*` |
 | `mirror/country` (`manual`) | recognized/consumed (booty re-emits it); no field |
 | `time/zone` | `timezone` |
@@ -91,21 +94,37 @@ A small preseed parser:
 
 Anything whose `template` is not in this map → appended verbatim to `raw_preseed`.
 
+**Network coherence (SGE non-blocking):** the structured schema only has `nameservers`
+*under* `network.static`, so the static fields must be recognized as a coherent unit. If
+the static markers (`disable_autoconfig`/`confirm_static`) are present, map the whole
+static block. If a static field appears **orphaned** (e.g. `get_nameservers` with no
+static markers — DHCP plus custom DNS, which the structured schema cannot express), fall
+**all** the orphaned `netcfg/*` fields to `raw_preseed` rather than fabricating a partial
+`static` block. `netcfg/choose_interface` still maps to `network.interface` independently.
+
 ### 4.3 Disk / partman — all-or-nothing group recognition
 
-Disk lines are handled as **one group** (templates matching `partman*`, `partman-auto*`,
-`partman-lvm*`, `partman-md*`, `mdadm*`, `grub-installer/bootdev`), never per-line, so a
-structured `disk` block can never coexist with leftover raw partman lines that would
-conflict (`raw_preseed` is appended last and later duplicate debconf answers win).
+Disk lines are handled as **one group**, never per-line, so a structured `disk` block can
+never coexist with leftover raw partman lines that would conflict (`raw_preseed` is
+appended last and later duplicate debconf answers win). Group membership = templates
+matching `partman*`, `partman-auto*`, `partman-auto-raid*`, `partman-lvm*`, `partman-md*`,
+`partman-efi*`, `mdadm*`, and **`grub-installer/*`** (the last **must** cover both
+`grub-installer/bootdev` and `grub-installer/force-efi-extra-removable`, which the
+UEFI-mirror shape emits — SGE B1; a bare `grub-installer/bootdev` exact match would leak
+`force-efi-extra-removable` into `raw_preseed` and break all-or-nothing).
 
 - If the whole group matches a **recognized shape**, emit a structured `disk` block and
   **consume all** group lines:
   - `partman-auto/method regular` + `choose_recipe atomic` (+ `partman/default_filesystem`)
     → `disk: { devices, layout: plain, filesystem }`
   - lvm shape (`partman-auto/method lvm` + partman-lvm lines) → `layout: lvm`
-  - mirror shape (raid method + booty's `partman-auto-raid/recipe` + mdadm) → `raid: mirror`
-    (+ `boot_degraded`)
-  - `partman-auto/expert_recipe` present → `disk: { devices, expert_recipe: <verbatim> }`
+  - mirror shape (`partman-auto/method raid` + booty's `partman-auto-raid/recipe` + mdadm)
+    → `raid: mirror` (+ `boot_degraded` from `mdadm/boot_degraded`). The recipe has an
+    **lvm sub-variant** (the `lvm -` root token + partman-lvm lines, template
+    `debiangen.go:578-582`) → also set `layout: lvm`; a plain mirror sets `layout: plain`
+    (SGE non-blocking).
+  - `partman-auto/expert_recipe` present (and not the recognized mirror recipe) →
+    `disk: { devices, expert_recipe: <verbatim, whitespace-collapsed> }`
 - Otherwise emit **no** `disk` block and pass **all** group lines through `raw_preseed`
   verbatim.
 
@@ -114,14 +133,42 @@ targets the shapes booty's own generator emits plus the canonical d-i atomic/lvm
 unusual recipes degrade safely to raw. The round-trip check (§5) is the guarantee that a
 recognized-shape mapping is actually faithful.
 
+**ESP-sync de-duplication (SGE B2):** for a recognized **mirror** shape, booty's forward
+generator composes a deterministic ESP-sync fragment (`espSyncLateCommand(devices)`,
+`debiangen.go:242-257`) INTO `preseed/late_command`. So a booty-generated mirror preseed
+carries ESP-sync inside `late_command`. If the converter both recognizes the mirror disk
+(which makes re-render regenerate ESP-sync) **and** copies `late_command` verbatim, the
+re-rendered `late_command` contains ESP-sync twice → a false round-trip warning. Therefore,
+when the mirror shape is recognized, the converter **strips the reconstructable
+`espSyncLateCommand(devices)` substring from the captured `late_command`** before storing
+it (the device list is recovered, so the fragment is reconstructable). This is what makes
+§8's "booty-generated mirror preseed round-trips with no warnings" hold. **Processing-order
+dependency:** the disk group must be recognized (and its device list recovered) *before*
+the ESP-sync substring can be stripped from `late_command` — the implementation must map
+disk before finalizing `late_command`.
+
 ## 5. Round-trip verification (verify + warn, always emit)
 
 After building the structured output, re-render it via the existing `translateDebianConfig`
 and compare to the input:
 
-1. Normalize both preseeds: trim each line, drop blanks/comments, sort into a set.
-2. Compute the symmetric difference.
-3. For each difference, emit a precise **stderr warning** (input line present but not
+1. **Re-render can error (SGE B4).** `translateDebianConfig` returns an *error*, not a
+   preseed, when the produced YAML fails `buildPreseedView`/`buildDiskView` validation
+   (e.g. a verbatim-mapped `passwd/username` that is uppercase/over-32-chars, or a
+   recovered `raid: mirror` with a single device). In that case do **not** crash or
+   hard-fail: emit a prominent stderr + header warning ("produced YAML did not re-render:
+   `<err>`; review the structured fields") and still emit the best-effort YAML (exit 0).
+2. **Normalize on logical directives, not physical lines (SGE B3).** Reuse §4.1's parser
+   on BOTH sides: join `\` continuations into logical directives, then collapse internal
+   whitespace per directive (`strings.Fields`-style) and drop the **owner** field (booty
+   always re-renders owner `d-i`, while hand-written inputs often use a package owner such
+   as `keyboard-configuration keyboard-configuration/xkb-keymap …`; comparing full lines
+   would emit benign owner-mismatch noise). A naive physical-line/edge-trim comparison
+   would systematically false-positive on the flattened single-line `expert_recipe`
+   (`debiangen.go:170`) versus multi-line hand input, and on internal double-spaces — so
+   the normalization MUST be directive-level, not line-level.
+3. Compute the symmetric difference over the normalized directive sets.
+4. For each difference, emit a precise **stderr warning** (input directive present but not
    re-rendered, or vice versa), plus a **header comment** in the emitted YAML summarizing
    what to double-check.
 
@@ -131,18 +178,27 @@ and compare to the input:
 the migration-aid intent: a working starting point plus an accurate punch-list, never a
 silent wrong config and never a hard block on an imperfect hand-written preseed.
 
+A few benign warnings are expected-and-acceptable on hand-written inputs (documented so
+they aren't mistaken for mapping bugs): booty re-emits `mirror/country string manual`
+whenever a mirror block is present (`debiangen.go:463-465`), so a hand input with a mirror
+host but no `manual` selector draws a "re-rendered present, not in input" note.
+
 ## 6. Output format
 
 - **Emit-only-what-is-set** — mirrors the authoring philosophy in `debiangen.go`; an unset
   field produces no YAML key (`omitempty`), stable field order.
 - A leading header comment records provenance (`# generated by booty convert-preseed`) and
   any round-trip caveats.
-- **Controlled marshaling** so no internal-type artifacts leak (the raw `debianConfigSpec`
-  has a `sudoMode` int that would marshal as `sudo: 0`). Two acceptable implementations,
-  chosen in the plan:
-  (a) a dedicated plain-typed output struct mirroring the authoring shape, or
-  (b) reuse `debianConfigSpec` after adding `MarshalYAML` to `sudoMode` and verifying
-  `omitempty` semantics (more DRY; enables a struct-identity round-trip).
+- **Controlled marshaling via a dedicated output struct (SGE non-blocking).** The raw
+  `debianConfigSpec` cannot be marshaled directly: its scalar fields carry **no**
+  `omitempty`/`omitzero` (`debiangen.go:21-33`), so it would emit `hostname: ""`, and its
+  `sudoMode` int would emit `sudo: 0`. Adding those tags would edit the **shared** authoring
+  struct, which §9 forbids. And §5 compares *preseed text*, not structs, so a
+  "struct-identity round-trip" buys nothing. Therefore: emit through a **dedicated
+  plain-typed output struct** (`package http`, alongside the converter) that mirrors the
+  authoring schema with `omitzero` (Go 1.26 — for slices/pointers/structs, not the legacy
+  `omitempty`) and a fixed field order. The converter never populates `sudo` (§9 non-goal),
+  so it is simply absent from the output struct.
 
 ## 7. Error handling & edge cases
 
@@ -161,12 +217,15 @@ silent wrong config and never a hard block on an imperfect hand-written preseed.
 - Table tests: one case per scalar directive (input line → expected field).
 - Network: DHCP vs static block.
 - Accounts: root-only, user-only, both; hash passthrough.
-- Disk group recognition: atomic→plain, lvm, mirror, expert_recipe, and
-  unrecognized→raw_preseed (all-or-nothing).
+- Disk group recognition: atomic→plain, lvm, mirror (plain), **mirror+lvm**,
+  expert_recipe, and unrecognized→raw_preseed (all-or-nothing). Assert
+  `grub-installer/force-efi-extra-removable` is consumed with the mirror group (B1).
 - `raw_preseed` remainder: unknown directives + malformed lines pass through verbatim.
 - **Round-trip suite:** feed booty-generated preseeds (from representative `debianconfig`
   fixtures through `translateDebianConfig`) back through the converter and assert a clean
-  round-trip (no warnings).
+  round-trip (**no warnings**) — including a **mirror** fixture, which proves the ESP-sync
+  de-duplication (B2). Include a case where `translateDebianConfig` re-render errors (B4)
+  and assert the converter still emits + warns (exit 0).
 - Warning emission: an input whose disk shape is unrecognized produces the expected
   stderr/header warnings and still emits.
 - CLI: file arg vs stdin; stdout carries only YAML, stderr carries warnings.
