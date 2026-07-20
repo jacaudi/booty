@@ -26,7 +26,7 @@ describe('BootConfigsView', () => {
 
   it('rollback calls rollbackConfig then reloads', async () => {
     vi.mocked(configsApi.listConfigs).mockResolvedValue([
-      { id: 5, name: 'c', kind: 'preseed', activeRevision: 2, revisionCount: 2, updatedAt: '' },
+      { id: 5, name: 'c', kind: 'debianconfig', activeRevision: 2, revisionCount: 2, updatedAt: '' },
     ])
     vi.mocked(rolesApi.listRoles).mockResolvedValue([])
     vi.mocked(configsApi.listRevisions).mockResolvedValue([
@@ -141,18 +141,15 @@ describe('BootConfigsView', () => {
       cfgRow({ id: 1, name: 'talos-node', kind: 'machineconfig' }),
       cfgRow({ id: 2, name: 'fc', kind: 'butane' }),
       cfgRow({ id: 3, name: 'deb', kind: 'debianconfig' }),
-      cfgRow({ id: 4, name: 'legacy', kind: 'preseed' }),
     ])
     vi.mocked(rolesApi.listRoles).mockResolvedValue([])
     render(<BootConfigsView />)
     await screen.findByText('talos-node')
     expect(screen.getByText('Talos Linux')).toBeInTheDocument()
     expect(screen.getByText('Flatcar / Fedora CoreOS')).toBeInTheDocument()
-    // A legacy raw preseed still lists, and still reads as Debian.
-    expect(screen.getAllByText('Debian')).toHaveLength(2)
+    expect(screen.getByText('Debian')).toBeInTheDocument()
     // The literal server kind is still shown beneath the product name.
     expect(screen.getByText('machineconfig')).toBeInTheDocument()
-    expect(screen.getByText('preseed')).toBeInTheDocument()
   })
 
   it('changing a role default config inline calls updateRole', async () => {

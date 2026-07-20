@@ -41,8 +41,8 @@ describe('configs api client', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/configs/2/rollback', expect.objectContaining({ method: 'POST' }))
   })
 
-  it('accepts all six server kinds on the Config type', () => {
-    const kinds: Config['kind'][] = ['butane', 'machineconfig', 'preseed', 'schematic', 'taloscluster', 'debianconfig']
-    expect(kinds).toHaveLength(6)
+  it('accepts all five server kinds on the Config type', () => {
+    const kinds: Config['kind'][] = ['butane', 'machineconfig', 'schematic', 'taloscluster', 'debianconfig']
+    expect(kinds).toHaveLength(5)
   })
 })

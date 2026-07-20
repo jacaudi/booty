@@ -1,30 +1,61 @@
 import { describe, expect, it } from 'vitest'
+import type { FamilyKinds } from './catalog'
 import {
-  BOOT_CONFIG_KINDS,
   OS_CHOICES,
   SCHEMATIC_KIND,
   TALOSCLUSTER_KIND,
+  bootConfigKinds,
   isBootConfigKind,
   kindForOS,
   kindsForHostOS,
   osNameForKind,
 } from './configKinds'
 
+const data: FamilyKinds = {
+  bootConfigKinds: ['butane', 'machineconfig', 'debianconfig'],
+  osFamily: { flatcar: ['butane'], 'fedora-coreos': ['butane'], talos: ['machineconfig'], debian: ['debianconfig'] },
+}
+
 describe('configKinds', () => {
-  it('the boot-config kinds are exactly the four kinds renderConfig can serve', () => {
-    expect([...BOOT_CONFIG_KINDS].sort()).toEqual(['butane', 'debianconfig', 'machineconfig', 'preseed'])
+  it('boot kinds come from the server and exclude preseed', () => {
+    expect([...bootConfigKinds(data)].sort()).toEqual(['butane', 'debianconfig', 'machineconfig'])
   })
 
-  it('schematic and taloscluster are NOT boot-config kinds', () => {
-    // familyAllowsKind (render.go:34-43) allows neither, so resolveConfig falls
-    // through to the default file with only a slog.Warn — a bound config and an
-    // unbound boot. They must never be offered as a host/role config.
+  it('kindsForHostOS maps the boot vocabulary, including the coreos alias', () => {
+    expect(kindsForHostOS('talos', data)).toEqual(['machineconfig'])
+    expect(kindsForHostOS('debian', data)).toEqual(['debianconfig'])
+    expect(kindsForHostOS('flatcar', data)).toEqual(['butane'])
+    expect(kindsForHostOS('fedora-coreos', data)).toEqual(['butane'])
+    expect(kindsForHostOS('coreos', data)).toEqual(['butane']) // alias -> fedora-coreos
+  })
+
+  it('is permissive (full union) for unknown/absent OS', () => {
+    expect(kindsForHostOS(undefined, data)).toEqual(data.bootConfigKinds)
+    expect(kindsForHostOS('plan9', data)).toEqual(data.bootConfigKinds)
+  })
+
+  it('non-servable kinds stay non-servable', () => {
+    expect(bootConfigKinds(data)).not.toContain(SCHEMATIC_KIND)
+    expect(bootConfigKinds(data)).not.toContain(TALOSCLUSTER_KIND)
+  })
+
+  it('osNameForKind keeps UI labels and no longer maps preseed', () => {
+    expect(osNameForKind('butane')).toBe('Flatcar / Fedora CoreOS')
+    expect(osNameForKind('debianconfig')).toBe('Debian')
+  })
+
+  it('osNameForKind falls back to the raw kind for anything unmapped', () => {
+    expect(osNameForKind('taloscluster')).toBe('taloscluster')
+  })
+
+  it('isBootConfigKind excludes only the page-owned non-servable constants', () => {
+    // Data-free: SCHEMATIC_KIND and TALOSCLUSTER_KIND are UI-ownership facts
+    // (owned by OS Images / Clusters), not server data.
     expect(isBootConfigKind(SCHEMATIC_KIND)).toBe(false)
     expect(isBootConfigKind(TALOSCLUSTER_KIND)).toBe(false)
     expect(isBootConfigKind('butane')).toBe(true)
     expect(isBootConfigKind('machineconfig')).toBe(true)
     expect(isBootConfigKind('debianconfig')).toBe(true)
-    expect(isBootConfigKind('preseed')).toBe(true)
   })
 
   it('offers exactly three OS choices, covering every OS booty supports', () => {
@@ -35,45 +66,10 @@ describe('configKinds', () => {
     ])
   })
 
-  it('each OS choice derives its server kind', () => {
-    expect(kindForOS('flatcar-fcos')).toBe('butane')
-    expect(kindForOS('talos')).toBe('machineconfig')
-    expect(kindForOS('debian')).toBe('debianconfig')
-    expect(kindForOS('nope')).toBeUndefined()
-  })
-
-  it('raw preseed is offered as no OS choice (structured debianconfig only)', () => {
-    expect(OS_CHOICES.some((o) => o.kind === 'preseed')).toBe(false)
-  })
-
-  it('osNameForKind leads with the OS product name, including the legacy preseed fallback', () => {
-    expect(osNameForKind('machineconfig')).toBe('Talos Linux')
-    expect(osNameForKind('butane')).toBe('Flatcar / Fedora CoreOS')
-    expect(osNameForKind('debianconfig')).toBe('Debian')
-    expect(osNameForKind('preseed')).toBe('Debian')
-  })
-
-  it('osNameForKind falls back to the raw kind for anything unmapped', () => {
-    expect(osNameForKind('taloscluster')).toBe('taloscluster')
-  })
-
-  it('kindsForHostOS admits only what the host OS family allows', () => {
-    // familyAllowsKind is PER-FAMILY (render.go:34-43). Binding a butane config
-    // to a Talos host fails on the same code path, with the same silent
-    // fall-through to the default file, as binding a taloscluster.
-    expect(kindsForHostOS('talos')).toEqual(['machineconfig'])
-    expect([...kindsForHostOS('debian')].sort()).toEqual(['debianconfig', 'preseed'])
-    expect(kindsForHostOS('flatcar')).toEqual(['butane'])
-    expect(kindsForHostOS('fedora-coreos')).toEqual(['butane'])
-    // The cache vocabulary calls it "coreos"; resolve.go bridges the two names
-    // via CacheNameToCanonical, so both must resolve here.
-    expect(kindsForHostOS('coreos')).toEqual(['butane'])
-  })
-
-  it('kindsForHostOS is PERMISSIVE for a host whose OS is unknown or absent', () => {
-    // A host that has not booted yet has no OS. Hiding every option would be a
-    // worse failure than offering one the server will reject loudly.
-    expect(kindsForHostOS(undefined)).toEqual(BOOT_CONFIG_KINDS)
-    expect(kindsForHostOS('plan9')).toEqual(BOOT_CONFIG_KINDS)
+  it('each OS choice resolves its server kind from the loader data', () => {
+    expect(kindForOS('flatcar-fcos', data)).toBe('butane')
+    expect(kindForOS('talos', data)).toBe('machineconfig')
+    expect(kindForOS('debian', data)).toBe('debianconfig')
+    expect(kindForOS('nope', data)).toBeUndefined()
   })
 })
