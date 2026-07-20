@@ -369,6 +369,109 @@ func TestVerifyRoundTripHandlesRenderErrorDirect(t *testing.T) {
 	}
 }
 
+func TestConvertEndToEndAtomicRoundTripsClean(t *testing.T) {
+	src, err := translateDebianConfig([]byte("hostname: web01\nlocale: en_US.UTF-8\ndisk:\n  devices: [/dev/sda]\n  layout: plain\n  filesystem: ext4\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, warnings, err := ConvertPreseedToDebianConfig(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("clean round-trip expected, got: %v\n%s", warnings, out)
+	}
+	if !contains(string(out), "hostname: web01") || !contains(string(out), "layout: plain") {
+		t.Fatalf("structured output missing expected fields:\n%s", out)
+	}
+}
+
+func TestConvertMirrorStripsESPSyncAndRoundTripsClean(t *testing.T) {
+	// Booty-generated mirror preseed carries ESP-sync inside late_command (B2).
+	src, err := translateDebianConfig([]byte("disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, warnings, err := ConvertPreseedToDebianConfig(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("mirror round-trip must be clean after ESP-sync strip, got: %v\n%s", warnings, out)
+	}
+	// The emitted debianconfig should NOT carry a late_command (ESP-sync was the only one, now stripped).
+	if contains(string(out), "late_command:") {
+		t.Fatalf("ESP-sync not stripped from late_command:\n%s", out)
+	}
+}
+
+func TestConvertUnknownDirectivesGoToRawPreseed(t *testing.T) {
+	out, _, err := ConvertPreseedToDebianConfig([]byte("d-i some/unknown/knob string x\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(out), "raw_preseed:") || !contains(string(out), "some/unknown/knob string x") {
+		t.Fatalf("unknown directive not preserved in raw_preseed:\n%s", out)
+	}
+}
+
+func TestConvertInvalidUsernameStillEmitsAndWarns(t *testing.T) {
+	src := []byte("d-i passwd/make-user boolean true\nd-i passwd/username string BAD_UPPER\nd-i passwd/user-password-crypted password $6$x\n")
+	out, warnings, err := ConvertPreseedToDebianConfig(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) == 0 {
+		t.Fatalf("expected non-empty output even when the produced YAML does not re-render")
+	}
+	var sawRenderWarning bool
+	for _, w := range warnings {
+		if contains(w, "did not re-render") {
+			sawRenderWarning = true
+		}
+	}
+	if !sawRenderWarning {
+		t.Fatalf("expected a re-render warning, got %v", warnings)
+	}
+}
+
+func TestConvertUnrecognizedDiskRoundTripsClean(t *testing.T) {
+	src := []byte("d-i partman-auto/method string weird\nd-i partman-auto/some-unknown boolean true\n")
+	out, warnings, err := ConvertPreseedToDebianConfig(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(out), "raw_preseed:") {
+		t.Fatalf("unrecognized disk group not preserved in raw_preseed:\n%s", out)
+	}
+	if !contains(string(out), "partman-auto/method string weird") || !contains(string(out), "partman-auto/some-unknown boolean true") {
+		t.Fatalf("unrecognized disk lines missing verbatim:\n%s", out)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("raw_preseed is lossless, expected a clean round-trip, got: %v\n%s", warnings, out)
+	}
+}
+
+func TestStripESPSyncRemovesSandwichedFragment(t *testing.T) {
+	devices := []string{"/dev/sda", "/dev/sdb"}
+	frag := strings.Join(strings.Fields(espSyncLateCommand(devices)), " ")
+	lateCommand := "in-target echo ssh-setup ; " + frag + " ; in-target echo operator-cmd"
+	got := stripESPSync(lateCommand, devices)
+	want := "in-target echo ssh-setup ; in-target echo operator-cmd"
+	if got != want {
+		t.Fatalf("stripESPSync sandwiched:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestStripESPSyncRemovesTrailingFragment(t *testing.T) {
+	devices := []string{"/dev/sda", "/dev/sdb"}
+	frag := strings.Join(strings.Fields(espSyncLateCommand(devices)), " ")
+	got := stripESPSync("in-target echo ssh-setup ; "+frag, devices)
+	if got != "in-target echo ssh-setup" {
+		t.Fatalf("stripESPSync trailing: got %q", got)
+	}
+}
+
 func TestIsDiskDirectiveMembership(t *testing.T) {
 	for _, tmpl := range []string{
 		"partman-auto/disk", "partman-auto/method", "partman-auto/choose_recipe",

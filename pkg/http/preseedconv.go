@@ -368,6 +368,94 @@ func normalizeDirectives(src []byte) []string {
 	return out
 }
 
+// ConvertPreseedToDebianConfig converts a flat d-i preseed into structured
+// debianconfig YAML (design §3). Recognized scalar + disk directives become
+// structured fields; everything else is preserved verbatim in raw_preseed. It
+// always emits (verify+warn), returning warnings for anything that did not
+// round-trip through translateDebianConfig.
+func ConvertPreseedToDebianConfig(preseed []byte) ([]byte, []string, error) {
+	dirs := parsePreseed(preseed)
+	o, remainder := mapScalars(dirs)
+
+	// Disk group: all-or-nothing. Split remainder into disk vs the rest.
+	var diskGroup, rest []preseedDirective
+	for _, d := range remainder {
+		if isDiskDirective(d.template) {
+			diskGroup = append(diskGroup, d)
+		} else {
+			rest = append(rest, d)
+		}
+	}
+	var mirrorDevices []string
+	if len(diskGroup) > 0 {
+		if disk, ok := recognizeDisk(diskGroup); ok {
+			o.Disk = disk
+			if disk.RAID == "mirror" {
+				mirrorDevices = disk.Devices
+			}
+		} else {
+			for _, d := range diskGroup { // unrecognized → raw_preseed verbatim
+				rest = append(rest, d)
+			}
+		}
+	}
+
+	// B2: when the mirror disk is recognized, booty's forward gen will regenerate
+	// the ESP-sync fragment into late_command; strip the identical fragment from
+	// the captured late_command so it isn't double-emitted (false round-trip warn).
+	if mirrorDevices != nil && o.LateCommand != "" {
+		o.LateCommand = stripESPSync(o.LateCommand, mirrorDevices)
+	}
+
+	// raw_preseed remainder: unknown + malformed + unrecognized-disk lines, verbatim.
+	var rawLines []string
+	for _, d := range rest {
+		rawLines = append(rawLines, d.raw)
+	}
+	o.RawPreseed = strings.Join(rawLines, "\n")
+
+	body, err := marshalDebianConfig(o, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	warnings := verifyRoundTrip(preseed, body)
+	out, err := marshalDebianConfig(o, warnings) // re-marshal with the warnings header
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, warnings, nil
+}
+
+// stripESPSync removes the deterministic espSyncLateCommand(devices) fragment
+// from a captured late_command (B2). The fragment is reconstructable from the
+// recovered mirror device list. Remaining "; "-separated commands are preserved.
+//
+// The fragment is normalized with the SAME whitespace collapse parsePreseed
+// applies to the captured late_command (strings.Fields + single-space Join)
+// before the ReplaceAll, so a freshly-generated fragment matches the captured
+// form even if either side ever grows incidental multi-space/tab runs.
+func stripESPSync(lateCommand string, devices []string) string {
+	frag := espSyncLateCommand(devices)
+	if frag == "" {
+		return lateCommand
+	}
+	frag = strings.Join(strings.Fields(frag), " ") // match parsePreseed's whitespace collapse
+	s := strings.ReplaceAll(lateCommand, frag, "")
+	// Removing a sandwiched fragment can leave an empty segment between two
+	// " ; " separators; rebuild from the non-empty segments so the result is
+	// always a clean " ; "-joined command list (handles sole/leading/trailing/
+	// sandwiched fragments uniformly). Split ONLY on the exact " ; " the forward
+	// generator uses, never a bare ";", so an operator command with an inline
+	// semicolon is not broken.
+	var kept []string
+	for _, seg := range strings.Split(s, " ; ") {
+		if t := strings.TrimSpace(seg); t != "" {
+			kept = append(kept, t)
+		}
+	}
+	return strings.Join(kept, " ; ")
+}
+
 // verifyRoundTrip re-renders the produced debianconfig YAML and diffs it against
 // the original preseed. A re-render error (SGE B4) degrades to a warning, never a
 // failure. Returns human-readable warnings for the symmetric set difference.
