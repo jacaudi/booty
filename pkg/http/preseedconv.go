@@ -2,6 +2,8 @@ package http
 
 import (
 	"bytes"
+	"fmt"
+	"sort"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v4"
@@ -344,4 +346,56 @@ func recognizeDisk(group []preseedDirective) (*dcDisk, bool) {
 		return d, true
 	}
 	return nil, false
+}
+
+// normalizeDirectives reduces a preseed to a sorted set of owner-stripped,
+// whitespace-collapsed logical directives — the round-trip comparison oracle.
+// Reusing parsePreseed guarantees the SAME continuation-joining and whitespace
+// collapse on both sides (SGE B3), so a flattened single-line expert_recipe
+// compares equal to a multi-line hand-written one.
+func normalizeDirectives(src []byte) []string {
+	var out []string
+	for _, d := range parsePreseed(src) {
+		if d.template == "" {
+			if d.raw != "" {
+				out = append(out, d.raw) // passthrough line, compared verbatim (already collapsed)
+			}
+			continue
+		}
+		out = append(out, strings.TrimSpace(d.template+" "+d.dtype+" "+d.value))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// verifyRoundTrip re-renders the produced debianconfig YAML and diffs it against
+// the original preseed. A re-render error (SGE B4) degrades to a warning, never a
+// failure. Returns human-readable warnings for the symmetric set difference.
+func verifyRoundTrip(input, produced []byte) []string {
+	rendered, err := translateDebianConfig(produced)
+	if err != nil {
+		return []string{fmt.Sprintf("produced YAML did not re-render: %v; review the structured fields", err)}
+	}
+	in := normalizeDirectives(input)
+	out := normalizeDirectives(rendered)
+	inSet := map[string]bool{}
+	for _, s := range in {
+		inSet[s] = true
+	}
+	outSet := map[string]bool{}
+	for _, s := range out {
+		outSet[s] = true
+	}
+	var warnings []string
+	for _, s := range in {
+		if !outSet[s] {
+			warnings = append(warnings, "input directive not reproduced: "+s)
+		}
+	}
+	for _, s := range out {
+		if !inSet[s] {
+			warnings = append(warnings, "converter added a directive not in input: "+s)
+		}
+	}
+	return warnings
 }

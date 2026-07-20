@@ -304,6 +304,71 @@ d-i partman-auto/some-unknown boolean true
 	}
 }
 
+func TestNormalizeDirectivesDropsOwnerAndCollapsesWhitespace(t *testing.T) {
+	a := normalizeDirectives([]byte("d-i   time/zone   string   UTC\n"))
+	b := normalizeDirectives([]byte("some-owner time/zone string UTC\n"))
+	if len(a) != 1 || a[0] != b[0] {
+		t.Fatalf("owner/whitespace not normalized: %q vs %q", a, b)
+	}
+}
+
+func TestNormalizeDirectivesJoinsContinuations(t *testing.T) {
+	multi := normalizeDirectives([]byte("d-i partman-auto/expert_recipe string a :: \\\n   500 . \n"))
+	one := normalizeDirectives([]byte("d-i partman-auto/expert_recipe string a :: 500 .\n"))
+	if len(multi) != 1 || multi[0] != one[0] {
+		t.Fatalf("continuation join mismatch: %q vs %q", multi, one)
+	}
+}
+
+func TestVerifyRoundTripCleanWhenProducedReproducesInput(t *testing.T) {
+	dc := []byte("hostname: web01\ndisk:\n  devices: [/dev/sda]\n  layout: plain\n  filesystem: ext4\n")
+	input, err := translateDebianConfig(dc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnings := verifyRoundTrip(input, dc)
+	if len(warnings) != 0 {
+		t.Fatalf("expected clean round-trip, got warnings: %v", warnings)
+	}
+}
+
+func TestVerifyRoundTripWarnsWhenProducedMissesADirective(t *testing.T) {
+	dc := []byte("hostname: web01\ndisk:\n  devices: [/dev/sda]\n  layout: plain\n  filesystem: ext4\n")
+	produced, err := translateDebianConfig(dc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := append(append([]byte{}, produced...), []byte("d-i time/zone string UTC\n")...)
+	warnings := verifyRoundTrip(input, dc)
+	if len(warnings) == 0 {
+		t.Fatalf("expected a warning about the missing directive, got none")
+	}
+	var sawTimezone bool
+	for _, w := range warnings {
+		if contains(w, "time/zone") {
+			sawTimezone = true
+		}
+	}
+	if !sawTimezone {
+		t.Fatalf("expected warning mentioning time/zone, got %v", warnings)
+	}
+}
+
+func TestVerifyRoundTripHandlesRenderErrorDirect(t *testing.T) {
+	input := []byte("d-i passwd/username string bob\n")
+	produced := []byte("accounts:\n  user:\n    username: BAD_UPPER\n    password_hash: $6$x\n")
+	warnings := verifyRoundTrip(input, produced)
+	var sawRenderWarning bool
+	for _, w := range warnings {
+		if contains(w, "did not re-render") {
+			sawRenderWarning = true
+		}
+	}
+	if !sawRenderWarning {
+		t.Fatalf("expected a re-render warning, got %v", warnings)
+	}
+}
+
 func TestIsDiskDirectiveMembership(t *testing.T) {
 	for _, tmpl := range []string{
 		"partman-auto/disk", "partman-auto/method", "partman-auto/choose_recipe",
