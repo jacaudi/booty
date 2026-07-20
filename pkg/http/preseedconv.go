@@ -265,6 +265,83 @@ func mapScalars(dirs []preseedDirective) (dcOutput, []preseedDirective) {
 	return o, remainder
 }
 
-// isDiskDirective is a temporary stub; Task 4 replaces it with the real
-// partman/mdadm/grub-installer membership test.
-func isDiskDirective(string) bool { return false }
+// isDiskDirective reports whether a template belongs to the disk/partman group.
+// grub-installer/* is included so the UEFI-mirror shape's
+// grub-installer/force-efi-extra-removable (debiangen.go:584) is consumed with
+// the group and cannot leak into raw_preseed (SGE B1).
+func isDiskDirective(template string) bool {
+	switch {
+	case strings.HasPrefix(template, "partman"): // partman, partman-auto, partman-auto-raid, partman-lvm, partman-md, partman-efi, partman-basicfilesystems
+		return true
+	case strings.HasPrefix(template, "mdadm/"):
+		return true
+	case strings.HasPrefix(template, "grub-installer/"): // bootdev + force-efi-extra-removable
+		return true
+	}
+	return false
+}
+
+// recognizeDisk matches the disk group against the shapes booty's forward
+// generator emits (debiangen.go preseedTemplateText) plus canonical d-i atomic.
+// All-or-nothing: on a match it returns a fully-populated *dcDisk and ok==true
+// (every group line is considered consumed); otherwise ok==false and the caller
+// keeps the whole group in raw_preseed. Recognition is driven by a template→value
+// index so it is order-independent.
+func recognizeDisk(group []preseedDirective) (*dcDisk, bool) {
+	idx := map[string]string{}
+	for _, d := range group {
+		if d.template != "" {
+			idx[d.template] = d.value
+		}
+	}
+	devices := strings.Fields(idx["partman-auto/disk"])
+	if len(devices) == 0 {
+		return nil, false // every booty disk shape sets partman-auto/disk
+	}
+	method := idx["partman-auto/method"]
+
+	switch method {
+	case "regular":
+		// atomic (curated plain/xfs) OR expert_recipe.
+		if recipe, ok := idx["partman-auto/expert_recipe"]; ok {
+			d := &dcDisk{Devices: devices, ExpertRecipe: recipe}
+			// debiangen.go emits mdadm/boot_degraded on the expert path only when
+			// the operator set boot_degraded (BootDegradedSet gate), so recover it
+			// when present to keep an explicit value round-trip-faithful.
+			if bd, ok := idx["mdadm/boot_degraded"]; ok {
+				v := bd == "true"
+				d.BootDegraded = &v
+			}
+			return d, true
+		}
+		if idx["partman-auto/choose_recipe"] == "atomic" {
+			d := &dcDisk{Devices: devices, Layout: "plain", Filesystem: idx["partman/default_filesystem"]}
+			return d, true
+		}
+		return nil, false
+	case "lvm":
+		d := &dcDisk{Devices: devices, Layout: "lvm"}
+		if idx["partman/default_filesystem"] != "" {
+			d.Filesystem = idx["partman/default_filesystem"]
+		}
+		return d, true
+	case "raid":
+		// booty's UEFI mirror. Distinguish plain vs lvm by the partman-lvm marker
+		// and recover boot_degraded. Filesystem is intentionally left unset for
+		// BOTH raid variants (mirror and mirror+lvm): the fs lives in the raid
+		// recipe tokens, not a partman/default_filesystem line, and Task 5/6
+		// round-trip verification confirms the re-render is equivalent.
+		d := &dcDisk{Devices: devices, RAID: "mirror"}
+		if _, lvm := idx["partman-lvm/confirm"]; lvm {
+			d.Layout = "lvm"
+		} else {
+			d.Layout = "plain"
+		}
+		if bd, ok := idx["mdadm/boot_degraded"]; ok {
+			v := bd == "true"
+			d.BootDegraded = &v
+		}
+		return d, true
+	}
+	return nil, false
+}

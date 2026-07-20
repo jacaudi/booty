@@ -184,3 +184,141 @@ func TestMapScalarsUnknownGoesToRemainder(t *testing.T) {
 		t.Fatalf("unknown directive not in remainder: %#v", rem)
 	}
 }
+
+// diskGroupFrom renders a debianconfig disk block to a preseed via the forward
+// generator, then returns just its parsed disk-group directives.
+func diskGroupFrom(t *testing.T, debianconfigYAML string) []preseedDirective {
+	t.Helper()
+	rendered, err := translateDebianConfig([]byte(debianconfigYAML))
+	if err != nil {
+		t.Fatalf("forward-gen fixture failed: %v", err)
+	}
+	var group []preseedDirective
+	for _, d := range parsePreseed(rendered) {
+		if isDiskDirective(d.template) {
+			group = append(group, d)
+		}
+	}
+	if len(group) == 0 {
+		t.Fatalf("fixture produced no disk directives:\n%s", rendered)
+	}
+	return group
+}
+
+func TestRecognizeDiskAtomicPlain(t *testing.T) {
+	group := diskGroupFrom(t, "disk:\n  devices: [/dev/sda]\n  layout: plain\n  filesystem: ext4\n")
+	d, ok := recognizeDisk(group)
+	if !ok || d == nil {
+		t.Fatalf("atomic shape not recognized")
+	}
+	if len(d.Devices) != 1 || d.Devices[0] != "/dev/sda" || d.Layout != "plain" || d.Filesystem != "ext4" {
+		t.Fatalf("atomic disk fields wrong: %#v", d)
+	}
+}
+
+func TestRecognizeDiskLVM(t *testing.T) {
+	group := diskGroupFrom(t, "disk:\n  devices: [/dev/sda]\n  layout: lvm\n  filesystem: xfs\n")
+	d, ok := recognizeDisk(group)
+	if !ok || d.Layout != "lvm" || d.Filesystem != "xfs" {
+		t.Fatalf("lvm shape wrong: ok=%v %#v", ok, d)
+	}
+}
+
+func TestRecognizeDiskMirrorConsumesForceEfiExtraRemovable(t *testing.T) {
+	group := diskGroupFrom(t, "disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n")
+	// B1: the whole mirror group (incl. grub-installer/force-efi-extra-removable) must be recognized.
+	d, ok := recognizeDisk(group)
+	if !ok || d.RAID != "mirror" || len(d.Devices) != 2 {
+		t.Fatalf("mirror shape wrong: ok=%v %#v", ok, d)
+	}
+	// Sanity: the fixture actually contains the B1 line, proving it is inside the group.
+	var hasForceEfi bool
+	for _, g := range group {
+		if g.template == "grub-installer/force-efi-extra-removable" {
+			hasForceEfi = true
+		}
+	}
+	if !hasForceEfi {
+		t.Fatalf("fixture missing grub-installer/force-efi-extra-removable; B1 not exercised")
+	}
+}
+
+func TestRecognizeDiskMirrorLVM(t *testing.T) {
+	group := diskGroupFrom(t, "disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n  layout: lvm\n")
+	d, ok := recognizeDisk(group)
+	if !ok || d.RAID != "mirror" || d.Layout != "lvm" {
+		t.Fatalf("mirror+lvm shape wrong: ok=%v %#v", ok, d)
+	}
+}
+
+func TestRecognizeDiskExpertRecipe(t *testing.T) {
+	group := diskGroupFrom(t, "disk:\n  devices: [/dev/sda]\n  expert_recipe: |\n    boot-root :: 512 512 512 ext4 method{ format } .\n")
+	d, ok := recognizeDisk(group)
+	if !ok || d.ExpertRecipe == "" || len(d.Devices) != 1 {
+		t.Fatalf("expert recipe shape wrong: ok=%v %#v", ok, d)
+	}
+}
+
+func TestRecognizeDiskExpertRecipeBootDegraded(t *testing.T) {
+	group := diskGroupFrom(t, "disk:\n  devices: [/dev/sda]\n  expert_recipe: |\n    boot-root :: 512 512 512 ext4 method{ format } .\n  boot_degraded: false\n")
+	d, ok := recognizeDisk(group)
+	if !ok || d.ExpertRecipe == "" {
+		t.Fatalf("expert recipe shape wrong: ok=%v %#v", ok, d)
+	}
+	if d.BootDegraded == nil || *d.BootDegraded != false {
+		t.Fatalf("expert-recipe boot_degraded not recovered: %#v", d.BootDegraded)
+	}
+}
+
+func TestRecognizeDiskUnknownMethodNotRecognized(t *testing.T) {
+	// A device is present (so the len(devices)==0 guard is passed), but the
+	// method is unrecognized — exercises the method-switch's trailing fallthrough.
+	group := parsePreseed([]byte("d-i partman-auto/disk string /dev/sda\nd-i partman-auto/method string weird\n"))
+	var g []preseedDirective
+	for _, d := range group {
+		if isDiskDirective(d.template) {
+			g = append(g, d)
+		}
+	}
+	_, ok := recognizeDisk(g)
+	if ok {
+		t.Fatalf("unrecognized method must not be recognized")
+	}
+}
+
+func TestRecognizeDiskUnknownShapeNotRecognized(t *testing.T) {
+	// A hand-written partman set that doesn't match booty's shapes.
+	group := parsePreseed([]byte(`d-i partman-auto/method string weird
+d-i partman-auto/some-unknown boolean true
+`))
+	// filter to disk group as the caller would
+	var g []preseedDirective
+	for _, d := range group {
+		if isDiskDirective(d.template) {
+			g = append(g, d)
+		}
+	}
+	_, ok := recognizeDisk(g)
+	if ok {
+		t.Fatalf("unknown disk shape must NOT be recognized (all-or-nothing → raw_preseed)")
+	}
+}
+
+func TestIsDiskDirectiveMembership(t *testing.T) {
+	for _, tmpl := range []string{
+		"partman-auto/disk", "partman-auto/method", "partman-auto/choose_recipe",
+		"partman-auto/expert_recipe", "partman-auto-raid/recipe", "partman-lvm/confirm",
+		"partman-md/confirm", "partman-efi/non_efi_system", "partman/confirm",
+		"partman-basicfilesystems/no_swap", "mdadm/boot_degraded",
+		"grub-installer/bootdev", "grub-installer/force-efi-extra-removable",
+	} {
+		if !isDiskDirective(tmpl) {
+			t.Errorf("%q should be a disk directive", tmpl)
+		}
+	}
+	for _, tmpl := range []string{"netcfg/get_hostname", "time/zone", "pkgsel/include"} {
+		if isDiskDirective(tmpl) {
+			t.Errorf("%q should NOT be a disk directive", tmpl)
+		}
+	}
+}
