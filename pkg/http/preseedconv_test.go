@@ -472,6 +472,86 @@ func TestStripESPSyncRemovesTrailingFragment(t *testing.T) {
 	}
 }
 
+func TestRecognizeDiskMirrorRecoversXFS(t *testing.T) {
+	group := diskGroupFrom(t, "disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n  filesystem: xfs\n")
+	d, ok := recognizeDisk(group)
+	if !ok || d.RAID != "mirror" || d.Layout != "plain" {
+		t.Fatalf("plain mirror shape wrong: ok=%v %#v", ok, d)
+	}
+	if d.Filesystem != "xfs" {
+		t.Fatalf("plain mirror filesystem not recovered: got %q, want xfs", d.Filesystem)
+	}
+}
+
+func TestRecognizeDiskMirrorLVMRecoversXFS(t *testing.T) {
+	group := diskGroupFrom(t, "disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n  layout: lvm\n  filesystem: xfs\n")
+	d, ok := recognizeDisk(group)
+	if !ok || d.RAID != "mirror" || d.Layout != "lvm" {
+		t.Fatalf("lvm mirror shape wrong: ok=%v %#v", ok, d)
+	}
+	if d.Filesystem != "xfs" {
+		t.Fatalf("lvm mirror filesystem not recovered: got %q, want xfs", d.Filesystem)
+	}
+}
+
+func TestConvertMirrorXFSRoundTripsClean(t *testing.T) {
+	src, err := translateDebianConfig([]byte("disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\n  filesystem: xfs\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, warnings, err := ConvertPreseedToDebianConfig(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("clean round-trip expected, got: %v\n%s", warnings, out)
+	}
+	if !contains(string(out), "filesystem: xfs") {
+		t.Fatalf("recovered filesystem missing from output:\n%s", out)
+	}
+}
+
+func TestParsePreseedJoinsCRLFContinuations(t *testing.T) {
+	src := "d-i partman-auto/expert_recipe string \\\r\n    boot-root :: \\\r\n    500 . \r\n"
+	got := parsePreseed([]byte(src))
+	if len(got) != 1 {
+		t.Fatalf("want 1 joined directive, got %d: %#v", len(got), got)
+	}
+	if got[0].template != "partman-auto/expert_recipe" {
+		t.Fatalf("template = %q", got[0].template)
+	}
+	if !contains(got[0].value, "boot-root :: ") || !contains(got[0].value, "500 .") {
+		t.Fatalf("value did not join CRLF continuations: %q", got[0].value)
+	}
+	if strings.Contains(got[0].value, "\\") || strings.Contains(got[0].value, "\r") {
+		t.Fatalf("value retained stray CRLF continuation artifacts: %q", got[0].value)
+	}
+}
+
+func TestMapScalarsNonManualMirrorCountryFallsToRemainder(t *testing.T) {
+	dirs := parsePreseed([]byte("d-i mirror/country string US\n"))
+	_, rem := mapScalars(dirs)
+	var found bool
+	for _, d := range rem {
+		if d.template == "mirror/country" && d.value == "US" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("non-manual mirror/country dropped instead of preserved in remainder: %#v", rem)
+	}
+}
+
+func TestMapScalarsManualMirrorCountryStillConsumed(t *testing.T) {
+	dirs := parsePreseed([]byte("d-i mirror/country string manual\n"))
+	_, rem := mapScalars(dirs)
+	for _, d := range rem {
+		if d.template == "mirror/country" {
+			t.Fatalf("manual mirror/country should still be consumed, found in remainder: %#v", rem)
+		}
+	}
+}
+
 func TestIsDiskDirectiveMembership(t *testing.T) {
 	for _, tmpl := range []string{
 		"partman-auto/disk", "partman-auto/method", "partman-auto/choose_recipe",

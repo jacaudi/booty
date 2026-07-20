@@ -3,7 +3,7 @@ package http
 import (
 	"bytes"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	yaml "go.yaml.in/yaml/v4"
@@ -83,11 +83,14 @@ func parsePreseed(src []byte) []preseedDirective {
 	var out []preseedDirective
 	var buf strings.Builder
 	joining := false
-	for _, raw := range strings.Split(string(src), "\n") {
+	// Normalize CRLF -> LF up front so a trailing '\' continuation marker is
+	// never hidden behind a '\r' on Windows-authored preseed files.
+	normalized := strings.ReplaceAll(string(src), "\r\n", "\n")
+	for _, raw := range strings.Split(normalized, "\n") {
 		line := raw
 		// A physical line ending in '\' continues onto the next.
-		if strings.HasSuffix(strings.TrimRight(line, " \t"), "\\") {
-			trimmed := strings.TrimRight(line, " \t")
+		trimmed := strings.TrimRight(line, " \t")
+		if strings.HasSuffix(trimmed, "\\") {
 			buf.WriteString(strings.TrimSuffix(trimmed, "\\"))
 			buf.WriteByte(' ')
 			joining = true
@@ -148,6 +151,13 @@ func marshalDebianConfig(o dcOutput, warnings []string) ([]byte, error) {
 	b.Write(body)
 	return b.Bytes(), nil
 }
+
+// Note (DRY): the preseed directive-name vocabulary recognized below is
+// necessarily duplicated from debiangen.go's forward template
+// (preseedTemplateText) — there is no single source both a text/template blob
+// and a parser can share. verifyRoundTrip is the intentional guard against
+// silent drift between the two: any directive this file stops recognizing (or
+// mis-recognizes) surfaces as a round-trip warning rather than a silent bug.
 
 // mapScalars maps every non-disk directive it recognizes into a dcOutput and
 // returns the directives it did NOT consume (unknown lines + the whole disk
@@ -224,7 +234,13 @@ func mapScalars(dirs []preseedDirective) (dcOutput, []preseedDirective) {
 		case "mirror/http/proxy":
 			ensureMirror().Proxy = d.value
 		case "mirror/country":
-			// booty re-emits `manual` when a mirror block is present; consumed, no field.
+			// booty only ever emits `manual` (mirror block present); consumed, no
+			// field. Any other value is a hand-written preseed choice we don't
+			// model structurally, so let it fall to remainder/raw_preseed instead
+			// of silently dropping it.
+			if d.value != "manual" {
+				remainder = append(remainder, d)
+			}
 		case "passwd/root-password-crypted":
 			ensureAcct().RootPasswordHash = d.value
 		case "passwd/root-login", "passwd/make-user":
@@ -329,15 +345,23 @@ func recognizeDisk(group []preseedDirective) (*dcDisk, bool) {
 		return d, true
 	case "raid":
 		// booty's UEFI mirror. Distinguish plain vs lvm by the partman-lvm marker
-		// and recover boot_degraded. Filesystem is intentionally left unset for
-		// BOTH raid variants (mirror and mirror+lvm): the fs lives in the raid
-		// recipe tokens, not a partman/default_filesystem line, and Task 5/6
-		// round-trip verification confirms the re-render is equivalent.
+		// and recover boot_degraded. The filesystem is NOT in a
+		// partman/default_filesystem line for either raid variant — it is
+		// embedded inside the raid recipe tokens themselves (debiangen.go:579,
+		// :582), so recover it from there: raidPlainFilesystem /
+		// raidLVMFilesystem locate the operator's fs token by scanning the
+		// relevant recipe's whitespace-collapsed fields.
 		d := &dcDisk{Devices: devices, RAID: "mirror"}
 		if _, lvm := idx["partman-lvm/confirm"]; lvm {
 			d.Layout = "lvm"
+			if fs := raidLVMFilesystem(idx["partman-auto/expert_recipe"]); fs != "" {
+				d.Filesystem = fs
+			}
 		} else {
 			d.Layout = "plain"
+			if fs := raidPlainFilesystem(idx["partman-auto-raid/recipe"]); fs != "" {
+				d.Filesystem = fs
+			}
 		}
 		if bd, ok := idx["mdadm/boot_degraded"]; ok {
 			v := bd == "true"
@@ -346,6 +370,36 @@ func recognizeDisk(group []preseedDirective) (*dcDisk, bool) {
 		return d, true
 	}
 	return nil, false
+}
+
+// raidPlainFilesystem recovers the root filesystem from a plain-mirror
+// partman-auto-raid/recipe value (debiangen.go:582: `... {fs} / {RootParts} .`).
+// The root entry is the only one whose mountpoint token is the standalone "/"
+// (the /boot entry's token is "/boot", a different string); the fs is the
+// field immediately preceding it.
+func raidPlainFilesystem(recipe string) string {
+	fields := strings.Fields(recipe)
+	for i, f := range fields {
+		if f == "/" && i > 0 {
+			return fields[i-1]
+		}
+	}
+	return ""
+}
+
+// raidLVMFilesystem recovers the root filesystem from an lvm-mirror
+// partman-auto/expert_recipe value (debiangen.go:579: `... filesystem{ {fs} } ...`).
+// The lvm mirror's partman-auto-raid/recipe root entry is `lvm -` and carries
+// no fs (raidPlainFilesystem does not apply); the fs instead lives in the
+// auto-generated "multiraid" expert_recipe's filesystem{} clause.
+func raidLVMFilesystem(recipe string) string {
+	fields := strings.Fields(recipe)
+	for i, f := range fields {
+		if f == "filesystem{" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
 }
 
 // normalizeDirectives reduces a preseed to a sorted set of owner-stripped,
@@ -364,7 +418,7 @@ func normalizeDirectives(src []byte) []string {
 		}
 		out = append(out, strings.TrimSpace(d.template+" "+d.dtype+" "+d.value))
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
