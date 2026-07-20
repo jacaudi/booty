@@ -319,29 +319,34 @@ does prune eagerly: it removes every frozen revision the mac holds for that clus
 **`kind` vs family `ConfigKind` (§3.1).** `configs.kind` is the dialect an operator *authors*
 (`butane`, `machineconfig`, `debianconfig`); each OS family separately declares a `ConfigKind` — the
 boot-config-URL *mechanism* served at `/ignition.json`, `/machineconfig`, `/preseed`
-(`ignition`, `machineconfig`, `preseed`). `configKindForFamily` (`pkg/http/render.go`) is the single
-source of the relationship, and only the ignition family differs: the `ignition` family's
-`ConfigKind` maps to the `butane` config kind (Ignition is Butane's compiled wire format — operators
-author Butane YAML; booty translates it to Ignition JSON at render time), while `machineconfig` and
-`preseed` map to themselves. A config bound to a host — explicitly or via a role default — must
-satisfy `config.kind == configKindForFamily(hostFamily.ConfigKind)`, enforced both at bind time
+(`ignition`, `machineconfig`, `preseed`). `authoringKindsForFamily` (`pkg/http/render.go`) is the
+single source of the relationship, and it is 1:many — a family may allow more than one authored
+kind. Only the `ignition` and `preseed` families don't map to themselves: `ignition`'s `ConfigKind`
+maps to the `butane` config kind (Ignition is Butane's compiled wire format — operators author
+Butane YAML; booty translates it to Ignition JSON at render time), and `preseed`'s `ConfigKind` maps
+to the `debianconfig` config kind (#59 retired the raw `preseed` authored kind in favor of
+booty-authored `debianconfig`); `machineconfig` maps to itself. A config bound to a host —
+explicitly or via a role default — must satisfy
+`familyAllowsKind(hostFamily.ConfigKind, config.kind)` (equivalently,
+`config.kind ∈ authoringKindsForFamily(hostFamily.ConfigKind)`), enforced both at bind time
 (`POST /hosts/{mac}/approve` / `/bind`, `422` on mismatch) and again at resolve time
 (`pkg/http/resolve.go`, which falls through to the file path on mismatch rather than erroring the
 boot).
 
-**`schematic` (P5) is not a bindable dialect.** `configKindForFamily` never returns `schematic` for
-any OS family, so a `schematic`-kind config can never satisfy the family-match check above — it is
-rejected with `422` at bind time (`/approve`, `/bind`) and, as defense in depth, falls through at
+**`schematic` (P5) is not a bindable dialect.** `authoringKindsForFamily` never includes `schematic`
+for any OS family, so a `schematic`-kind config can never satisfy the family-match check above — it
+is rejected with `422` at bind time (`/approve`, `/bind`) and, as defense in depth, falls through at
 resolve time exactly like any other mismatch. Concretely, `schematic` configs are never served by
 `/ignition.json`, `/machineconfig`, or `/preseed`. They are consumed through a separate, dedicated
 endpoint instead — `POST /hosts/{mac}/schematic` (see [API.md](API.md#hosts)) — which writes the
 derived ID straight into `hosts.schematic`, bypassing `hosts.config_id` and the family-match gate
 entirely.
 
-**`taloscluster` (P6) is likewise not a bindable dialect**, for the same reason: `configKindForFamily`
-never returns it, so it cannot satisfy the family-match check and is never served by
-`/ignition.json`, `/machineconfig`, or `/preseed`. It is consumed through `clusters.spec_config_id`
-instead (see above and [API.md](API.md#clusters-p6)) — a cluster-level binding, not a host-level one.
+**`taloscluster` (P6) is likewise not a bindable dialect**, for the same reason:
+`authoringKindsForFamily` never includes it, so it cannot satisfy the family-match check and is
+never served by `/ignition.json`, `/machineconfig`, or `/preseed`. It is consumed through
+`clusters.spec_config_id` instead (see above and [API.md](API.md#clusters-p6)) — a cluster-level
+binding, not a host-level one.
 
 Pragmas on every connection: `journal_mode=WAL`, `foreign_keys=ON`,
 `busy_timeout=5000`.
