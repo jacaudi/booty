@@ -100,3 +100,87 @@ func mustMarshal(t *testing.T, o dcOutput) []byte {
 	}
 	return b
 }
+
+func TestMapScalarsCoreFields(t *testing.T) {
+	dirs := parsePreseed([]byte(`d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+d-i netcfg/get_hostname string web01
+d-i netcfg/get_domain string example.com
+d-i time/zone string Etc/UTC
+d-i pkgsel/include string openssh-server vim
+d-i preseed/late_command string in-target echo hi
+`))
+	o, rem := mapScalars(dirs)
+	if o.Locale != "en_US.UTF-8" || o.Keyboard != "us" || o.Hostname != "web01" || o.Domain != "example.com" || o.Timezone != "Etc/UTC" {
+		t.Fatalf("core scalar mapping wrong: %#v", o)
+	}
+	if len(o.Packages) != 2 || o.Packages[0] != "openssh-server" || o.Packages[1] != "vim" {
+		t.Fatalf("packages split wrong: %#v", o.Packages)
+	}
+	if o.LateCommand != "in-target echo hi" {
+		t.Fatalf("late_command wrong: %q", o.LateCommand)
+	}
+	if len(rem) != 0 {
+		t.Fatalf("no remainder expected, got %#v", rem)
+	}
+}
+
+func TestMapScalarsStaticNetwork(t *testing.T) {
+	dirs := parsePreseed([]byte(`d-i netcfg/disable_autoconfig boolean true
+d-i netcfg/get_ipaddress string 10.0.0.5
+d-i netcfg/get_netmask string 255.255.255.0
+d-i netcfg/get_gateway string 10.0.0.1
+d-i netcfg/get_nameservers string 1.1.1.1 8.8.8.8
+d-i netcfg/confirm_static boolean true
+`))
+	o, _ := mapScalars(dirs)
+	if o.Network == nil || o.Network.Static == nil {
+		t.Fatalf("static network not built: %#v", o.Network)
+	}
+	s := o.Network.Static
+	if s.Address != "10.0.0.5" || s.Netmask != "255.255.255.0" || s.Gateway != "10.0.0.1" || len(s.Nameservers) != 2 {
+		t.Fatalf("static fields wrong: %#v", s)
+	}
+}
+
+func TestMapScalarsOrphanStaticFallsToRaw(t *testing.T) {
+	// get_nameservers WITHOUT static markers (DHCP + custom DNS) has no structured home.
+	dirs := parsePreseed([]byte("d-i netcfg/get_nameservers string 1.1.1.1\n"))
+	o, rem := mapScalars(dirs)
+	if o.Network != nil {
+		t.Fatalf("orphan static must not fabricate a network block: %#v", o.Network)
+	}
+	if len(rem) != 1 || rem[0].template != "netcfg/get_nameservers" {
+		t.Fatalf("orphan static should be in remainder: %#v", rem)
+	}
+}
+
+func TestMapScalarsMirrorAndAccounts(t *testing.T) {
+	dirs := parsePreseed([]byte(`d-i mirror/http/hostname string deb.example.com
+d-i mirror/http/directory string /debian
+d-i passwd/root-login boolean true
+d-i passwd/root-password-crypted password $6$rootHASH
+d-i passwd/make-user boolean true
+d-i passwd/username string bob
+d-i passwd/user-fullname string Bob B
+d-i passwd/user-password-crypted password $6$userHASH
+`))
+	o, _ := mapScalars(dirs)
+	if o.Mirror == nil || o.Mirror.Hostname != "deb.example.com" || o.Mirror.Directory != "/debian" {
+		t.Fatalf("mirror mapping wrong: %#v", o.Mirror)
+	}
+	if o.Accounts == nil || o.Accounts.RootPasswordHash != "$6$rootHASH" {
+		t.Fatalf("root hash wrong: %#v", o.Accounts)
+	}
+	if o.Accounts.User == nil || o.Accounts.User.Username != "bob" || o.Accounts.User.PasswordHash != "$6$userHASH" || o.Accounts.User.Fullname != "Bob B" {
+		t.Fatalf("user mapping wrong: %#v", o.Accounts.User)
+	}
+}
+
+func TestMapScalarsUnknownGoesToRemainder(t *testing.T) {
+	dirs := parsePreseed([]byte("d-i some/unknown/knob string x\n"))
+	_, rem := mapScalars(dirs)
+	if len(rem) != 1 || rem[0].template != "some/unknown/knob" {
+		t.Fatalf("unknown directive not in remainder: %#v", rem)
+	}
+}

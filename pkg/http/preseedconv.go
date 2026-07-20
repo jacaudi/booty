@@ -146,3 +146,125 @@ func marshalDebianConfig(o dcOutput, warnings []string) ([]byte, error) {
 	b.Write(body)
 	return b.Bytes(), nil
 }
+
+// mapScalars maps every non-disk directive it recognizes into a dcOutput and
+// returns the directives it did NOT consume (unknown lines + the whole disk
+// group + orphaned static fields) as remainder for later handling. Network
+// static fields are only mapped when the static markers are present; otherwise
+// they fall to remainder (the schema has no DHCP+custom-DNS shape).
+func mapScalars(dirs []preseedDirective) (dcOutput, []preseedDirective) {
+	var o dcOutput
+	var remainder []preseedDirective
+
+	// Partition network directives so static coherence can be judged as a unit.
+	staticMarkers := false
+	for _, d := range dirs {
+		if d.template == "netcfg/disable_autoconfig" && d.value == "true" || d.template == "netcfg/confirm_static" {
+			staticMarkers = true
+		}
+	}
+
+	ensureNet := func() *dcNetwork {
+		if o.Network == nil {
+			o.Network = &dcNetwork{}
+		}
+		return o.Network
+	}
+	ensureStatic := func() *dcStatic {
+		n := ensureNet()
+		if n.Static == nil {
+			n.Static = &dcStatic{}
+		}
+		return n.Static
+	}
+	ensureAcct := func() *dcAccounts {
+		if o.Accounts == nil {
+			o.Accounts = &dcAccounts{}
+		}
+		return o.Accounts
+	}
+	ensureUser := func() *dcUser {
+		a := ensureAcct()
+		if a.User == nil {
+			a.User = &dcUser{}
+		}
+		return a.User
+	}
+	ensureMirror := func() *dcMirror {
+		if o.Mirror == nil {
+			o.Mirror = &dcMirror{}
+		}
+		return o.Mirror
+	}
+
+	for _, d := range dirs {
+		if d.template == "" || isDiskDirective(d.template) {
+			remainder = append(remainder, d) // passthrough + disk group handled later
+			continue
+		}
+		switch d.template {
+		case "debian-installer/locale":
+			o.Locale = d.value
+		case "keyboard-configuration/xkb-keymap":
+			o.Keyboard = d.value
+		case "netcfg/get_hostname":
+			o.Hostname = d.value
+		case "netcfg/get_domain":
+			o.Domain = d.value
+		case "netcfg/choose_interface":
+			ensureNet().Interface = d.value
+		case "time/zone":
+			o.Timezone = d.value
+		case "mirror/http/hostname":
+			ensureMirror().Hostname = d.value
+		case "mirror/http/directory":
+			ensureMirror().Directory = d.value
+		case "mirror/http/proxy":
+			ensureMirror().Proxy = d.value
+		case "mirror/country":
+			// booty re-emits `manual` when a mirror block is present; consumed, no field.
+		case "passwd/root-password-crypted":
+			ensureAcct().RootPasswordHash = d.value
+		case "passwd/root-login", "passwd/make-user":
+			// booleans implied by the presence of the hashes/user; consumed, no field.
+		case "passwd/username":
+			ensureUser().Username = d.value
+		case "passwd/user-fullname":
+			ensureUser().Fullname = d.value
+		case "passwd/user-password-crypted":
+			ensureUser().PasswordHash = d.value
+		case "pkgsel/include":
+			o.Packages = strings.Fields(d.value)
+		case "preseed/late_command":
+			o.LateCommand = d.value
+		case "netcfg/disable_autoconfig", "netcfg/confirm_static":
+			// static markers; consumed only when we actually build a static block.
+			if !staticMarkers {
+				remainder = append(remainder, d)
+			}
+		case "netcfg/get_ipaddress", "netcfg/get_netmask", "netcfg/get_gateway", "netcfg/get_nameservers":
+			if !staticMarkers {
+				remainder = append(remainder, d) // orphaned: DHCP + custom DNS, no structured home
+				continue
+			}
+			s := ensureStatic()
+			switch d.template {
+			case "netcfg/get_ipaddress":
+				s.Address = d.value
+			case "netcfg/get_netmask":
+				s.Netmask = d.value
+			case "netcfg/get_gateway":
+				s.Gateway = d.value
+			case "netcfg/get_nameservers":
+				s.Nameservers = strings.Fields(d.value)
+			}
+		default:
+			remainder = append(remainder, d)
+		}
+	}
+	return o, remainder
+}
+
+// isDiskDirective is a temporary stub; Task 4 replaces it with the real
+// partman/mdadm/grub-installer membership test.
+func isDiskDirective(string) bool { return false }
