@@ -1,6 +1,7 @@
 package http
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -15,14 +16,27 @@ func TestFamilyAllowsKind(t *testing.T) {
 		{"ignition", "preseed", false},
 		{"machineconfig", "machineconfig", true},
 		{"machineconfig", "butane", false},
-		{"preseed", "preseed", true},      // raw preseed still allowed
-		{"preseed", "debianconfig", true}, // the only 1:many entry
+		{"preseed", "preseed", false},     // raw preseed retired, #59
+		{"preseed", "debianconfig", true}, // the only kind the preseed family accepts
 		{"preseed", "butane", false},
 		{"machineconfig", "debianconfig", false},
 	}
 	for _, c := range cases {
 		if got := familyAllowsKind(c.family, c.kind); got != c.want {
 			t.Errorf("familyAllowsKind(%q, %q) = %v, want %v", c.family, c.kind, got, c.want)
+		}
+	}
+}
+
+func TestAuthoringKindsForFamily(t *testing.T) {
+	cases := map[string][]string{
+		"ignition":      {"butane"},
+		"preseed":       {"debianconfig"},
+		"machineconfig": {"machineconfig"},
+	}
+	for fam, want := range cases {
+		if got := authoringKindsForFamily(fam); !slices.Equal(got, want) {
+			t.Fatalf("authoringKindsForFamily(%q) = %v, want %v", fam, got, want)
 		}
 	}
 }

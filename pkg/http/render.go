@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"text/template"
 
 	butaneConfig "github.com/coreos/butane/config"
@@ -28,18 +29,25 @@ type TemplateVars struct {
 	Schematic      string
 }
 
-// familyAllowsKind reports whether an authored config kind may serve a host of
-// the given family (family ConfigKind == serving mechanism). One contract, three
-// consumers; the preseed family is the only 1:many case.
-func familyAllowsKind(familyConfigKind, kind string) bool {
+// authoringKindsForFamily is the AUTHORITATIVE list of authored config kinds a
+// family accepts (family ConfigKind == serving mechanism). familyAllowsKind and
+// the /families API (api_catalog.go) both derive from this single source.
+func authoringKindsForFamily(familyConfigKind string) []string {
 	switch familyConfigKind {
 	case "ignition":
-		return kind == "butane" // author butane, serve ignition
+		return []string{"butane"} // author butane, serve ignition
 	case "preseed":
-		return kind == "preseed" || kind == "debianconfig"
+		return []string{"debianconfig"} // #59: raw preseed retired
 	default:
-		return kind == familyConfigKind // machineconfig, ...
+		return []string{familyConfigKind} // machineconfig, ...
 	}
+}
+
+// familyAllowsKind reports whether an authored config kind may serve a host of
+// the given family. Derived from authoringKindsForFamily so the mapping is
+// single-sourced across its call sites and the /families API.
+func familyAllowsKind(familyConfigKind, kind string) bool {
+	return slices.Contains(authoringKindsForFamily(familyConfigKind), kind)
 }
 
 // renderPreseedFile executes the operator-supplied server-default preseed FILE
