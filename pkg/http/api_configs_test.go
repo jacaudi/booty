@@ -63,7 +63,7 @@ func TestConfigCreateBadButaneIs422(t *testing.T) {
 func TestConfigPreviewStubVarValidation(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)
-	api.Post("/api/v1/configs", map[string]any{"name": "p", "kind": "preseed", "source": "host={{ .ServerIP }}"})
+	api.Post("/api/v1/configs", map[string]any{"name": "p", "kind": "debianconfig", "source": "raw_preseed: |\n  host={{ .ServerIP }}\n"})
 	// No mac = stub-var validation; returns rendered + report.
 	resp := api.Post("/api/v1/configs/1/preview", map[string]any{})
 	if resp.Code != 200 || !strings.Contains(resp.Body.String(), "host=") {
@@ -78,8 +78,8 @@ func TestConfigRollbackPointerMove(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 	viper.Set(config.ConfigRevisionsKeep, 10)
-	api.Post("/api/v1/configs", map[string]any{"name": "r", "kind": "preseed", "source": "v1"})
-	api.Put("/api/v1/configs/1", map[string]any{"source": "v2"})
+	api.Post("/api/v1/configs", map[string]any{"name": "r", "kind": "debianconfig", "source": "hostname: v1\n"})
+	api.Put("/api/v1/configs/1", map[string]any{"source": "hostname: v2\n"})
 	// Roll back to revision 1.
 	if resp := api.Post("/api/v1/configs/1/rollback", map[string]any{"revision": 1}); resp.Code != 200 {
 		t.Fatalf("rollback = %d: %s", resp.Code, resp.Body.String())
@@ -96,7 +96,7 @@ func TestConfigRollbackPointerMove(t *testing.T) {
 func TestConfigDeleteIs403(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)
-	api.Post("/api/v1/configs", map[string]any{"name": "d", "kind": "preseed", "source": "x"})
+	api.Post("/api/v1/configs", map[string]any{"name": "d", "kind": "debianconfig", "source": "{}\n"})
 	if resp := api.Delete("/api/v1/configs/1"); resp.Code != 403 {
 		t.Fatalf("delete = %d, want 403", resp.Code)
 	}
@@ -130,7 +130,7 @@ func TestConfigPreviewUsesPerKindVars(t *testing.T) {
 		t.Fatalf("create machineconfig config: %d %s", mcResp.Code, mcResp.Body.String())
 	}
 	psResp := api.Post("/api/v1/configs", map[string]any{
-		"name": "ps", "kind": "preseed", "source": "server={{ .ServerIP }}",
+		"name": "ps", "kind": "debianconfig", "source": "raw_preseed: |\n  server={{ .ServerIP }}\n",
 	})
 	if psResp.Code != 201 {
 		t.Fatalf("create preseed config: %d %s", psResp.Code, psResp.Body.String())
