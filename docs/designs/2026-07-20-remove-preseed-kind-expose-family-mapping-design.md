@@ -46,7 +46,7 @@ kind TEXT NOT NULL CHECK (kind IN ('butane','machineconfig','schematic','taloscl
 
 **Decision (chosen):** a **Go pre-flight in `migrate()`**, run before the migration loop, that produces a *helpful* abort:
 
-- Gate: only when `0009` is pending (`current < 9`) and the `configs` table exists (a fresh DB below `0001` has no such table).
+- Gate: only when `0009` is pending (`current < 9`) **and** the `configs` table exists. The table-existence probe is required, not optional: on a fresh DB the pre-flight fires with `current = 0 < 9` *before* `0003` creates `configs`, so a bare `SELECT … FROM configs` would error `no such table`. Probe first with `SELECT 1 FROM sqlite_master WHERE type='table' AND name='configs'` and skip the check when it returns no row.
 - Query `SELECT id, name FROM configs WHERE kind = 'preseed'`.
 - If any rows: return an error that names `booty convert-preseed` and lists the offending config IDs/names, e.g.:
   `startup blocked: N config(s) use the removed 'preseed' kind [id=3 "web-node", id=7 "db-node"]; convert each with 'booty convert-preseed', re-create it as a debianconfig and rebind, then upgrade`
@@ -77,7 +77,7 @@ Extract a small private helper in `pkg/http`:
 func renderPreseedFile(source []byte, vars TemplateVars) ([]byte, error) { … }
 ```
 
-`preseed.go`'s rung-4 block calls `renderPreseedFile` instead of `renderConfig("preseed", …)`. Behavior is byte-identical (template-execute → `text/plain`); the `--preseedFile` flag and unbound-host serving are unchanged. `--preseedFile` is intentionally **not** retired — that would be a larger behavior change than #59 asks for.
+`preseed.go`'s rung-4 block calls `renderPreseedFile` instead of `renderConfig("preseed", …)`. The current caller consumes `ct` from `renderConfig` and does `w.Header().Set("Content-Type", ct)`; since `renderPreseedFile` returns no content-type, the caller **hardcodes `"text/plain"`** — behavior-identical (the removed `preseed` arm always returned exactly that), and intentional, not an oversight. `withDVDMirror`, `preseedVars(store, host)` (nil-host-safe), and the template-execute path are all preserved unchanged. The `--preseedFile` flag and unbound-host serving are unchanged; `--preseedFile` is intentionally **not** retired — that would be a larger behavior change than #59 asks for.
 
 ### A4 — `familyAllowsKind` preseed arm
 
@@ -92,7 +92,11 @@ The `preseed` arm becomes `debianconfig`-only. This lands as part of B1's refact
 Reword now-stale `preseed`-family references so they describe the single-kind reality:
 - `preseed.go:21-35` (handler doc + the `familyAllowsKind("preseed", kind)` dispatch comment — the family is no longer 1:many).
 - `validateConfigSource` default-arm comment (`api_configs.go:345`) and `previewVars` (`api_configs.go:409`) — drop `preseed` from the "renderable kinds" enumerations.
-- Any surviving docs/README references to authoring a raw `preseed`.
+- `pkg/db/configs.go:14` — the struct comment `// Kind string // 'butane' | 'machineconfig' | 'preseed'` is stale; drop `preseed` (or replace with the current full set).
+- `docs/CONFIGURATION.md` — `:114` (kind dialect list `butane | machineconfig | preseed`), `:240-248` ("Raw `preseed` configs remain fully supported"), and the `:40`/`:94`/`:107` `--preseedFile` mentions. The `--preseedFile` rung-4 *fallback* stays (A3), but the doc must stop presenting raw `preseed` as an authorable **config kind** and clarify the file default is now the only raw-preseed surface.
+- Any other surviving docs/README references to authoring a raw `preseed`.
+
+Note: `pkg/ostype` (`ostype.go:61`, `debian_test.go:12`, `ostype_test.go:12`) retains `ConfigKind: "preseed"` — that is the family/**serving-mechanism** name, NOT the config kind being removed. It is correct and must stay untouched; `authoringKindsForFamily`'s `case "preseed"` (B1) keys off exactly this retained family name.
 
 ### Phase A test coverage
 
@@ -164,16 +168,30 @@ The existing `list-families` handler populates it via `authoringKindsForFamily(f
 
 So #61 retires the **mapping** duplication; it does **not** flatten the presentation layer. The create-picker's *labels and grouping* remain UI copy while its *kind values* become API-derived.
 
+**Vocabulary gap — the `coreos` boot-name alias must be preserved (do not let it vanish).** `HOST_OS_KINDS` today keys on booty's *boot* vocabulary and includes `coreos` (`configKinds.ts:92`, `coreos: ['butane']`) because a booted CoreOS host has `host.OS == "coreos"`. But `/os` and `/families` emit the *canonical* ostype names (`flatcar`, `fedora-coreos`, `talos`, `debian`) — the `CacheNameToCanonical` bridge that reconciles `coreos → fedora-coreos` lives **server-side only** (`resolve.go:90`). A naive "host OS → `/os` family → `authoringKinds`" derivation therefore has **no entry for `coreos`**, silently degrading `kindsForHostOS("coreos")` from today's precise `['butane']` to the permissive full union. This "fails safe" (union + a loud 422 on a wrong bind) but is a real fidelity regression for exactly the mapping #61 sets out to preserve. **Resolution:** the frontend keeps a tiny declared `coreos → fedora-coreos` alias as UI vocabulary — the same class of frontend-owned boot-name knowledge as the `flatcar`+`fedora-coreos` grouping it already keeps — and maps `host.OS` through it before the API lookup. (The alternative — teaching `/os` to emit the boot-vocabulary alias — pushes UI vocabulary into the server contract and is not preferred.)
+
+**Dead `preseed` presentation entries to remove.** Post-#59 no `preseed`-kind rows can exist (the migration blocks upgrade while any remain), so these become unreachable and are dropped: the `'preseed'` member of `BOOT_CONFIG_KINDS` (`configKinds.ts:26`), `HOST_OS_KINDS.debian`'s `'preseed'` (`:89` → `['debianconfig']`), and `KIND_OS_NAMES.preseed` (`:67`). The existing web tests assert the old shape and are updated with the code: `configKinds.test.ts:15` (`BOOT_CONFIG_KINDS` no longer contains `preseed`), `:27`/`:46` (`isBootConfigKind('preseed')`), `:65` (`kindsForHostOS('debian')` → `['debianconfig']`), and `:53` (`osNameForKind('preseed')`) — the last needs a keep-as-legacy-fallback-vs-delete decision made explicit when the plan lands (recommend delete, since the value is now unreachable).
+
 **One real consequence:** `configKinds.ts` moves from static/synchronous to depending on a fetch (a loader/query for `/os` + `/families`). This is a contained frontend change; the create picker and bind Selects gain an async data dependency. Existing fail-safe behavior is preserved — while the fetch is pending or on a miss, the UI can fall back to offering the full union (as `kindsForHostOS` does today for unknown OSes).
 
 **Post-#59 the mapping is 1:1 per family**, so OS → single authoring kind is unambiguous for the picker. If a family ever accepts >1 authoring kind again, the picker would need a disambiguation rule — a latent constraint, explicitly **not** built now (YAGNI).
 
 ### Phase B test coverage
 
-- Go: `authoringKindsForFamily` returns the expected list per family; `familyAllowsKind` behavior is unchanged for every `(family, kind)` pair it's called with today (table test covering the 4 call-site families). `/families` response includes `authoringKinds` matching the guard.
+- Go: `authoringKindsForFamily` returns the expected list per family; `familyAllowsKind` is unchanged for every production call-site pair, with the single **intended** exception that `("preseed","preseed")` tightens `true → false` (A4/#59). The existing `render_test.go:18` assertion (`{"preseed","preseed",true}`) is updated to `false` to record that tightening.  `/families` response includes `authoringKinds` matching the guard.
 - Web: `configKinds` derivation maps a `/os` + `/families` fixture to the correct `BOOT_CONFIG_KINDS`, bind-compat sets, and picker options; the duplicated static tables are gone; pending/miss falls back to the union. `tsc` clean.
 
 ---
+
+## Existing tests and fixtures to update (not just net-new coverage)
+
+Removing the kind breaks fixtures across Go and web suites that currently create or assert `preseed`. The plan must treat these as first-class tasks — an implementer that only adds new tests will hit red suites:
+
+- `pkg/db/migrate_test.go:333-357` — seeds `INSERT INTO configs … kind 'preseed'` at `user_version=5`, then `Open()` applies through `0009`. Once `0009` + the pre-flight exist, that `Open()` now **aborts** on the seeded row. Rework this test to assert the *new* behavior (pre-flight blocks with the converter-naming error), and add a companion that seeds only `debianconfig` and verifies clean migration.
+- `pkg/http/render_test.go` — `:18` (`{"preseed","preseed",true}` → `false`, per B1), and `:69`/`:99` which call `renderConfig("preseed", …)` directly (the arm is gone → now the unknown-kind error). Move the render-success (`:69`) and bad-template (`:99`) intents onto `renderPreseedFile`.
+- `pkg/http/serving_test.go:160`, `pkg/http/preseed_test.go:76,144` — `CreateConfig(…, "preseed")` fixtures; the `0009` CHECK rejects them. Migrate to `debianconfig` (keeping the bound-vs-unbound / DVD-mirror intents these tests exercise).
+- `pkg/http/api_configs_test.go:66,81,99,133` — POST `kind:"preseed"` fixtures; the huma enum (A5) now 422s them. Migrate to `debianconfig`, and add one test asserting `kind:"preseed"` is rejected by the enum.
+- `web/src/api/configKinds.test.ts:15,27,46,53,65` — assert the pre-removal shape; updated alongside B3 (see the "Dead `preseed` presentation entries" list above).
 
 ## What this design deliberately does NOT do (YAGNI)
 
