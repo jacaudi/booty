@@ -74,31 +74,7 @@ const OS_CHOICE_OS_NAME: Record<string, string> = {
 // same class of UI vocabulary as the flatcar/fedora-coreos label grouping).
 const OS_ALIAS: Record<string, string> = { coreos: 'fedora-coreos' }
 
-// ---------------------------------------------------------------------------
-// BRIDGE for Task 10 (#61): BootConfigsView.tsx:72,262 and HostsView.tsx:89
-// still call `kindForOS`/`kindsForHostOS` with one argument. Once those views
-// are rewired to load `FamilyKinds` and pass `data`, delete the `data`-less
-// branches below along with LEGACY_OS_CHOICE_KIND and LEGACY_HOST_OS_KINDS,
-// and make `data` a required parameter.
-// ---------------------------------------------------------------------------
-
-const LEGACY_OS_CHOICE_KIND: Record<string, string> = {
-  'flatcar-fcos': 'butane',
-  talos: 'machineconfig',
-  debian: 'debianconfig',
-}
-
-const LEGACY_HOST_OS_KINDS: Record<string, readonly string[]> = {
-  talos: ['machineconfig'],
-  debian: ['debianconfig'],
-  flatcar: ['butane'],
-  'fedora-coreos': ['butane'],
-}
-
-const LEGACY_BOOT_CONFIG_KINDS = ['butane', 'machineconfig', 'debianconfig'] as const
-
-export function kindForOS(os: string, data?: FamilyKinds): string | undefined {
-  if (!data) return LEGACY_OS_CHOICE_KIND[os] // BRIDGE — see note above
+export function kindForOS(os: string, data: FamilyKinds): string | undefined {
   return data.osFamily[OS_CHOICE_OS_NAME[os] ?? os]?.[0]
 }
 
@@ -106,13 +82,7 @@ export function kindForOS(os: string, data?: FamilyKinds): string | undefined {
 // absent OS: a host that has not booted yet has no OS, and hiding every option
 // would be a worse failure than offering one the server rejects loudly (422 on
 // bind).
-export function kindsForHostOS(os: string | undefined, data?: FamilyKinds): string[] {
-  if (!data) {
-    // BRIDGE — see note above.
-    if (!os) return [...LEGACY_BOOT_CONFIG_KINDS]
-    const canonical = OS_ALIAS[os] ?? os
-    return [...(LEGACY_HOST_OS_KINDS[canonical] ?? LEGACY_BOOT_CONFIG_KINDS)]
-  }
+export function kindsForHostOS(os: string | undefined, data: FamilyKinds): string[] {
   if (!os) return data.bootConfigKinds
   const canonical = OS_ALIAS[os] ?? os
   return data.osFamily[canonical] ?? data.bootConfigKinds

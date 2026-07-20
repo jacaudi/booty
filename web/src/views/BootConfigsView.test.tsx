@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { message } from 'antd'
@@ -6,9 +6,18 @@ import BootConfigsView from './BootConfigsView'
 import * as configsApi from '../api/configs'
 import type { Config } from '../api/configs'
 import * as rolesApi from '../api/roles'
+import { loadFamilyKinds } from '../api/catalog'
 
 vi.mock('../api/configs')
 vi.mock('../api/roles')
+vi.mock('../api/catalog')
+
+beforeEach(() => {
+  vi.mocked(loadFamilyKinds).mockResolvedValue({
+    bootConfigKinds: ['butane', 'machineconfig', 'debianconfig'],
+    osFamily: { talos: ['machineconfig'], debian: ['debianconfig'], flatcar: ['butane'], 'fedora-coreos': ['butane'] },
+  })
+})
 
 afterEach(() => vi.resetAllMocks())
 
