@@ -342,7 +342,7 @@ func validateConfigSource(ctx context.Context, kind, source string) (*string, er
 			return nil, huma.Error422UnprocessableEntity("taloscluster spec validation failed: "+err.Error(), err)
 		}
 		return nil, nil
-	default: // renderable kinds: butane | machineconfig | preseed | debianconfig
+	default: // renderable kinds: butane | machineconfig | debianconfig
 		if _, _, report, err := renderConfig(kind, []byte(source), stubVars()); err != nil {
 			return nil, huma.Error422UnprocessableEntity("config validation failed: "+report, err)
 		}
@@ -399,14 +399,15 @@ func stubVars() TemplateVars {
 
 // previewVars populates render vars from a real host for preview, DISPATCHED
 // BY THE CONFIG'S KIND (not the host's OS) so preview uses the same vars the
-// boot path would use for that kind: butane/preseed get the ignition-family
-// vars (host:port .ServerIP); machineconfig gets the machineconfig-family vars
-// (host-only .ServerIP + .ServerHTTPPort, .Schematic, .TalosVersion, .Roles).
+// boot path would use for that kind: butane/debianconfig get the
+// ignition-family vars (host:port .ServerIP); machineconfig gets the
+// machineconfig-family vars (host-only .ServerIP + .ServerHTTPPort,
+// .Schematic, .TalosVersion, .Roles).
 func previewVars(store *db.Store, host *hardware.Host, kind string) TemplateVars {
 	switch kind {
 	case "machineconfig":
 		return machineConfigPreviewVars(store, host)
-	default: // "butane", "preseed"
+	default: // "butane", "debianconfig"
 		return ignitionVars(store, host)
 	}
 }

@@ -19,8 +19,9 @@ import (
 )
 
 // handlePreseedRequest serves a Debian preseed: a DB-resolved config (rungs
-// 1–2, kind preseed OR debianconfig — both render to a flat preseed) when the
-// host is bound, else the --preseedFile server default (rung 4).
+// 1–2, kind debianconfig — the only authorable Debian kind, #59) when the
+// host is bound, else the --preseedFile server default (rung 4, served
+// verbatim via renderPreseedFile — a raw d-i template, not an authored kind).
 // Debian has no legacy per-host file column, so rung 3 does not apply.
 func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -28,10 +29,10 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 		host := identifyHost(r)
 
 		if host != nil {
-			// The preseed family is 1:many (design §7): raw `preseed` and curated
-			// `debianconfig` both render to a flat preseed body. Dispatch renderConfig
-			// on the RESOLVED kind (M2) — the guard and the family contract are
-			// single-sourced in familyAllowsKind.
+			// The debian family authors `debianconfig` only (#59: raw `preseed` as
+			// an authorable kind was retired). Dispatch renderConfig on the RESOLVED
+			// kind (M2) — the guard and the family contract are single-sourced in
+			// familyAllowsKind / authoringKindsForFamily.
 			if src, kind, ok := resolveConfig(store, host); ok && familyAllowsKind("preseed", kind) {
 				vars := preseedVars(store, host)
 				out, ct, _, err := renderConfig(kind, src, vars)
