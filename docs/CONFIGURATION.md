@@ -112,8 +112,10 @@ unchanged. A host with no DB binding and no legacy override boots byte-identical
 see [schema/STORAGE.md](schema/STORAGE.md).
 
 A config's `kind` (`butane` \| `machineconfig` \| `debianconfig` — the dialect an operator authors) must
-match the host's OS family via `configKindForFamily`; only the ignition family differs (`ignition`
-family → `butane` kind, since Ignition is Butane's compiled wire format). See
+be one the host's OS family accepts — enforced by `familyAllowsKind` (derived from the single-source
+`authoringKindsForFamily`). Most families author the kind of their own name; the exceptions are the
+`ignition` family (→ `butane` kind, since Ignition is Butane's compiled wire format) and the Debian
+(`preseed`) family (→ `debianconfig` kind). See
 [schema/DATABASE.md](schema/DATABASE.md#configs) for the enum and its relationship to family
 `ConfigKind`.
 

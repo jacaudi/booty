@@ -289,8 +289,9 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 | `DELETE` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
 
 > **Family-match validation (P4).** Both `approve` and `bind` validate a present `configId` against
-> the host's OS family before writing it: the config's `kind` must equal
-> `configKindForFamily(family.ConfigKind)` for the host's `os` (e.g. a `flatcar` host requires a
+> the host's OS family before writing it: the config's `kind` must be one the family accepts —
+> `familyAllowsKind(family.ConfigKind, config.kind)` (the family's authored kinds come from the
+> single-source `authoringKindsForFamily`) for the host's `os` (e.g. a `flatcar` host requires a
 > `butane`-kind config). A mismatch — or an unresolvable OS family — returns `422`. Each `roleIds`
 > entry must reference an existing role or the call fails the same way. **All validation (config
 > family-match, every `roleIds` entry) runs before either binding is written**, so a validation
