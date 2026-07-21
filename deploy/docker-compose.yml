@@ -20,10 +20,10 @@ services:
                                              # to start against a loopback/unspecified/unparsable address
       - --proxyDHCPEnabled=true             # answer PXEClient DHCP requests alongside your router's existing DHCP server
                                              # (assigns no leases, so it coexists safely)
-      - --catalogFile=/data/catalog.yaml    # optional: copy deploy/catalog.yaml here to customize cached OS targets;
-                                             # if absent, booty falls back to <dataDir>/catalog.yaml, then its embedded
-                                             # defaults (Flatcar stable+lts, Talos, Debian 13 netinst) — real OS channels
-                                             # stay ON so images are cached and ready to boot
+                                             # Catalog is optional: copy deploy/catalog.yaml into the booty-data volume
+                                             # as /data/catalog.yaml to customize cached OS targets; if absent, booty
+                                             # falls back to its embedded defaults (Flatcar stable+lts, Talos, Debian 13
+                                             # netinst) — real OS channels stay ON so images are cached and ready to boot
       # - --flatcarChannel=stable            # uncomment to override the default Flatcar channel used by the embedded catalog
       # - --coreOSChannel=stable              # uncomment to override the default Fedora CoreOS channel
       # - --talosFactoryURL=https://factory.talos.dev  # uncomment to point at a private Talos Image Factory
