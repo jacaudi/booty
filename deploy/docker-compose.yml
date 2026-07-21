@@ -1,0 +1,32 @@
+# booty — network-boot management plane. Run this on a host on the SAME L2
+# segment as your PXE clients: host networking is required so proxyDHCP can
+# see broadcast DHCP traffic and TFTP/HTTP are reachable at the host's LAN IP.
+#
+# See deploy/README.md for prerequisites, port list, and the trusted-LAN
+# security posture (there is no authentication yet).
+services:
+  booty:
+    image: ghcr.io/jacaudi/booty:latest   # private image — `docker login ghcr.io` first
+    # build: ..                            # uncomment (and comment out `image:`) to build locally instead of pulling
+    container_name: booty
+    restart: unless-stopped               # only crash-recovery mechanism — no container healthcheck (see README follow-up)
+    network_mode: host                    # PXE/proxyDHCP/TFTP need host networking + LAN broadcast; no `ports:` under host mode
+    volumes:
+      - booty-data:/data                  # SQLite DB + cached OS images/artifacts (persistent across restarts/upgrades)
+    command:
+      - --dataDir=/data
+      - --httpPort=8080                     # management UI (/ui/), API, and boot-artifact serving
+      - --serverIP=REPLACE_WITH_NAS_LAN_IP  # REQUIRED: this host's real LAN IP (e.g. 192.168.1.10) — proxyDHCP refuses
+                                             # to start against a loopback/unspecified/unparsable address
+      - --proxyDHCPEnabled=true             # answer PXEClient DHCP requests alongside your router's existing DHCP server
+                                             # (assigns no leases, so it coexists safely)
+                                             # Catalog is optional: copy deploy/catalog.yaml into the booty-data volume
+                                             # as /data/catalog.yaml to customize cached OS targets; if absent, booty
+                                             # falls back to its embedded defaults (Flatcar stable+lts, Talos, Debian 13
+                                             # netinst) — real OS channels stay ON so images are cached and ready to boot
+      # - --flatcarChannel=stable            # uncomment to override the default Flatcar channel used by the embedded catalog
+      # - --coreOSChannel=stable              # uncomment to override the default Fedora CoreOS channel
+      # - --talosFactoryURL=https://factory.talos.dev  # uncomment to point at a private Talos Image Factory
+      # - --signaturePolicy=warn              # warn (default): block tampering, log other verify failures; strict/off also available
+volumes:
+  booty-data:

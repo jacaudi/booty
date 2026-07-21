@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, AutoComplete, Badge, Button, Form, Modal, Select, Space, Tabs, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import type { Host } from '../api/types'
+import { isPending, type Host } from '../api/types'
 import { approveHostWith, bindSchematic, listHosts, revokeHost, setMenuMode } from '../api/client'
 import type { Config } from '../api/configs'
 import { listConfigs } from '../api/configs'
@@ -84,8 +84,8 @@ export default function HostsView() {
     setAllowing(null)
   }
 
-  const pending = hosts.filter((h) => !h.approved)
-  const approved = hosts.filter((h) => h.approved)
+  const pending = hosts.filter(isPending)
+  const approved = hosts.filter((h) => !isPending(h))
 
   // Only kinds THIS HOST's OS family admits. familyAllowsKind is per-family
   // (render.go:34-43): a butane config on a Talos host is as silently useless
