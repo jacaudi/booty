@@ -1,0 +1,92 @@
+# Optional declarative cache-target catalog for booty.
+#
+# This file is NOT required: if `--catalogFile` is unset and no catalog.yaml
+# exists at <dataDir>/catalog.yaml, booty falls back to a flag-derived default
+# set (Flatcar stable+lts, Talos, Debian 13 netinst enabled + Debian 12/11 dvd
+# seeded-but-disabled) equivalent to what's shown below. Copy this file to
+# <dataDir>/catalog.yaml (or point --catalogFile at it) to customize which OS
+# targets booty discovers, caches, and serves for PXE boot.
+#
+# Schema (see pkg/cache/catalog.go for the authoritative validation):
+#   schemaVersion: 1              # required; the only version this build accepts
+#   catalog:                      # list of cache targets
+#     - os: <string>              # one of: flatcar, fedora-coreos, talos, debian
+#       arch: <string>            # must be in the OS's supported arch set:
+#                                  #   flatcar/talos: amd64, arm64
+#                                  #   fedora-coreos: x86_64
+#                                  #   debian: amd64, arm64
+#       enabled: <bool>            # optional, default true — whether the reconciler
+#                                   # actively discovers/caches this target
+#       retain: <int>               # optional, default 1 — how many newest versions
+#                                    # to keep cached (older ones are evicted)
+#       spec:                       # OS-specific path-discriminating params (all
+#                                    # required keys for the OS must be present):
+#                                    #   flatcar/fedora-coreos: channel (e.g. stable, beta, lts)
+#                                    #   talos: schematic (Talos Image Factory schematic ID)
+#                                    #   debian: channel (one of "11", "12", "13")
+#       sourceMode: <string>         # debian only, optional: "" or "netinst" (default) | "dvd"
+#       dvdCount: <int>              # debian dvd only, optional: number of DVD images to mirror
+#                                    # (dvd sourceMode is amd64-only — Debian ships no arm64 DVD ISOs)
+schemaVersion: 1
+catalog:
+  # Flatcar: primary channel (driven by --flatcarChannel, default "stable") plus
+  # the LTS channel, both amd64 (driven by --flatcarArchitecture).
+  - os: flatcar
+    arch: amd64
+    retain: 1
+    spec:
+      channel: stable
+  - os: flatcar
+    arch: amd64
+    retain: 1
+    spec:
+      channel: lts
+
+  # Talos: schematic driven by --talosSchematic (default is the vanilla Talos
+  # Image Factory schematic); retain follows --talosRetainMinors (default 3).
+  - os: talos
+    arch: amd64
+    retain: 3
+    spec:
+      schematic: "376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba"
+
+  # Debian 13 (trixie) netinst, both arches, enabled by default.
+  - os: debian
+    arch: amd64
+    enabled: true
+    retain: 1
+    spec:
+      channel: "13"
+  - os: debian
+    arch: arm64
+    enabled: true
+    retain: 1
+    spec:
+      channel: "13"
+
+  # Debian 12/11 dvd images are seeded but DISABLED by default (a full DVD set
+  # is ~44 GB). Set enabled: true here to opt in. dvd sourceMode is amd64-only.
+  - os: debian
+    arch: amd64
+    enabled: false
+    retain: 1
+    spec:
+      channel: "12"
+    sourceMode: dvd
+    dvdCount: 1
+  - os: debian
+    arch: amd64
+    enabled: false
+    retain: 1
+    spec:
+      channel: "11"
+    sourceMode: dvd
+    dvdCount: 1
+
+  # Fedora CoreOS is NOT in booty's embedded default — add it explicitly here
+  # if you want it cached (channel driven by --coreOSChannel, default "stable").
+  # - os: fedora-coreos
+  #   arch: x86_64
+  #   retain: 1
+  #   spec:
+  #     channel: stable
