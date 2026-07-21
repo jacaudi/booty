@@ -322,4 +322,60 @@ describe('BootConfigsView', () => {
     await screen.findByDisplayValue('cp')
     expect(document.querySelector('.ant-select-clear')).not.toBeInTheDocument()
   })
+
+  // validateFields() REJECTS on invalid input; a Modal onOk that awaits it
+  // without catching leaks an unhandled promise rejection, which fails the
+  // vitest CI run even when the "not called" assertion below passes.
+  it('Create Config will not submit while required fields are empty', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(configsApi.createConfig).mockResolvedValue(undefined)
+    render(<BootConfigsView />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Config' }))
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(configsApi.createConfig).not.toHaveBeenCalled())
+  })
+
+  it('Edit Config will not submit when the source is cleared', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 7, name: 'edit-me', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    ])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(configsApi.getConfig).mockResolvedValue({
+      id: 7, name: 'edit-me', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '', source: 'EXISTING SOURCE CONTENT',
+    })
+    vi.mocked(configsApi.updateConfig).mockResolvedValue(undefined)
+    render(<BootConfigsView />)
+    await waitFor(() => screen.getByText('edit-me'))
+    await userEvent.click(screen.getByRole('button', { name: /edit/i }))
+    await userEvent.clear(await screen.findByDisplayValue('EXISTING SOURCE CONTENT'))
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(configsApi.updateConfig).not.toHaveBeenCalled())
+  })
+
+  it('Create Role will not submit while the name is empty', async () => {
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(rolesApi.createRole).mockResolvedValue(undefined)
+    render(<BootConfigsView />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Roles' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Role' }))
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(rolesApi.createRole).not.toHaveBeenCalled())
+  })
+
+  it('Edit Role will not submit when the name is cleared', async () => {
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([{ id: 1, name: 'cp', defaultConfigId: 7, hostCount: 0 }])
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([
+      { id: 7, name: 'web', kind: 'butane', activeRevision: 1, revisionCount: 1, updatedAt: '' },
+    ])
+    vi.mocked(rolesApi.updateRole).mockResolvedValue(undefined)
+    render(<BootConfigsView />)
+    await userEvent.click(screen.getByRole('tab', { name: 'Roles' }))
+    await screen.findByText('cp')
+    await userEvent.click(screen.getByRole('button', { name: /edit/i }))
+    await userEvent.clear(await screen.findByDisplayValue('cp'))
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(rolesApi.updateRole).not.toHaveBeenCalled())
+  })
 })

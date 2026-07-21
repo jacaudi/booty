@@ -51,7 +51,11 @@ describe('CacheView', () => {
     ])
     render(<CacheView />)
     await waitFor(() => expect(screen.getByText('talos/talos')).toBeInTheDocument())
-    expect(screen.getByText('v1.9.0')).toBeInTheDocument()
+    // The version rows live in a Collapse panel body that mounts one render pass
+    // AFTER the panel header — activeKeys is seeded by an effect on [groups], so
+    // the header renders collapsed for a beat. Await the first row instead of
+    // reading it synchronously, or this races the expand under load.
+    expect(await screen.findByText('v1.9.0')).toBeInTheDocument()
     expect(screen.getByText('v1.8.0')).toBeInTheDocument()
   })
 
@@ -82,7 +86,9 @@ describe('CacheView', () => {
     ])
     render(<CacheView />)
     await waitFor(() => screen.getByText('talos/talos'))
-    expect(screen.getByText('amd64')).toBeInTheDocument()
+    // Await the panel-body row (see "groups versions" test): it mounts a render
+    // pass after the header, so a synchronous read races the Collapse expand.
+    expect(await screen.findByText('amd64')).toBeInTheDocument()
     expect(screen.getByText('arm64')).toBeInTheDocument()
   })
 
@@ -411,6 +417,8 @@ describe('CacheView', () => {
     vi.mocked(configsApi.listConfigs).mockRejectedValue(new Error('boom'))
     render(<CacheView />)
     expect(await screen.findByText('talos · 9f21ab…7c40')).toBeInTheDocument()
-    expect(screen.getByText('v1.8.0')).toBeInTheDocument()
+    // Await the panel-body row (see "groups versions" test): it mounts a render
+    // pass after the header, so a synchronous read races the Collapse expand.
+    expect(await screen.findByText('v1.8.0')).toBeInTheDocument()
   })
 })

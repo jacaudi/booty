@@ -36,7 +36,11 @@ export default function ClustersView() {
   useEffect(() => { void load() }, [])
 
   const submitCreate = async () => {
-    const v = await createForm.validateFields()
+    // validateFields() REJECTS on invalid input; catch it to an early return so
+    // incomplete inputs surface inline errors instead of leaking an unhandled
+    // promise rejection (which fails the vitest CI run even when assertions pass).
+    const v = await createForm.validateFields().catch(() => undefined)
+    if (!v) return
     try {
       await createCluster(v)
       message.success(`Created ${v.name}`)
@@ -92,7 +96,10 @@ export default function ClustersView() {
 
   const submitEdit = async () => {
     if (!editing) return
-    const v = await editForm.validateFields()
+    // See submitCreate: guard the rejection so a cleared required field can't
+    // leak an unhandled rejection into the vitest CI run.
+    const v = await editForm.validateFields().catch(() => undefined)
+    if (!v) return
     setSaving(true)
     try {
       // A Talos-version bump ensures + pins every member's cache targets BEFORE
