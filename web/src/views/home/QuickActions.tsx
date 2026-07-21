@@ -3,7 +3,7 @@ import { Button, Card, Space } from 'antd'
 
 export default function QuickActions() {
   return (
-    <Card size="small" title="Quick actions">
+    <Card size="small" title="Quick actions" style={{ width: '100%' }}>
       <Space wrap>
         <Link to="/hosts"><Button>Approve hosts</Button></Link>
         <Link to="/images"><Button>OS Images</Button></Link>

@@ -6,7 +6,7 @@ export default function SystemStatus() {
   const [health, setHealth] = useState<Health>()
   useEffect(() => { checkHealth().then(setHealth) }, [])
   return (
-    <Card size="small" title="System">
+    <Card size="small" title="System" style={{ width: '100%' }}>
       {health === undefined ? (
         <Badge status="processing" text="Checking…" />
       ) : health.ok ? (

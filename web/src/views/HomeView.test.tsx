@@ -21,15 +21,28 @@ const seedEmpty = () => {
 
 describe('HomeView', () => {
   beforeEach(seedEmpty)
-  it('renders the dashboard heading and stat tiles', async () => {
+
+  it('renders the dashboard heading and stat tiles when data exists', async () => {
     vi.mocked(client.listHosts).mockResolvedValue([{ mac: 'a', hostname: 'h', ip: '', approved: true }] as never)
     render(<MemoryRouter><HomeView /></MemoryRouter>)
     expect(screen.getByRole('heading', { name: /booty/i })).toBeInTheDocument()
     expect(await screen.findByText('Hosts')).toBeInTheDocument()
   })
+
   it('shows a getting-started card on a fresh install (all zero)', async () => {
     render(<MemoryRouter><HomeView /></MemoryRouter>)
     expect(await screen.findByText(/get started/i)).toBeInTheDocument()
     expect(await screen.findByRole('link', { name: /approve your first host/i })).toHaveAttribute('href', '/hosts')
+  })
+
+  it('surfaces a pending host (approved omitted) in the Needs attention panel', async () => {
+    // Real API contract: an unapproved host omits `approved`. This is the
+    // end-to-end case the mocked-`approved:false` tests could not catch.
+    vi.mocked(client.listHosts).mockResolvedValue([{ mac: 'aa', hostname: 'unbooted', ip: '' }] as never)
+    render(<MemoryRouter><HomeView /></MemoryRouter>)
+    expect(await screen.findByText(/needs attention/i)).toBeInTheDocument()
+    expect(await screen.findByText('unbooted')).toBeInTheDocument()
+    // exact name: QuickActions also has an "Approve hosts" button
+    expect(await screen.findByRole('button', { name: 'Approve' })).toBeInTheDocument()
   })
 })

@@ -73,6 +73,14 @@ export interface CacheSummary {
   nothingEvictable: boolean
 }
 
+// Single source of truth for "how many cached images failed verification".
+// A cache entry is failed iff verify ran and reported false; `undefined`/`null`
+// (never verified) is NOT a failure. Reads only `verified`, so it is safe on
+// partial entries (unlike summarize(), which also dereferences `state`).
+export function failedCount(entries: CacheEntry[]): number {
+  return entries.filter((e) => e.verified === false).length
+}
+
 export function summarize(entries: CacheEntry[]): CacheSummary {
   const evictable = entries.filter((e) => e.state.startsWith('archived') && !e.pinned)
   return {
@@ -80,7 +88,7 @@ export function summarize(entries: CacheEntry[]): CacheSummary {
     inCycle: entries.filter((e) => e.state.startsWith('in-cycle')).length,
     archived: entries.filter((e) => e.state.startsWith('archived')).length,
     pinned: entries.filter((e) => e.pinned).length,
-    failed: entries.filter((e) => e.verified === false).length,
+    failed: failedCount(entries),
     nothingEvictable: evictable.length === 0,
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CacheEntry } from './cache'
-import { applyClientFilters, channelOf, groupEntries, humanSize, labelGroup, summarize } from './cacheModel'
+import { applyClientFilters, channelOf, failedCount, groupEntries, humanSize, labelGroup, summarize } from './cacheModel'
 
 const e = (o: Partial<CacheEntry>): CacheEntry => ({
   id: 1, os: 'talos', arch: 'amd64', version: 'v1.0.0', size: 1024,
@@ -44,6 +44,16 @@ describe('cacheModel', () => {
     expect(s.failed).toBe(1)
     // entry 2 is archived && !pinned -> evictable exists -> not nothing-evictable
     expect(s.nothingEvictable).toBe(false)
+  })
+
+  it('failedCount counts only verified===false; undefined/null are not failures and it never touches state', () => {
+    // No `state` on these entries: failedCount must not throw (unlike summarize).
+    expect(failedCount([
+      { id: 1, verified: false } as CacheEntry,
+      { id: 2, verified: true } as CacheEntry,
+      { id: 3 } as CacheEntry,
+      { id: 4, verified: null } as unknown as CacheEntry,
+    ])).toBe(1)
   })
 
   it('nothingEvictable is true when every archived entry is pinned', () => {
