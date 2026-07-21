@@ -68,8 +68,8 @@ export default function HomeView() {
             </Col>
             <Col xs={24} lg={8}>
               <Space direction="vertical" size="large" style={{ width: '100%', display: 'flex' }}>
-                <SystemStatus />
                 <QuickActions />
+                <SystemStatus />
               </Space>
             </Col>
           </Row>
