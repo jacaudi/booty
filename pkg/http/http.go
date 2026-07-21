@@ -35,6 +35,7 @@ func StartHTTP(deps APIDeps) *http.Server {
 	myHandler.HandleFunc("/unregister", handleUnregistrationRequest)
 	myHandler.HandleFunc("/booty.json", handleDataRequest)
 	myHandler.HandleFunc("/info", handleInfoRequest)
+	myHandler.HandleFunc("/healthz", handleHealthz)
 	myHandler.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(viper.GetString(config.DataDir))))
 	uiFS, err := web.DistFS()
 	if err != nil {
