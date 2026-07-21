@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { message } from 'antd'
@@ -6,9 +6,18 @@ import BootConfigsView from './BootConfigsView'
 import * as configsApi from '../api/configs'
 import type { Config } from '../api/configs'
 import * as rolesApi from '../api/roles'
+import { loadFamilyKinds } from '../api/catalog'
 
 vi.mock('../api/configs')
 vi.mock('../api/roles')
+vi.mock('../api/catalog')
+
+beforeEach(() => {
+  vi.mocked(loadFamilyKinds).mockResolvedValue({
+    bootConfigKinds: ['butane', 'machineconfig', 'debianconfig'],
+    osFamily: { talos: ['machineconfig'], debian: ['debianconfig'], flatcar: ['butane'], 'fedora-coreos': ['butane'] },
+  })
+})
 
 afterEach(() => vi.resetAllMocks())
 
@@ -26,7 +35,7 @@ describe('BootConfigsView', () => {
 
   it('rollback calls rollbackConfig then reloads', async () => {
     vi.mocked(configsApi.listConfigs).mockResolvedValue([
-      { id: 5, name: 'c', kind: 'preseed', activeRevision: 2, revisionCount: 2, updatedAt: '' },
+      { id: 5, name: 'c', kind: 'debianconfig', activeRevision: 2, revisionCount: 2, updatedAt: '' },
     ])
     vi.mocked(rolesApi.listRoles).mockResolvedValue([])
     vi.mocked(configsApi.listRevisions).mockResolvedValue([
@@ -141,18 +150,15 @@ describe('BootConfigsView', () => {
       cfgRow({ id: 1, name: 'talos-node', kind: 'machineconfig' }),
       cfgRow({ id: 2, name: 'fc', kind: 'butane' }),
       cfgRow({ id: 3, name: 'deb', kind: 'debianconfig' }),
-      cfgRow({ id: 4, name: 'legacy', kind: 'preseed' }),
     ])
     vi.mocked(rolesApi.listRoles).mockResolvedValue([])
     render(<BootConfigsView />)
     await screen.findByText('talos-node')
     expect(screen.getByText('Talos Linux')).toBeInTheDocument()
     expect(screen.getByText('Flatcar / Fedora CoreOS')).toBeInTheDocument()
-    // A legacy raw preseed still lists, and still reads as Debian.
-    expect(screen.getAllByText('Debian')).toHaveLength(2)
+    expect(screen.getByText('Debian')).toBeInTheDocument()
     // The literal server kind is still shown beneath the product name.
     expect(screen.getByText('machineconfig')).toBeInTheDocument()
-    expect(screen.getByText('preseed')).toBeInTheDocument()
   })
 
   it('changing a role default config inline calls updateRole', async () => {
@@ -234,6 +240,25 @@ describe('BootConfigsView', () => {
         source: 'hostname: w1',
       }),
     )
+  })
+
+  it('surfaces an error instead of silently dropping create when the catalog never loaded', async () => {
+    // If loadFamilyKinds() rejected on mount (e.g. a transient /families or /os
+    // outage), familyKinds stays undefined and the kind can't be derived. The
+    // submit must tell the user, not no-op silently.
+    vi.mocked(loadFamilyKinds).mockRejectedValue(new Error('catalog unavailable'))
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(configsApi.createConfig).mockResolvedValue(undefined)
+    const errorSpy = vi.spyOn(message, 'error')
+    render(<BootConfigsView />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Config' }))
+    await userEvent.type(await screen.findByLabelText('Name'), 'debian-worker')
+    await userEvent.click(screen.getByRole('radio', { name: 'Debian' }))
+    await userEvent.type(screen.getByLabelText('Source'), 'hostname: w1')
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(errorSpy).toHaveBeenCalled())
+    expect(configsApi.createConfig).not.toHaveBeenCalled()
   })
 
   it('the create form shows the derived kind without letting you choose it', async () => {

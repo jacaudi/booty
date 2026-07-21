@@ -111,9 +111,11 @@ Rungs 1–2 are DB-resolved (`pkg/http/resolve.go`); rungs 3–4 are the pre-P4 
 unchanged. A host with no DB binding and no legacy override boots byte-identically to before P4 —
 see [schema/STORAGE.md](schema/STORAGE.md).
 
-A config's `kind` (`butane` \| `machineconfig` \| `preseed` — the dialect an operator authors) must
-match the host's OS family via `configKindForFamily`; only the ignition family differs (`ignition`
-family → `butane` kind, since Ignition is Butane's compiled wire format). See
+A config's `kind` (`butane` \| `machineconfig` \| `debianconfig` — the dialect an operator authors) must
+be one the host's OS family accepts — enforced by `familyAllowsKind` (derived from the single-source
+`authoringKindsForFamily`). Most families author the kind of their own name; the exceptions are the
+`ignition` family (→ `butane` kind, since Ignition is Butane's compiled wire format) and the Debian
+(`preseed`) family (→ `debianconfig` kind). See
 [schema/DATABASE.md](schema/DATABASE.md#configs) for the enum and its relationship to family
 `ConfigKind`.
 
@@ -238,9 +240,10 @@ device silently.
 
 `debianconfig` is a curated YAML config kind that booty translates into a flat
 Debian d-i preseed — author structure, serve preseed, exactly like authoring
-butane and serving ignition. Raw `preseed` configs remain fully supported (and
-the `--preseedFile` server default is always raw preseed); `debianconfig` is
-the recommended structured option, opt-in per config.
+butane and serving ignition. It is the only authorable Debian config kind
+(raw `preseed` was retired as an authorable kind — #59); the `--preseedFile`
+server default remains the sole raw-preseed surface, a static template file
+rather than a curated config a user authors.
 
 **Emission contract:** unset fields emit **no** preseed line (d-i defaults or
 prompts apply). Ordering: curated fields → one composed `late_command`

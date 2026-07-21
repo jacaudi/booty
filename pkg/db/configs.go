@@ -11,7 +11,7 @@ import (
 type Config struct {
 	ID               int64
 	Name             string
-	Kind             string // 'butane' | 'machineconfig' | 'preseed'
+	Kind             string // 'butane' | 'machineconfig' | 'debianconfig' | 'schematic' | 'taloscluster'
 	ActiveRevisionID sql.NullInt64
 	CreatedAt        string
 	UpdatedAt        string

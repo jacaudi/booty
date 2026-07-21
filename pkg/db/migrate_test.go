@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -28,8 +29,8 @@ func TestMigrate_CreatesTablesAndSetsUserVersion(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 8 {
-		t.Errorf("user_version = %d, want 8 after all migrations", uv)
+	if uv != 9 {
+		t.Errorf("user_version = %d, want 9 after all migrations", uv)
 	}
 }
 
@@ -52,21 +53,21 @@ func TestMigrate_IsIdempotentAcrossReopen(t *testing.T) {
 	if err := s2.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 8 {
-		t.Errorf("user_version = %d after reopen, want 8", uv)
+	if uv != 9 {
+		t.Errorf("user_version = %d after reopen, want 9", uv)
 	}
 }
 
 func TestMigration0003ConfigsRoles(t *testing.T) {
 	s := newTestStore(t) // Open() runs every migration, incl. 0003
 
-	// user_version reached 8 (eight migrations applied).
+	// user_version reached 9 (nine migrations applied).
 	var uv int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if uv != 8 {
-		t.Fatalf("user_version = %d, want 8", uv)
+	if uv != 9 {
+		t.Fatalf("user_version = %d, want 9", uv)
 	}
 
 	// The four new tables + the hosts.config_id column exist.
@@ -297,8 +298,8 @@ func TestMigration0006DebianConfig(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if uv != 8 {
-		t.Fatalf("user_version = %d, want 8", uv)
+	if uv != 9 {
+		t.Fatalf("user_version = %d, want 9", uv)
 	}
 
 	// The rebuilt kind CHECK admits 'debianconfig' and still rejects junk.
@@ -311,6 +312,11 @@ func TestMigration0006DebianConfig(t *testing.T) {
 }
 
 func TestMigration0006PreservesData(t *testing.T) {
+	// Also guards migration 0009's configs-table rebuild (#59, drops the
+	// 'preseed' kind from the CHECK): Open() below runs every pending
+	// migration, so the FK/row-preservation assertions here cover 0009's
+	// copy -> drop -> rename just as much as 0006's.
+	//
 	// Build a v5 database BY HAND (raw handle, foreign_keys ON like production),
 	// seed rows, close, then Open() so ONLY 0006 runs — proving the third
 	// configs rebuild preserves configs/config_revisions/roles across the
@@ -332,7 +338,10 @@ func TestMigration0006PreservesData(t *testing.T) {
 	}
 	for _, stmt := range []string{
 		`PRAGMA user_version = 5`,
-		`INSERT INTO configs (name, kind) VALUES ('ps', 'preseed')`,
+		// 'taloscluster' (not 'preseed'): must be valid under the v5-era CHECK
+		// at seed time (before 0006 even adds 'debianconfig' to it) AND survive
+		// the 0009 rebuild that later drops 'preseed' from the CHECK.
+		`INSERT INTO configs (name, kind) VALUES ('tc', 'taloscluster')`,
 		`INSERT INTO config_revisions (config_id, revision, source_b64, source_sha256) VALUES (1, 1, 'djE=', 'h1')`,
 		`UPDATE configs SET active_revision_id = 1 WHERE id = 1`,
 		`INSERT INTO roles (name, default_config_id) VALUES ('deb', 1)`,
@@ -345,14 +354,14 @@ func TestMigration0006PreservesData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := Open(path) // applies only 0006
+	s, err := Open(path) // applies 0006 onward, incl. 0009
 	if err != nil {
 		t.Fatalf("Open at v5: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
 
 	c, err := s.GetConfig(1)
-	if err != nil || c.Name != "ps" || c.Kind != "preseed" || !c.ActiveRevisionID.Valid || c.ActiveRevisionID.Int64 != 1 {
+	if err != nil || c.Name != "tc" || c.Kind != "taloscluster" || !c.ActiveRevisionID.Valid || c.ActiveRevisionID.Int64 != 1 {
 		t.Fatalf("config after rebuild = %+v, err %v", c, err)
 	}
 	rev, err := s.GetActiveRevision(1)
@@ -459,8 +468,8 @@ func TestMigrate0008_DebianColumns(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&uv); err != nil {
 		t.Fatal(err)
 	}
-	if uv != 8 {
-		t.Fatalf("user_version = %d, want 8", uv)
+	if uv != 9 {
+		t.Fatalf("user_version = %d, want 9", uv)
 	}
 	// defaults apply to a row inserted without the new columns
 	if _, err := s.db.Exec(`INSERT INTO targets (os,arch,params,mode,retain_n,source,enabled)
@@ -480,5 +489,73 @@ func TestMigrate0008_DebianColumns(t *testing.T) {
 	// CHECK rejects a bad source_mode
 	if _, err := s.db.Exec(`UPDATE targets SET source_mode='bogus' WHERE params='{"channel":"13"}'`); err == nil {
 		t.Fatal("expected CHECK to reject source_mode='bogus'")
+	}
+}
+
+// seedPreDropDB builds a v8 database BY HAND (raw handle, foreign_keys ON like
+// production): applies migrations 0001..0008, sets PRAGMA user_version=8, then
+// inserts a legacy 'preseed' config row while the CHECK still admits it (0009
+// hasn't rebuilt the table yet). Modeled on the TestMigration0006PreservesData
+// harness above.
+func seedPreDropDB(t *testing.T, dbPath string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.SetMaxOpenConns(1)
+	for _, m := range []string{
+		"0001_init.sql", "0002_cache_entries.sql", "0003_configs_roles.sql",
+		"0004_schematic_id.sql", "0005_clusters.sql", "0006_debianconfig.sql",
+		"0007_target_source.sql", "0008_debian_source_mode.sql",
+	} {
+		stmt, rerr := migrationsFS.ReadFile("migrations/" + m)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if _, err := raw.Exec(string(stmt)); err != nil {
+			t.Fatalf("apply %s: %v", m, err)
+		}
+	}
+	for _, stmt := range []string{
+		`PRAGMA user_version = 8`,
+		`INSERT INTO configs (name, kind) VALUES ('legacy-ps', 'preseed')`,
+	} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMigratePreseedRemovalBlocksOnExistingRow(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "b.db")
+
+	// Raw handle: migrate to just BEFORE 0009 and seed a legacy preseed row
+	// while the CHECK still admits it.
+	seedPreDropDB(t, dbPath)
+
+	// Now Open() — migrate() runs preflightPreseedRemoval at current=8 (<9) and
+	// must abort naming the converter and the offending config.
+	_, err := Open(dbPath)
+	if err == nil {
+		t.Fatal("expected startup to abort on the surviving preseed row")
+	}
+	if !strings.Contains(err.Error(), "convert-preseed") || !strings.Contains(err.Error(), "legacy-ps") {
+		t.Fatalf("error must name the converter and the offending config: %v", err)
+	}
+}
+
+func TestMigratePreseedRemovalCleanWhenNoPreseedRows(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "b.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+	// A direct insert of kind='preseed' is now rejected by the 0009 CHECK.
+	if _, err := s.db.Exec(`INSERT INTO configs (name, kind) VALUES ('x', 'preseed')`); err == nil {
+		t.Fatal("expected CHECK to reject kind='preseed' after 0009")
 	}
 }

@@ -6,6 +6,8 @@ import { createConfig, getConfig, listConfigs, listRevisions, previewConfig, rol
 import type { Role } from '../api/roles'
 import { createRole, listRoles, updateRole } from '../api/roles'
 import { OS_CHOICES, isBootConfigKind, kindForOS, osNameForKind } from '../api/configKinds'
+import type { FamilyKinds } from '../api/catalog'
+import { loadFamilyKinds } from '../api/catalog'
 
 function ConfigsTab() {
   const [configs, setConfigs] = useState<Config[]>([])
@@ -17,6 +19,7 @@ function ConfigsTab() {
   // The kind is DERIVED from the OS, never chosen. Watched so the form can show
   // the user what the OS resolves to before they submit.
   const createOS = Form.useWatch<string | undefined>('os', createForm)
+  const [familyKinds, setFamilyKinds] = useState<FamilyKinds | undefined>()
 
   const [editing, setEditing] = useState<Config | null>(null)
   const [editForm] = Form.useForm()
@@ -52,6 +55,10 @@ function ConfigsTab() {
     load()
   }, [load])
 
+  useEffect(() => {
+    loadFamilyKinds().then(setFamilyKinds).catch(() => {})
+  }, [])
+
   const act = async (fn: () => Promise<unknown>, ok: string) => {
     try {
       await fn()
@@ -69,8 +76,15 @@ function ConfigsTab() {
 
   const submitCreate = async () => {
     const values = await createForm.validateFields()
-    const kind = kindForOS(values.os)
-    if (!kind) return // unreachable: the OS field is required and comes from OS_CHOICES
+    // familyKinds is undefined only for the brief window before the catalog
+    // loader (fired on mount) resolves — or if that load failed (a transient
+    // /families or /os outage). Rather than silently drop the submit, tell the
+    // user; the loader retries on its next call, so a reopened form recovers.
+    const kind = familyKinds && kindForOS(values.os, familyKinds)
+    if (!kind) {
+      message.error('Config catalog is still loading — please retry in a moment')
+      return
+    }
     await act(
       () => createConfig({ name: values.name, kind, source: values.source }),
       `Created ${values.name}`,
@@ -259,7 +273,7 @@ function ConfigsTab() {
           </Form.Item>
           <Form.Item label="Kind">
             <Typography.Text type="secondary" data-testid="derived-kind">
-              {createOS ? kindForOS(createOS) : 'follows from the OS'}
+              {createOS && familyKinds ? kindForOS(createOS, familyKinds) : 'follows from the OS'}
             </Typography.Text>
           </Form.Item>
           <Form.Item label="Upload a file (optional)">

@@ -192,7 +192,7 @@ the config's active pointer. See [DATABASE.md](DATABASE.md) for the table shapes
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/api/v1/configs` | List configs (name, kind, active revision number, revision count). | `{"configs":[…]}` |
-| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`preseed`\|`schematic`\|`taloscluster`\|`debianconfig`). Renderable kinds validate by rendering `source` against stub vars — a bad config surfaces the fatal report in the `422` body. `schematic` and `taloscluster` validate differently — see "Schematic configs" below and [Clusters](#clusters-p6). The first revision is recorded and made active. **OPEN.** | `201` config JSON |
+| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`schematic`\|`taloscluster`\|`debianconfig`). Renderable kinds validate by rendering `source` against stub vars — a bad config surfaces the fatal report in the `422` body. `schematic` and `taloscluster` validate differently — see "Schematic configs" below and [Clusters](#clusters-p6). The first revision is recorded and made active. **OPEN.** | `201` config JSON |
 | `GET` | `/api/v1/configs/{id}` | Get a config's identity plus its active revision's decoded source. | config JSON `+source` / `404` |
 | `PUT` | `/api/v1/configs/{id}` | Append a new immutable revision from `{"source"}` and make it active. Same per-kind validation as create. On success, also prunes older revisions per `--configRevisionsKeep` (the active revision is always kept — see [CONFIGURATION.md](../CONFIGURATION.md)). **OPEN.** | config JSON / `404` |
 | `POST` | `/api/v1/configs/{id}/preview` | Render the config's **active revision**. Body: `{"mac"?}`. **Subsumes `/validate`** — omit `mac` to validate against stub vars only (report-only: a bad Butane config returns its fatal report in the `200` body, never a `5xx`); pass `mac` to render against a real host's vars (the same vars the boot path would use). **`schematic`- and `taloscluster`-kind configs return `422`** (`"<kind> configs are not renderable"`) — see below. **OPEN.** | `{"rendered","contentType","report"}` |
@@ -206,7 +206,7 @@ the config's active pointer. See [DATABASE.md](DATABASE.md) for the table shapes
 |-------|------|---------|
 | `id` | integer | `configs.id`. |
 | `name` | string | Operator-chosen, unique. |
-| `kind` | string | `butane` \| `machineconfig` \| `preseed` \| `schematic` \| `taloscluster` \| `debianconfig` — the dialect an operator authors (see `kind` vs family `ConfigKind` in [DATABASE.md](DATABASE.md#configs)). |
+| `kind` | string | `butane` \| `machineconfig` \| `schematic` \| `taloscluster` \| `debianconfig` — the dialect an operator authors (see `kind` vs family `ConfigKind` in [DATABASE.md](DATABASE.md#configs)). |
 | `activeRevision` | integer | The active revision's number; `0` when the config has no active revision yet. |
 | `revisionCount` | integer | Total revisions retained (bounded by `--configRevisionsKeep`). |
 | `updatedAt` | string | Bumped on every active-pointer move (create, edit, or rollback). |
@@ -239,9 +239,11 @@ own generator translates into a flat d-i preseed (the butane→ignition analog
 for Debian; no library exists, booty owns generation). It is *renderable*:
 create/update validate by a stub-var render (coherence violations 422),
 preview works, and a bound host serves the translated preseed at `/preseed`.
-It coexists with raw `preseed` — the family guard (`familyAllowsKind`) makes
-the preseed family the only 1:many family: `{preseed, debianconfig}`. The
-`--preseedFile` server default remains raw preseed. `accounts.user.password_hash`
+The Debian family authors `debianconfig` only — the family guard
+(`familyAllowsKind`) maps the preseed family to `{debianconfig}` exclusively;
+the raw `preseed` config kind was retired (#59). The raw-preseed serving
+surface is now solely the `--preseedFile` server default (resolve rung 4).
+`accounts.user.password_hash`
 is optional (a key-only account emits a locked `*` and requires an
 `ssh_authorized_keys` entry); `accounts.user.sudo` is a tri-state
 (`nopasswd`|`password`|`false`, `true` as a `nopasswd` alias); `late_command`
@@ -287,8 +289,9 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 | `DELETE` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
 
 > **Family-match validation (P4).** Both `approve` and `bind` validate a present `configId` against
-> the host's OS family before writing it: the config's `kind` must equal
-> `configKindForFamily(family.ConfigKind)` for the host's `os` (e.g. a `flatcar` host requires a
+> the host's OS family before writing it: the config's `kind` must be one the family accepts —
+> `familyAllowsKind(family.ConfigKind, config.kind)` (the family's authored kinds come from the
+> single-source `authoringKindsForFamily`) for the host's `os` (e.g. a `flatcar` host requires a
 > `butane`-kind config). A mismatch — or an unresolvable OS family — returns `422`. Each `roleIds`
 > entry must reference an existing role or the call fails the same way. **All validation (config
 > family-match, every `roleIds` entry) runs before either binding is written**, so a validation

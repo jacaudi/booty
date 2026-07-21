@@ -146,36 +146,3 @@ func TestPreseedBoundDebianConfigServed(t *testing.T) {
 		t.Fatalf("bound debianconfig = %d:\ngot:\n%s\nwant:\n%s", rr.Code, rr.Body.String(), want)
 	}
 }
-
-// TestPreseedBoundRawPreseedStillServed: regression guard for the
-// literal->resolved-kind switch — a bound RAW preseed config still serves.
-func TestPreseedBoundRawPreseedStillServed(t *testing.T) {
-	s := servingStore(t)
-	viper.Set(config.PreseedFile, "config/preseed.cfg")
-	writeFile(t, "config/preseed.cfg", "d-i fallback-must-not-serve")
-	const mac = "aa:bb:cc:dd:ee:61"
-	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian", Hostname: "deb2", Approved: true}); err != nil {
-		t.Fatal(err)
-	}
-	cid, err := s.CreateConfig("raw-ps", "preseed")
-	if err != nil {
-		t.Fatalf("create config: %v", err)
-	}
-	rid, _, err := s.AddConfigRevision(cid, base64.StdEncoding.EncodeToString([]byte("d-i mirror/http/hostname string {{ .Hostname }}")), "sha", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetActiveRevision(cid, rid); err != nil {
-		t.Fatal(err)
-	}
-	if err := hardware.SetHostConfig(mac, &cid); err != nil {
-		t.Fatal(err)
-	}
-
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/preseed?mac="+mac, nil)
-	handlePreseedRequest(s)(rr, req)
-	if rr.Code != 200 || rr.Body.String() != "d-i mirror/http/hostname string deb2" {
-		t.Fatalf("bound raw preseed = %d: %s", rr.Code, rr.Body.String())
-	}
-}

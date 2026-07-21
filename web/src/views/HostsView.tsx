@@ -8,6 +8,8 @@ import { listConfigs } from '../api/configs'
 import type { Role } from '../api/roles'
 import { listRoles } from '../api/roles'
 import { SCHEMATIC_KIND, isBootConfigKind, kindsForHostOS } from '../api/configKinds'
+import type { FamilyKinds } from '../api/catalog'
+import { loadFamilyKinds } from '../api/catalog'
 
 export default function HostsView() {
   const [hosts, setHosts] = useState<Host[]>([])
@@ -18,6 +20,7 @@ export default function HostsView() {
   const [roles, setRoles] = useState<Role[]>([])
   const [allowing, setAllowing] = useState<Host | null>(null)
   const [allowForm] = Form.useForm()
+  const [familyKinds, setFamilyKinds] = useState<FamilyKinds | undefined>()
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -34,6 +37,10 @@ export default function HostsView() {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    loadFamilyKinds().then(setFamilyKinds).catch(() => {})
+  }, [])
 
   const act = async (fn: (mac: string) => Promise<unknown>, mac: string, ok: string) => {
     try {
@@ -86,7 +93,15 @@ export default function HostsView() {
   // only a slog.Warn. An unknown OS falls back to the full boot-config union,
   // which still excludes schematic and taloscluster. Hoisted out of the
   // Select's options filter so it isn't recomputed on every render.
-  const allowedKinds = useMemo(() => kindsForHostOS(allowing?.os), [allowing?.os])
+  //
+  // `undefined` while familyKinds is still loading — treated as permissive
+  // (offer every bindable kind) by the options filter below, the same
+  // fallback the OS-agnostic union provided before this view fetched the
+  // server's family→kind mapping.
+  const allowedKinds = useMemo(
+    () => (familyKinds ? kindsForHostOS(allowing?.os, familyKinds) : undefined),
+    [allowing?.os, familyKinds],
+  )
 
   const baseCols: ColumnsType<Host> = [
     { title: 'MAC', dataIndex: 'mac', key: 'mac' },
@@ -165,7 +180,7 @@ export default function HostsView() {
               allowClear
               placeholder="none"
               options={configs
-                .filter((c) => isBootConfigKind(c.kind) && allowedKinds.includes(c.kind))
+                .filter((c) => isBootConfigKind(c.kind) && (allowedKinds === undefined || allowedKinds.includes(c.kind)))
                 .map((c) => ({ value: c.id, label: c.name }))}
             />
           </Form.Item>

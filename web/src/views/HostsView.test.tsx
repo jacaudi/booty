@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Host } from '../api/types'
@@ -6,10 +6,12 @@ import HostsView from './HostsView'
 import * as client from '../api/client'
 import * as configsApi from '../api/configs'
 import * as rolesApi from '../api/roles'
+import { loadFamilyKinds } from '../api/catalog'
 
 vi.mock('../api/client')
 vi.mock('../api/configs')
 vi.mock('../api/roles')
+vi.mock('../api/catalog')
 
 const host = (over: Partial<Host>): Host => ({
   mac: 'aa',
@@ -17,6 +19,13 @@ const host = (over: Partial<Host>): Host => ({
   ip: 'i',
   booted: '',
   ...over,
+})
+
+beforeEach(() => {
+  vi.mocked(loadFamilyKinds).mockResolvedValue({
+    bootConfigKinds: ['butane', 'machineconfig', 'debianconfig'],
+    osFamily: { talos: ['machineconfig'], debian: ['debianconfig'], flatcar: ['butane'], 'fedora-coreos': ['butane'] },
+  })
 })
 
 afterEach(() => vi.resetAllMocks())

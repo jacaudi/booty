@@ -10,8 +10,9 @@ import (
 
 // FamilyDTO is the wire representation of an ostype.Family.
 type FamilyDTO struct {
-	Name       string `json:"name"`
-	ConfigKind string `json:"configKind"`
+	Name           string   `json:"name"`
+	ConfigKind     string   `json:"configKind"`
+	AuthoringKinds []string `json:"authoringKinds"`
 }
 
 // OSDTO is the wire representation of an ostype.OS.
@@ -64,7 +65,9 @@ func registerCatalog(api huma.API) {
 				continue
 			}
 			seen[f.Name] = true
-			out.Body.Families = append(out.Body.Families, FamilyDTO{Name: f.Name, ConfigKind: f.ConfigKind})
+			out.Body.Families = append(out.Body.Families, FamilyDTO{
+				Name: f.Name, ConfigKind: f.ConfigKind, AuthoringKinds: authoringKindsForFamily(f.ConfigKind),
+			})
 		}
 		return out, nil
 	})

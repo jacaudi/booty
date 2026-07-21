@@ -73,11 +73,11 @@ func TestPreseedDVDModeHostGetsMirrorAppended(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian", Hostname: "deb-dvd", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
-	cid, err := s.CreateConfig("dvd-preseed", "preseed")
+	cid, err := s.CreateConfig("dvd-preseed", "debianconfig")
 	if err != nil {
 		t.Fatalf("create config: %v", err)
 	}
-	rid, _, err := s.AddConfigRevision(cid, base64.StdEncoding.EncodeToString([]byte("d-i debian-installer/locale string en_US")), "sha", nil)
+	rid, _, err := s.AddConfigRevision(cid, base64.StdEncoding.EncodeToString([]byte("locale: en_US\n")), "sha", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,12 +141,17 @@ func TestPreseedNetinstModeHostUnchanged(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian", Hostname: "deb-netinst", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
-	cid, err := s.CreateConfig("netinst-preseed", "preseed")
+	cid, err := s.CreateConfig("netinst-preseed", "debianconfig")
 	if err != nil {
 		t.Fatalf("create config: %v", err)
 	}
-	const want = "d-i debian-installer/locale string en_US"
-	rid, _, err := s.AddConfigRevision(cid, base64.StdEncoding.EncodeToString([]byte(want)), "sha", nil)
+	// src is a debianconfig source (translated, not passed through verbatim
+	// like raw preseed); want is the exact translateDebianConfig output for a
+	// lone locale field — one line plus its trailing newline (debiangen.go's
+	// emit-only-what-is-set template terminates every emitted line).
+	const src = "locale: en_US\n"
+	const want = "d-i debian-installer/locale string en_US\n"
+	rid, _, err := s.AddConfigRevision(cid, base64.StdEncoding.EncodeToString([]byte(src)), "sha", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

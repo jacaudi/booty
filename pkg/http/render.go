@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"text/template"
 
 	butaneConfig "github.com/coreos/butane/config"
@@ -28,18 +29,43 @@ type TemplateVars struct {
 	Schematic      string
 }
 
-// familyAllowsKind reports whether an authored config kind may serve a host of
-// the given family (family ConfigKind == serving mechanism). One contract, three
-// consumers; the preseed family is the only 1:many case.
-func familyAllowsKind(familyConfigKind, kind string) bool {
+// authoringKindsForFamily is the AUTHORITATIVE list of authored config kinds a
+// family accepts (family ConfigKind == serving mechanism). familyAllowsKind and
+// the /families API (api_catalog.go) both derive from this single source.
+func authoringKindsForFamily(familyConfigKind string) []string {
 	switch familyConfigKind {
 	case "ignition":
-		return kind == "butane" // author butane, serve ignition
+		return []string{"butane"} // author butane, serve ignition
 	case "preseed":
-		return kind == "preseed" || kind == "debianconfig"
+		return []string{"debianconfig"} // #59: raw preseed retired
 	default:
-		return kind == familyConfigKind // machineconfig, ...
+		return []string{familyConfigKind} // machineconfig, ...
 	}
+}
+
+// familyAllowsKind reports whether an authored config kind may serve a host of
+// the given family. Derived from authoringKindsForFamily so the mapping is
+// single-sourced across its call sites and the /families API.
+func familyAllowsKind(familyConfigKind, kind string) bool {
+	return slices.Contains(authoringKindsForFamily(familyConfigKind), kind)
+}
+
+// renderPreseedFile executes the operator-supplied server-default preseed FILE
+// (rung 4, --preseedFile) as a text/template and returns it verbatim. The
+// default file carries no config-kind marker — it is raw d-i preseed text — so
+// it does NOT go through renderConfig's kind switch; this is its dedicated
+// render path after the 'preseed' config kind was removed (#59). The caller
+// serves the result as text/plain.
+func renderPreseedFile(source []byte, vars TemplateVars) ([]byte, error) {
+	tpl, err := template.New("preseed-file").Parse(string(source))
+	if err != nil {
+		return nil, fmt.Errorf("http: parse preseed file template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, vars); err != nil {
+		return nil, fmt.Errorf("http: render preseed file template: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // renderConfig executes source as a text/template against vars, then translates
@@ -68,8 +94,6 @@ func renderConfig(kind string, source []byte, vars TemplateVars) (out []byte, co
 		return ignCfg, "application/json", rep.String(), nil
 	case "machineconfig":
 		return rendered, "text/yaml", "", nil
-	case "preseed":
-		return rendered, "text/plain", "", nil
 	case "debianconfig":
 		// Curated Debian authoring: the post-template source is a structured
 		// YAML booty translates into a flat d-i preseed (debiangen.go). Same
