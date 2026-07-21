@@ -82,3 +82,33 @@ Signature policy, whether `--secretsKey` is configured, and build/version are se
 - **"Actively downloading right now"** is not a discrete API field (it's a transient `.download` on disk). v1 surfaces the actionable proxies instead — `Failed` cache entries and enabled-but-uncached targets. A true live "downloading" indicator would need a reconcile-status field and is deferred (noted so it isn't mistaken for covered).
 - Client-side aggregation assumes homelab-scale list sizes (fine today); if host/target counts ever grow large, dedicated count/summary endpoints become worthwhile — not now (YAGNI).
 - `GET /status` must be careful to expose only non-sensitive config (policy/version/booleans), never key paths or secrets.
+
+---
+
+## 10. Scope decision (2026-07-21) — this PR
+
+Delivering the **v1 core** from §4.3 plus two deployability additions; **deferring v1.1**. Goal: a genuinely useful home page that ships fast and makes booty deployable to a NAS.
+
+**In scope (this PR):**
+- Dashboard **v1 core** (§4.3 v1): stat tiles; "Needs attention" (pending host approvals with inline Approve + cache problems); quick actions; first-class empty states; per-panel isolation.
+- **`/healthz` endpoint** (§11).
+- **Docker-Compose deploy pack** with proxyDHCP (§12).
+
+**Deferred (not this PR):** v1.1 — the clusters-overview panel, the system-status strip, and the `GET /api/v1/status` endpoint (§5). The dashboard's **System** indicator uses `/healthz` (version + liveness) instead for now, so §5 is not on the critical path.
+
+## 11. `/healthz` endpoint (new)
+
+Unauthenticated `GET /healthz`, mounted on the base mux **outside** the huma `/api/v1` group (it must be reachable without auth by a container healthcheck). Returns `200` with `{"status":"ok","version":"<build version>"}`. Pure liveness — no DB access on the hot path, so it stays green even while a background reconcile is busy. Three consumers: the container `HEALTHCHECK`, the dashboard **System** card (version + green/red dot), and it lands the **health half of #21** (the auth half stays open). Test: Go handler test asserting `200`, the version string, and the JSON shape.
+
+## 12. Docker-Compose deploy pack (new)
+
+Files under `deploy/`:
+- **`deploy/docker-compose.yml`** — a `booty` service on `ghcr.io/jacaudi/booty` (private image is fine — the NAS logs into ghcr), with a commented `build: ..` fallback. **`network_mode: host`** (required for proxyDHCP broadcast + TFTP + PXE on the operator's L2). A named volume mounted at `dataDir` persists the SQLite DB + cache. **proxyDHCP enabled** via its flag. `restart: unless-stopped`. A `healthcheck` against `/healthz`.
+- **`deploy/catalog.yaml`** — a commented starter catalog for the operator's OS targets (Flatcar / FCOS / Talos / Debian), matching the embedded-default shape so it is a drop-in override.
+- **`deploy/README.md`** — run steps; the proxyDHCP same-L2-as-PXE-clients requirement; the port list (HTTP, TFTP 69/udp, proxyDHCP 67 + 4011/udp); volume persistence; ghcr private-image login; and the explicit **trusted-LAN / no-auth** posture (destructive DELETEs already disabled; `/register` + `/data` are open).
+
+Exact flag names (proxyDHCP enable, `dataDir`, `httpPort`) and the healthcheck mechanism (the runtime image may be shell-less) are pinned during planning against `cmd/main.go` and the `Dockerfile`.
+
+## 13. Testing additions
+- `/healthz`: Go handler test (`200` + version + shape).
+- Deploy pack: validated by the run-the-binary gate — run the built binary with the compose flags, `curl /healthz` + `/ui/`, and confirm the proxyDHCP + TFTP listeners start.
