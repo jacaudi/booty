@@ -242,6 +242,25 @@ describe('BootConfigsView', () => {
     )
   })
 
+  it('surfaces an error instead of silently dropping create when the catalog never loaded', async () => {
+    // If loadFamilyKinds() rejected on mount (e.g. a transient /families or /os
+    // outage), familyKinds stays undefined and the kind can't be derived. The
+    // submit must tell the user, not no-op silently.
+    vi.mocked(loadFamilyKinds).mockRejectedValue(new Error('catalog unavailable'))
+    vi.mocked(configsApi.listConfigs).mockResolvedValue([])
+    vi.mocked(rolesApi.listRoles).mockResolvedValue([])
+    vi.mocked(configsApi.createConfig).mockResolvedValue(undefined)
+    const errorSpy = vi.spyOn(message, 'error')
+    render(<BootConfigsView />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Create Config' }))
+    await userEvent.type(await screen.findByLabelText('Name'), 'debian-worker')
+    await userEvent.click(screen.getByRole('radio', { name: 'Debian' }))
+    await userEvent.type(screen.getByLabelText('Source'), 'hostname: w1')
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }))
+    await waitFor(() => expect(errorSpy).toHaveBeenCalled())
+    expect(configsApi.createConfig).not.toHaveBeenCalled()
+  })
+
   it('the create form shows the derived kind without letting you choose it', async () => {
     vi.mocked(configsApi.listConfigs).mockResolvedValue([])
     vi.mocked(rolesApi.listRoles).mockResolvedValue([])

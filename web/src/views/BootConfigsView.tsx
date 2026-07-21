@@ -77,10 +77,14 @@ function ConfigsTab() {
   const submitCreate = async () => {
     const values = await createForm.validateFields()
     // familyKinds is undefined only for the brief window before the catalog
-    // loader (fired on mount) resolves; the OS field being required and
-    // constrained to OS_CHOICES makes a missing kind otherwise unreachable.
+    // loader (fired on mount) resolves — or if that load failed (a transient
+    // /families or /os outage). Rather than silently drop the submit, tell the
+    // user; the loader retries on its next call, so a reopened form recovers.
     const kind = familyKinds && kindForOS(values.os, familyKinds)
-    if (!kind) return
+    if (!kind) {
+      message.error('Config catalog is still loading — please retry in a moment')
+      return
+    }
     await act(
       () => createConfig({ name: values.name, kind, source: values.source }),
       `Created ${values.name}`,
