@@ -67,12 +67,14 @@ re-downloading cached images after a rebuild.
 
 ## Security posture — trusted LAN only
 
-booty does not yet have authentication (tracked in #21/#5). Destructive
-`DELETE` endpoints are already disabled, but `/register` (host self-registration)
-and `/data/` (served artifacts) are open to any client that can reach the
-container. **Do not expose booty to the public internet or an untrusted
-network** — run it only on a trusted home/lab LAN, and keep it off any
-network segment you don't control.
+booty does not yet have authentication (tracked in #21/#5). The
+resource-deletion endpoints (delete host/cluster/config/target/cache/role)
+return 403 until auth lands, but **every other mutating call is open** —
+host approval, config/cluster/cache edits, cluster-member removal — as are
+`/register` (host self-registration) and `/data/` (served artifacts), to any
+client that can reach the container. **Do not expose booty to the public
+internet or an untrusted network** — run it only on a trusted home/lab LAN,
+and keep it off any network segment you don't control.
 
 ## Known follow-up: container healthcheck
 

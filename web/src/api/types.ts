@@ -17,3 +17,11 @@ export interface Host {
   uuid?: string
   serial?: string
 }
+
+// A host is pending iff it is not approved. hardware.Host serializes `approved`
+// with omitzero, so an unapproved host OMITS the field (undefined) — testing
+// `=== false` misses every real pending host. This is the single source for
+// that rule; use it everywhere pending hosts are counted or listed.
+export function isPending(host: Host): boolean {
+  return !host.approved
+}

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Alert, Button, Card, List, message, Space, Typography } from 'antd'
 import { approveHost } from '../../api/client'
-import type { Host } from '../../api/types'
+import { isPending, type Host } from '../../api/types'
 
 // The dashboard's single "act on this now" surface: unapproved hosts (with
 // inline Approve) and cached images that failed verification. Presentational —
@@ -10,9 +10,7 @@ import type { Host } from '../../api/types'
 type Props = { hosts: Host[]; failedImages: number; onChange: () => void }
 
 export default function NeedsAttention({ hosts, failedImages, onChange }: Props) {
-  // `!h.approved`: the API omits `approved` for unapproved hosts (omitzero), so
-  // undefined means pending — `=== false` would miss every real pending host.
-  const pending = hosts.filter((h) => !h.approved)
+  const pending = hosts.filter(isPending)
   const [busy, setBusy] = useState<string>()
 
   const approve = async (mac: string) => {
