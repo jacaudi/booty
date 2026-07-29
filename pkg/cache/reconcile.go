@@ -34,6 +34,7 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 	// D17: fetch the FCOS channel streams doc at most once per pass; reset the
 	// memo at pass entry so a later pass resolves new builds against a fresh doc.
 	ostype.ResetStreamsCache()
+	ostype.ResetNetbootxyzCache()
 
 	o, ok := ostype.Lookup(t.OS) // t.OS is the canonical taxonomy name
 	if !ok {

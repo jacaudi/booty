@@ -154,6 +154,7 @@ func registerCache(api huma.API, deps APIDeps) {
 		// An explicit operator ask always verifies (ignores --signaturePolicy off).
 		// Reset the FCOS streams memo so reverify sees a fresh doc (D17).
 		ostype.ResetStreamsCache()
+		ostype.ResetNetbootxyzCache()
 		verified, verifyErr, verr := cache.VerifyVersion(ctx, deps.Store, n)
 		if verr != nil {
 			return nil, huma.Error500InternalServerError("verify", verr)
