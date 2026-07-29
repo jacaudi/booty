@@ -209,8 +209,16 @@ cmdline string cannot repair it because the differences are *structural*, not te
 | **SystemRescue** | `kernel …vmlinuz archisobasedir=sysresccd … archiso_http_srv=…` + **two** `initrd` lines (`initrd`, and `archiso_pxe_http /hooks/archiso_pxe_http mode=755`) |
 | **Tails** | kernel + **three** `initrd` lines, including the ISO itself mounted as `/tails.iso` |
 | **ShredOS** | kernel-only (`console=tty3 nwipe_options=…`) — **not** `sanboot` |
-| **Memtest86+** | **four** artifacts (`memtest32.bin`, `memtest32.efi`, `memtest64.bin`, `memtest64.efi`) — a firmware **and** bitness branch |
-| **UEFI Shell / ZFSBootMenu** | upstream type `direct` — `kernel <…​.efi>` + `boot`, not `chain` |
+| **Memtest86+** | endpoint ships **seven** files; upstream boots exactly **one** (`mt86p_x86_64`) on **both** EFI and BIOS. `imgfree` + `kernel` + `boot` |
+| **UEFI Shell / ZFSBootMenu** | upstream type `direct` — `imgfree` + `kernel <…​.efi>` + `boot`, **not** `chain` |
+
+All upstream utility entries emit a leading **`imgfree`** before `kernel`/`sanboot`; booty's scripts
+do the same.
+
+**Cache-more-than-you-boot is accepted.** `Artifacts` returns one entry per `files` member, so
+Memtest86+ caches seven files and boots one. They are a few MB each; filtering would add a
+per-tool "which files matter" list that only this tool needs (YAGNI). Revisit only if a tool ships
+something large it never boots.
 
 So: each tool gets a literal iPXE script in `pkg/tftp`, tokenized on `[[baseurl]]`, exactly as
 `PXEConfig["debian.ipxe"]`/`["talos.ipxe"]`/`["coreos.ipxe"]` already are (`pxe_config.go:19-58`).
@@ -223,11 +231,16 @@ determine the script's shape, so deferring them would defer a structural decisio
 
 ### 6.2 Slice-1 tool selection (revised)
 
-- **SystemRescue** — the multi-`initrd` case.
-- **UEFI Shell** — the firmware-gated case (upstream lists it only in the EFI and ARM menus).
-- **Memtest86+** — the platform/bitness-branching case. Note this **replaces Memtest86 (free)**,
-  whose endpoint is `enabled: false` upstream and appears only in the ARM menu; `memtest86plus` is
-  what the x86 menus actually ship.
+- **SystemRescue** — the multi-`initrd` case (two `initrd` lines, one carrying an iPXE-side
+  `/hooks/...` argument).
+- **UEFI Shell** — the firmware-gated case: upstream lists it only in the EFI and ARM menus, and
+  ships a *separate* `memtest86legacy` entry for BIOS, so firmware-gating is real for this tool.
+- **Memtest86+** — the plain single-binary case, and the cache-more-than-you-boot case (seven
+  files cached, one booted). This **replaces Memtest86 (free)**, whose endpoint is
+  `enabled: false` upstream and appears only in the ARM menu.
+
+Together they cover: multiple `initrd` lines, a firmware-gated single binary, and the simple
+`imgfree`/`kernel`/`boot` shape.
 
 ### 6.3 Firmware-dependent entries
 
@@ -236,10 +249,15 @@ netboot.xyz maintains four parallel menus (`utilitiesefi`, `utilitiespcbios32`,
 booty's `renderMenu` emits one entry per cache tuple with no firmware branch, and iPXE's
 `${platform}` is not consulted anywhere in `pkg/tftp` today.
 
-**Resolution:** the branch lives *inside* the per-tool script, which D8 makes straightforward —
-e.g. Memtest86+ selects `memtest64.efi` vs `memtest64.bin` on `${platform}`, and UEFI Shell's
-script fails loudly with a readable message on a BIOS client rather than hanging. Menu *entries*
-stay firmware-agnostic; the *script* adapts. No `renderMenu` firmware branch is introduced.
+**Resolution:** where a branch is genuinely needed it lives *inside* the per-tool script, which D8
+makes straightforward. Menu *entries* stay firmware-agnostic; the *script* adapts. No `renderMenu`
+firmware branch is introduced.
+
+For the slice-1 three, only **UEFI Shell** actually needs it: its script must fail loudly with a
+readable message on a BIOS client rather than hanging. **Memtest86+ needs no branch at all** —
+upstream boots the same `mt86p_x86_64` under both firmwares on amd64 (the 32-bit `mt86p_i586`
+maps to a *different booty arch*, not a different firmware). An earlier draft claimed a
+firmware+bitness branch here; that was wrong.
 
 ### 6.4 Token substitution and the assigned path
 
