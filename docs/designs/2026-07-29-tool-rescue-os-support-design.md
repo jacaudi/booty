@@ -57,7 +57,7 @@ become ordinary cache targets and therefore ordinary menu entries.
 | D4 | Taxonomy shape | **One shared `netbootxyzOS` implementation, one data row per tool.** | The netboot.xyz plumbing is one piece of knowledge that changes together — DRY. Per-tool variation is data. Precedent: `ostype.go:31` argues `Family` should be data, not an interface. |
 | D5 | Where does boot data live? | Discovery data in `pkg/ostype`; boot scripts in `pkg/tftp`. | Exactly how every existing OS is already split (`ostype/debian.go` + `PXEConfig["debian.ipxe"]`, `pxe_config.go:54-58`). |
 | D6 | Default catalog | Tools are **not** in the flag-derived default; opt-in via `catalog.yaml`. | Follows the Debian-DVD precedent that a fresh install downloads nothing until an operator asks. SystemRescue and Tails are ~1 GB and ~1.5 GB. |
-| D7 | On-disk version identity | **The netboot.xyz release tag** (`13.01-d20a63ac`), not the pretty `version`. The pretty version is used for the **menu label only**. | Revised post-review. The tag changes exactly when the artifacts change, making version→path total; the pretty version does not (§8.1). |
+| D7 | On-disk version identity | **The netboot.xyz release tag** (`13.01-d20a63ac`), not the pretty `version`. **The menu label shows the tag too.** | Revised twice. The tag changes exactly when the artifacts change, making version→path total; the pretty version does not (§8.1). An earlier revision promised the pretty version in the menu label — **withdrawn**, see §7. |
 | D8 | Boot-script shape | **One literal iPXE script per tool**, tokenized on `[[baseurl]]` — **no form taxonomy**. | Revised post-review. The eight tools need 1–3 `initrd` lines, `${platform}` branches, and per-tool cmdlines that no three-form abstraction can express (§6.1). This is also the repo's existing idiom and strictly less code. |
 | D9 | Snapshot memoization shape | **Mutex-guarded memo + explicit reset**, mirroring `pkg/ostype/streams.go`. No TTL, no single-flight. | Revised post-review. Targets reconcile **sequentially** (`pkg/cache/reconciler.go:113-120`), so single-flight guards nothing; the mutex exists for the API-goroutine reader (§8.3). |
 
@@ -100,9 +100,13 @@ register(netbootxyzOS{
     name:      "systemrescue",
     endpoints: map[string]string{"amd64": "systemrescue-amd64"},
 })
+// "uefishell", NOT the "uefi-shell-x64" endpoint: both ship the same
+// uefi-shell-x64.efi, but netboot.xyz's own menus reference uefishell and
+// nothing upstream references uefi-shell-x64 — making the latter the likelier
+// to be pruned. uefishell also carries aarch64/arm for a future arm64 target.
 register(netbootxyzOS{
     name:      "uefi-shell",
-    endpoints: map[string]string{"amd64": "uefi-shell-x64"},
+    endpoints: map[string]string{"amd64": "uefishell"},
 })
 register(netbootxyzOS{
     name:      "memtest86plus",
@@ -146,10 +150,12 @@ Required work:
 - Fix the hardcoded error string at `catalog.go:84`
   (`"(supported: flatcar, fedora-coreos, talos, debian)"`), which goes stale the moment a tool
   registers.
-- **Decide explicitly:** `POST /api/v1/targets` validates the OS via `ostype.Lookup` only and never
-  consults `catalogArches`, so an API-created `memtest86plus/arm64` target is accepted and then
-  fails in `Artifacts` every tick forever. Pre-existing for the four current OSes, but newly easy
-  to hit because tools have narrow, irregular arch sets.
+- **Decided (user, 2026-07-29): fix it in this slice.** `POST /api/v1/targets` validates the OS via
+  `ostype.Lookup` only and never consults `catalogArches`, so an API-created `memtest86plus/arm64`
+  target is accepted and then fails in `Artifacts` every tick forever. Pre-existing for the four
+  current OSes, but newly easy to hit because tools have narrow, irregular arch sets. The catalog
+  loop and the create handler both call a new exported `cache.ValidateOSArch(os, arch)`, so the
+  rule is single-sourced rather than duplicated at the API boundary.
 
 ### 4.5 What needs no change
 
@@ -295,9 +301,15 @@ command unless `||` catches it**, and `iseq` returns failure on mismatch: `iseq 
 goto tools` with no `||` would kill the menu on every non-`tools` selection. The existing code
 obeys this at `menu.go:127` and `:143`.
 
-**Labels.** `menuItemText`/`osTitle` (`menu.go:16-40`) render the **pretty** version, not the
-release tag that D7 puts on disk — so the menu shows `SystemRescue 13.01 (amd64)` while the cache
-path carries `13.01-d20a63ac`. `osTitle` gains an entry per tool.
+**Labels.** `osTitle` (`menu.go:16-21`) gains an entry per tool, so the menu reads
+`Memtest86+ 8.00-32a14678 (amd64)`.
+
+An earlier revision of this design claimed the label would show the *pretty* version
+(`Memtest86+ 8.00`) while the cache path carried the tag. **That is withdrawn.** `menuItemText`
+renders `CacheEntry.Version`, which is by definition the on-disk value, and the pretty version
+exists only in the upstream manifest — so honouring the claim would require fetching that manifest
+at menu-render time, putting a network call on the boot path. The label shows the tag. It is
+uglier and it is correct.
 
 **Sentinel collision is a non-issue.** An earlier draft proposed guarding it. Item keys are the
 full 4-segment tuple (`key := e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version`,
@@ -398,7 +410,8 @@ artifact an attacker would want to poison.
 - Release-tag derivation from `path`, including trailing-slash handling.
 - `ValidateVersion` rejects traversal and non-path-safe strings; accepts all eight real tags.
 - URL construction, including the constructed-URL host check and the redirect caveat.
-- Per-tool script goldens for all three slice-1 tools, including Memtest86+'s `${platform}` branch.
+- Per-tool script goldens for all three slice-1 tools. Note Memtest86+ has **no** `${platform}`
+  branch (§6.3) — the golden asserts its absence; UEFI Shell is the one that branches.
 - `renderMenu` across all four combinations of tools present/absent × archived present/absent,
   asserting the guarded-dispatch shape, the distinct `choose` variables, and that every emitted
   `item` key is either a known sentinel or a well-formed 4-segment tuple.
@@ -489,9 +502,26 @@ sufficiency of an empty-slice arm; discovery-failure degradation; `classNotVerif
 justifying an explicit map; D5's split matching precedent; and the `tool` family breaking no other
 `Family`/`ConfigKind` consumer.
 
+### Gate 2 (plan review) findings that amended THIS document
+
+The implementation plan's cold review (2026-07-29) verified by writing the plan's code into the
+tree and running the suite. Three of its findings were defects in this design, not just the plan:
+
+- **[Blocking]** D7/§7's "pretty version for the menu label" was unimplementable without a network
+  call on the boot path → **withdrawn**; the label shows the release tag (§7).
+- **[Significant]** §4.3's "empty slice" is only correct as `[]string{}` — `return nil` marshals to
+  JSON `null`, and `catalog.ts`'s `flatMap` keeps a `null` as an element, so it *would* reach the
+  UI pickers. `/os` guards this at `api_catalog.go:44-47`; `/families` does not.
+- **[Significant]** §8.3's reverify requirement collides with §8.1's fail-loud `Artifacts`:
+  reverify on any *archived* tool version would be a permanent 500, not an outage-only one. The
+  fix is to short-circuit the `tool` family in `VerifyVersion` before `Artifacts` is called.
+
+Also corrected: the UEFI Shell endpoint (§4.2) and the API arch gate decision (§4.4).
+
 > **Process note:** `mcp__agentgateway__critical-thinking_criticalthinking` was not registered in
-> either session, so neither the design nor its review passed the mandated critical-thinking
-> double-check gate. Both are evidence-backed against code and live upstream data instead.
+> any of these sessions, so neither the design nor its two reviews passed the mandated
+> critical-thinking double-check gate. All three are evidence-backed against code and live upstream
+> data instead — the Gate 2 review additionally by executing the code.
 
 ## 13. Missed alternatives
 
