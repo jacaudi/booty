@@ -3,9 +3,11 @@
 **Type:** Design
 **Date:** 2026-07-29
 **Issue:** none yet — this design precedes the tracking issue
-**Status:** Approved by user 2026-07-29 (section-by-section); independent `sr-go-engineer` review
-(opus, cold) 2026-07-29 returned `AMEND-BEFORE-PLANNING` — **all findings folded, see §12**.
-Pending `superpowers:writing-plans`.
+**Status:** Approved by user 2026-07-29 (section-by-section). Three independent cold reviews folded
+(see §12): Gate 1 design review → `AMEND-BEFORE-PLANNING`; Gate 2 plan review; Gate 2 re-review of
+the rewritten plan, which found a **real correctness bug in §8.4** (now fixed) by executing the
+plan's code. Implementation plan written and amended. **Ready for execution** once the
+`worktree-docs-boot-menu-vlan` prerequisite merges.
 **Roadmap slice:** OS-support wishlist — the "7 tool OSes" cohort, plus Tails
 
 ---
@@ -240,7 +242,9 @@ determine the script's shape, so deferring them would defer a structural decisio
 - **SystemRescue** — the multi-`initrd` case (two `initrd` lines, one carrying an iPXE-side
   `/hooks/...` argument).
 - **UEFI Shell** — the firmware-gated case: upstream lists it only in the EFI and ARM menus, and
-  ships a *separate* `memtest86legacy` entry for BIOS, so firmware-gating is real for this tool.
+  never appears in either pcbios menu, so firmware-gating is real for this tool. (An earlier
+  revision cited a separate `memtest86legacy` BIOS entry as the evidence here; that is unrelated to
+  UEFI Shell and was left over from the pre-Memtest86+ draft.)
 - **Memtest86+** — the plain single-binary case, and the cache-more-than-you-boot case (seven
   files cached, one booted). This **replaces Memtest86 (free)**, whose endpoint is
   `enabled: false` upstream and appears only in the ARM menu.
@@ -323,7 +327,7 @@ well-formed 4-segment tuple.
 ### 8.1 Version identity (D7)
 
 The on-disk version is the **release tag** — the last non-empty segment of the snapshot entry's
-`path` (`13.01-d20a63ac`, `edk2-stable202002-a9ce7096`, `0.72-beta8-2568400c`). Every one is
+`path` (`13.01-d20a63ac`, `edk2-stable202002-a6917535`, `0.72-beta8-2568400c`). Every one is
 path-safe under the existing charset, and the tag changes exactly when the artifacts change.
 
 This exists to fix two concrete bugs in the pretty-version alternative:
@@ -372,18 +376,37 @@ and have both delegate. Verified: the existing charset accepts all eight tool ta
 - **Host assertion applies to the constructed URL only, never the redirect target.**
   `github.com/<org>/<repo>/releases/download/...` 302s to `objects.githubusercontent.com`, and Go's
   default client follows it — asserting on the final URL would break every download.
-- **The org prefix is convention, not schema.** `https://github.com/netbootxyz<path>` holds for all
-  eight today, but the same file's `dts` entry points at `boot.dasharo.com`. Decide whether an
+- **The org prefix is convention, not schema — but the off-org threat is NOT expressible in the
+  field booty reads.** An earlier revision cited netboot.xyz's `dts` entry as pointing at
+  `boot.dasharo.com`; that was a **misread**. The host lives in
+  `roles/netbootxyz/defaults/main.yml`, which booty never consumes. Every `path:` in
+  `endpoints.yml` is relative (`grep "path: http"` matches nothing across 1582 lines). The guard
+  therefore validates the manifest **path** — rejecting absolute, protocol-relative, or non-rooted
+  values, and an unset asset base which would otherwise yield a silently *relative* URL. A
+  composed-URL host check would be dead code, since the authority always comes from the base.
+  Superseded text follows for the record. Decide whether an
   off-org entry is a hard fail or a skip; do not assume it cannot happen.
 
 ### 8.4 Retention and ordering
 
-`CompareVersions` is a string compare, because netboot.xyz tags have no shared grammar. The
-consequence must be stated rather than discovered: lexicographically `9.05 > 13.01`, so at
-`retain > 1` the reconciler can archive the newest and keep an older one, and the menu can list
-them out of order (`retention.go:50-63`, `list.go:80-89`, `NewestCached`). Harmless at the default
-`retain: 1`. **Either validate `retain: 1` for tools or document the caveat in CATALOG.md** —
-pick one in the plan.
+`CompareVersions` is a string compare, because netboot.xyz tags have no shared grammar.
+
+**An earlier revision called this "harmless at the default `retain: 1`". That was wrong, and it is
+a real correctness bug** — demonstrated by the Gate 2 reviewer. `reconcileTarget` retains
+`retentionFor(discovered ∪ in-window-cached, retainN)` (`reconcile.go:104-110`), and
+`retentionFor` sorts descending by `CompareVersions` and takes the first N
+(`retention.go:58-62`). So at `retain: 1`, a **newer** upstream tag that sorts lexically **below**
+the cached one loses: upstream `10.00-bbbbbbbb` vs cached `9.05-aaaaaaaa` keeps the old one
+forever, logging only `artifacts unavailable; skipping version this tick`. That is the same
+never-updates failure §8.1 says the release-tag identity exists to prevent — the tag made
+`version → path` total but did nothing for *newest*. Memtest86+ at `8.00` hits it on the
+`9.xx → 10.00` rollover.
+
+**Resolution:** `retentionFor` gains a `tool` branch returning the discovered set verbatim, with
+no sort. This is sound because netboot.xyz publishes exactly one release per endpoint and
+`Artifacts` refuses any non-current tag, so a stale tag can never be re-landed regardless.
+`retain` is therefore inert for tools, and the catalog rejects `retain != 1` on a tool entry so an
+operator is never silently ignored.
 
 ### 8.5 No integrity verification — accepted risk
 
