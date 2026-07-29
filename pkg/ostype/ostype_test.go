@@ -54,3 +54,13 @@ func TestLookup_FamilyWiring(t *testing.T) {
 		}
 	}
 }
+
+func TestToolFamilyIsConfigless(t *testing.T) {
+	f, ok := FamilyByName("tool")
+	if !ok {
+		t.Fatal(`FamilyByName("tool") not found`)
+	}
+	if f.ConfigKind != "" || f.Template != "" {
+		t.Errorf("tool family = %+v, want empty ConfigKind and Template", f)
+	}
+}

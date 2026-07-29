@@ -41,6 +41,20 @@ func TestAuthoringKindsForFamily(t *testing.T) {
 	}
 }
 
+func TestAuthoringKindsForConfiglessFamily(t *testing.T) {
+	got := authoringKindsForFamily("")
+	if got == nil {
+		t.Fatal(`authoringKindsForFamily("") = nil; must be an EMPTY SLICE, not nil — ` +
+			`a nil slice marshals to JSON null, and catalog.ts's flatMap keeps null as an element`)
+	}
+	if len(got) != 0 {
+		t.Errorf(`authoringKindsForFamily("") = %#v, want empty slice`, got)
+	}
+	if familyAllowsKind("", "butane") || familyAllowsKind("", "") {
+		t.Error("a config-less family must allow no kind at all")
+	}
+}
+
 func TestRenderConfigButaneTranslatesToIgnition(t *testing.T) {
 	src := []byte("variant: fcos\nversion: 1.5.0\n")
 	out, ct, _, err := renderConfig("butane", src, TemplateVars{})
