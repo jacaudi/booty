@@ -118,3 +118,21 @@ func TestValidateSignaturePolicy(t *testing.T) {
 		t.Error("an unknown policy must fail startup")
 	}
 }
+
+func TestValidatePathSegment(t *testing.T) {
+	ok := []string{
+		"amd64", "stable", "13.01-d20a63ac", "edk2-stable202002-a6917535",
+		"0.72-beta8-2568400c", "2025.11_31_x86-64_0.42-bf7a6bdf", "8.00-32a14678",
+	}
+	for _, v := range ok {
+		if err := ValidatePathSegment(v); err != nil {
+			t.Errorf("ValidatePathSegment(%q) = %v, want nil", v, err)
+		}
+	}
+	bad := []string{"", ".", "..", "../etc", "a/b", "/abs", ".hidden", "Upper"}
+	for _, v := range bad {
+		if err := ValidatePathSegment(v); err == nil {
+			t.Errorf("ValidatePathSegment(%q) = nil, want error", v)
+		}
+	}
+}
