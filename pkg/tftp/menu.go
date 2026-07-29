@@ -14,10 +14,13 @@ import (
 
 // osTitle maps an on-disk cache name to a friendly menu label prefix.
 var osTitle = map[string]string{
-	"flatcar": "Flatcar",
-	"coreos":  "Fedora CoreOS",
-	"talos":   "Talos",
-	"debian":  "Debian",
+	"flatcar":       "Flatcar",
+	"coreos":        "Fedora CoreOS",
+	"talos":         "Talos",
+	"debian":        "Debian",
+	"systemrescue":  "SystemRescue",
+	"uefi-shell":    "UEFI Shell",
+	"memtest86plus": "Memtest86+",
 }
 
 // menuItemText is the human-readable label for one cache entry, e.g.
@@ -109,23 +112,46 @@ func menuSelectionScript(host *hardware.Host, filename, urlHost string) string {
 // The invariant is the guarded iseq/goto dispatch shape: nav sentinels use
 // goto-label, boot tuples fall through to the chain command.
 func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
+	var osEntries, toolEntries []cache.CacheEntry
+	for _, e := range inWindow {
+		if isToolOS(e.CacheName) {
+			toolEntries = append(toolEntries, e)
+		} else {
+			osEntries = append(osEntries, e)
+		}
+	}
+
 	var b strings.Builder
 	b.WriteString("#!ipxe\n")
 	b.WriteString(":top\n")
 	b.WriteString("menu Booty - select an image to boot\n")
 	b.WriteString("item retry Wait / retry\n")
-	for _, e := range inWindow {
+	for _, e := range osEntries {
 		key := e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version
 		b.WriteString("item " + key + " " + menuItemText(e) + "\n")
+	}
+	if len(toolEntries) > 0 {
+		b.WriteString("item tools Tools & rescue...\n")
 	}
 	if len(archived) > 0 {
 		b.WriteString("item archived Archived OSes...\n")
 	}
 	b.WriteString("choose --timeout 300000 --default retry sel || goto retry\n")
-	// Nav sentinels goto a label; everything else is a 4-segment boot tuple.
-	if len(archived) > 0 {
+	// One guarded line per sentinel with an explicit fall-through label. The
+	// `|| goto` is MANDATORY, not stylistic: iPXE aborts a script on the first
+	// failing command and iseq fails on mismatch, so a bare
+	// `iseq ${sel} tools && goto tools` would kill the menu on every other
+	// selection.
+	switch {
+	case len(toolEntries) > 0 && len(archived) > 0:
+		b.WriteString("iseq ${sel} tools && goto tools || goto nottools\n")
+		b.WriteString(":nottools\n")
 		b.WriteString("iseq ${sel} archived && goto archived || goto boot\n")
-	} else {
+	case len(toolEntries) > 0:
+		b.WriteString("iseq ${sel} tools && goto tools || goto boot\n")
+	case len(archived) > 0:
+		b.WriteString("iseq ${sel} archived && goto archived || goto boot\n")
+	default:
 		b.WriteString("goto boot\n")
 	}
 	b.WriteString(":boot\n")
@@ -143,6 +169,21 @@ func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
 		b.WriteString("iseq ${asel} back && goto top || goto bootarchived\n")
 		b.WriteString(":bootarchived\n")
 		b.WriteString("chain tftp://" + serverIP + "/menu/${asel}/boot.ipxe || goto top\n")
+	}
+
+	if len(toolEntries) > 0 {
+		b.WriteString(":tools\n")
+		b.WriteString("menu Booty - Tools & rescue\n")
+		b.WriteString("item back Back\n")
+		for _, e := range toolEntries {
+			key := e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version
+			b.WriteString("item " + key + " " + menuItemText(e) + "\n")
+		}
+		// tsel: each menu needs its own choose variable (sel and asel are taken).
+		b.WriteString("choose --timeout 300000 --default back tsel || goto top\n")
+		b.WriteString("iseq ${tsel} back && goto top || goto boottools\n")
+		b.WriteString(":boottools\n")
+		b.WriteString("chain tftp://" + serverIP + "/menu/${tsel}/boot.ipxe || goto top\n")
 	}
 
 	b.WriteString(":retry\n")
