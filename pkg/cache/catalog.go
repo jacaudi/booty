@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,11 +21,40 @@ const catalogSchemaVersion = 1
 // catalogArches is the per-OS arch allowlist AND the set of OSes a catalog may
 // declare. A mismatched arch yields a valid-looking cache segment that 404s on
 // download, so it is rejected up front (design M2/M3).
-var catalogArches = map[string][]string{
-	"flatcar":       {"amd64", "arm64"},
-	"fedora-coreos": {"x86_64"},
-	"talos":         {"amd64", "arm64"},
-	"debian":        {"amd64", "arm64"},
+//
+// The four first-party OSes are listed here; tool OSes are DERIVED from the
+// ostype registry via ToolArches so their arch sets are single-sourced with
+// their endpoint maps (they must change together to stay correct).
+//
+// Init order is safe: Go completes an imported package's var init and init()
+// funcs before the importing package's var init begins, and pkg/cache imports
+// pkg/ostype.
+var catalogArches = func() map[string][]string {
+	m := map[string][]string{
+		"flatcar":       {"amd64", "arm64"},
+		"fedora-coreos": {"x86_64"},
+		"talos":         {"amd64", "arm64"},
+		"debian":        {"amd64", "arm64"},
+	}
+	for os, arches := range ostype.ToolArches() {
+		m[os] = arches
+	}
+	return m
+}()
+
+// ValidateOSArch reports whether os is a declarable OS and arch is one it
+// supports. Exported so the API create path enforces the same rule the catalog
+// does — without it a wrong-arch target is accepted and then fails every
+// reconcile tick forever.
+func ValidateOSArch(os, arch string) error {
+	arches, ok := catalogArches[os]
+	if !ok {
+		return fmt.Errorf("cache: unsupported os %q (supported: %v)", os, slices.Sorted(maps.Keys(catalogArches)))
+	}
+	if !slices.Contains(arches, arch) {
+		return fmt.Errorf("cache: os %q does not support arch %q (want one of %v)", os, arch, arches)
+	}
+	return nil
 }
 
 // CatalogEntry is one declared cache target. Enabled/Retain are pointers so an
@@ -79,12 +109,8 @@ func validateCatalog(c catalogFile) error {
 	}
 	seen := map[string]bool{}
 	for i, e := range c.Entries {
-		arches, ok := catalogArches[e.OS]
-		if !ok {
-			return fmt.Errorf("cache: catalog[%d]: unsupported os %q (supported: flatcar, fedora-coreos, talos, debian)", i, e.OS)
-		}
-		if !slices.Contains(arches, e.Arch) {
-			return fmt.Errorf("cache: catalog[%d]: os %q does not support arch %q (want one of %v)", i, e.OS, e.Arch, arches)
+		if err := ValidateOSArch(e.OS, e.Arch); err != nil {
+			return fmt.Errorf("cache: catalog[%d]: %w", i, err)
 		}
 		o, ok := ostype.Lookup(e.OS) // guaranteed by catalogArches membership; checked to avoid a nil-interface panic if the two ever drift
 		if !ok {

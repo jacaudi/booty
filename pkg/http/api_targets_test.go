@@ -58,6 +58,28 @@ func TestCreateTargetMissingRequiredParamIs422(t *testing.T) {
 	}
 }
 
+// TestCreateTargetRejectsWrongArchForOS covers the API create path enforcing
+// the same os/arch rule the catalog does (Task 5): a memtest86plus/arm64
+// target would 404 on every download since memtest86plus is amd64-only.
+func TestCreateTargetRejectsWrongArchForOS(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	resp := api.Post("/api/v1/targets", map[string]any{
+		"os": "memtest86plus", "arch": "arm64", "mode": "discovery", "retainN": 1,
+	})
+	if resp.Code != 422 {
+		t.Fatalf("memtest86plus/arm64 = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+	// Control: amd64 must be accepted, proving the gate rejects on arch and
+	// not on everything.
+	resp = api.Post("/api/v1/targets", map[string]any{
+		"os": "memtest86plus", "arch": "amd64", "mode": "discovery", "retainN": 1,
+	})
+	if resp.Code != 201 {
+		t.Fatalf("memtest86plus/amd64 = %d, want 201: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestDeleteTargetIs403UntilAuth(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)

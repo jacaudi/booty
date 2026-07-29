@@ -26,8 +26,11 @@ func TestFamilyByName(t *testing.T) {
 	}
 }
 
-func TestRegistry_RegistersAllFour(t *testing.T) {
-	want := []string{"debian", "fedora-coreos", "flatcar", "talos"}
+func TestRegistry_RegistersAll(t *testing.T) {
+	want := []string{
+		"debian", "fedora-coreos", "flatcar", "memtest86plus",
+		"systemrescue", "talos", "uefi-shell",
+	}
 	names := make([]string, 0, len(All()))
 	for _, o := range All() {
 		names = append(names, o.Name())
