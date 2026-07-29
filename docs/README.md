@@ -11,6 +11,8 @@ code does today**; new capabilities are documented here as they land.
 
 - **[CONFIGURATION.md](CONFIGURATION.md)** — the complete flag and environment-variable reference,
   plus the network ports booty listens on.
+- **[BOOT-MENU.md](BOOT-MENU.md)** — the interactive iPXE boot menu: putting a host into menu
+  mode, what the menu lists, and how to grow it by adding OSes and versions to the pre-cache.
 - **[schema/](schema/)** — the structural contracts:
   - **[schema/API.md](schema/API.md)** — HTTP endpoints, TFTP boot filenames + token substitution,
     and proxyDHCP behavior.
@@ -18,6 +20,8 @@ code does today**; new capabilities are documented here as they land.
     on-disk version-metadata records.
   - **[schema/STORAGE.md](schema/STORAGE.md)** — the data-directory layout and the artifact cache
     structure.
+  - **[schema/CATALOG.md](schema/CATALOG.md)** — the declarative `catalog.yaml` schema and the
+    reconcile semantics for cache targets.
 
 ## See also
 
