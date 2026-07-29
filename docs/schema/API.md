@@ -467,7 +467,13 @@ Cache inventory: the set of on-disk boot artifacts tracked in `cache_entries`. A
 | Unknown MAC (no ARP match) or unregistered | Holding pattern — serves `holding.ipxe`, which re-chains to `booty.ipxe` and loops until the host is registered and approved. |
 | Registered but **not approved** | Holding pattern (same as above). |
 | Approved + `boot_mode='assigned'` | Boots the newest cached version of `assigned_os` (falls back to `host.os` if `assigned_os` is empty). |
-| Approved + `boot_mode='menu'` | Serves a dynamically generated interactive iPXE boot menu (over TFTP) listing every currently-cached `(os, version)` image. The node selects a version and boots it. The selection is ephemeral — nothing is written back. |
+| Approved + `boot_mode='menu'` | Serves a dynamically generated interactive iPXE boot menu (over TFTP) listing every currently-cached `(os, version)` image. The node selects a version and boots it. The selection is ephemeral — nothing is written back. See [BOOT-MENU.md](../BOOT-MENU.md). |
+
+Menu selections chain a synthetic TFTP path, `menu/<os>/<schematic>/<arch>/<version>/boot.ipxe`,
+which booty validates against the on-disk cache and re-gates on host state (a host not in menu mode
+receives the holding script regardless of the tuple). Malformed, unknown, or uncached tuples fall
+back to holding; arbitrary files are never served through this path. Operator-facing detail lives in
+[BOOT-MENU.md](../BOOT-MENU.md).
 
 > **As of P1c:** `/booty.json` (the UI payload) now **additively** carries host approval and
 > assignment state for each registered host: `approved` (bool), `bootMode` (string),

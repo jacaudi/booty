@@ -37,6 +37,9 @@ It does one job: get your machines netbooted into the right OS.
 - **Drives the full iPXE chain over TFTP.** It answers the magic `booty.ipxe` filename with a
   dynamically generated, per-host iPXE script that points the machine at the cached kernel,
   initramfs, and config.
+- **Offers an interactive boot menu.** A host can be switched to *menu mode* instead of a pinned
+  OS: at boot it's shown an iPXE menu of every image booty currently has cached and picks one.
+  The choice is per-boot; see [docs/BOOT-MENU.md](docs/BOOT-MENU.md).
 - **Holds unknown machines safely.** A machine whose MAC isn't registered gets a reboot-loop
   "holding" config instead of booting into something unintended — and shows up in the UI as an
   unknown host awaiting registration.
@@ -136,7 +139,7 @@ The UI is a React + Ant Design single-page app (`web/`). It talks to the
 `/api/v1` surface. Current views:
 
 - **Hosts** — approve or revoke discovered machines, or switch a host to
-  interactive boot-menu mode.
+  [interactive boot-menu mode](docs/BOOT-MENU.md).
 - **Cache** — browse the cache inventory, pin or unpin versions to protect them
   from eviction, and trigger a manual disk scan.
 - **Home / About** — status and build information.
@@ -230,6 +233,10 @@ The container is a distroless image with the binary at `/booty` and the web UI b
   binary by client architecture automatically.
 - **Networking.** booty must share a layer-2 segment with the machines it boots (it resolves a
   requester's MAC by ARP). Make sure UDP/69 (and UDP/67 + 4011 for proxyDHCP) are reachable.
+  Machines on a different VLAN/subnet cannot be identified and will sit in the holding loop —
+  pointing your own DHCP server's `next-server` at booty does **not** work around this, because
+  the `booty.ipxe` script it fetches is still rendered from ARP identity. Routed/VLAN support is
+  tracked in [#71](https://github.com/jacaudi/booty/issues/71).
 
 ## Project status
 
@@ -251,6 +258,8 @@ See [`LICENSE`](LICENSE).
 > not in this README.
 
 - **[Configuration reference](docs/CONFIGURATION.md)** — every flag and environment variable.
+- **[Boot menu](docs/BOOT-MENU.md)** — interactive iPXE menu mode, and how to grow the menu by
+  adding OSes and versions to the pre-cache.
 - **[Documentation index](docs/README.md)** — guides and reference, top level.
 - **Schema & contracts** ([`docs/schema/`](docs/schema/)):
   - **[API](docs/schema/API.md)** — HTTP endpoints, TFTP boot filenames, proxyDHCP behavior.

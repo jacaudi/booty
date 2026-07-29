@@ -6,10 +6,18 @@ management UI in a single container.
 
 ## Prerequisites
 
-- **A host on the same L2 segment as your PXE clients.** proxyDHCP relies on
-  LAN broadcast traffic and answers alongside your router's existing DHCP
-  server, so the container needs `network_mode: host` — it cannot run behind
-  Docker's default bridge network or a NAT.
+- **A host on the same L2 segment as your PXE clients.** This is a hard
+  requirement of booty's boot path, not just of this Compose file: booty
+  identifies a booting machine by resolving its MAC with ARP, and ARP does not
+  cross a router. A client on a different VLAN or subnet cannot be identified,
+  so it is served the holding loop instead of its assigned OS — **swapping
+  proxyDHCP for your own DHCP server's `next-server` does not lift this**
+  (routed VLAN support is tracked in
+  [#71](https://github.com/jacaudi/booty/issues/71)). proxyDHCP adds a second
+  constraint on top: it answers on LAN broadcast and does not honour `giaddr`,
+  so it cannot serve relayed requests either. Between them, the container needs
+  `network_mode: host` — it cannot run behind Docker's default bridge network
+  or a NAT.
 - **Access to the private image.** `ghcr.io/jacaudi/booty` is a private GHCR
   image — run `docker login ghcr.io` with a PAT that has `read:packages`
   before pulling. Alternatively, uncomment `build: ..` in
