@@ -166,6 +166,20 @@ func TestCatalogRejectsToolEntryWithSpec(t *testing.T) {
 	}
 }
 
+func TestCatalogRejectsToolRetainOtherThanOne(t *testing.T) {
+	doc := []byte("schemaVersion: 1\ncatalog:\n  - os: memtest86plus\n    arch: amd64\n    retain: 2\n")
+	if _, err := parseCatalog(doc); err == nil {
+		t.Fatal("a tool retain of 2 must be rejected (upstream publishes one release at a time)")
+	}
+}
+
+func TestCatalogAcceptsToolRetainOne(t *testing.T) {
+	doc := []byte("schemaVersion: 1\ncatalog:\n  - os: memtest86plus\n    arch: amd64\n    retain: 1\n")
+	if _, err := parseCatalog(doc); err != nil {
+		t.Fatalf("tool retain of 1 must validate, got %v", err)
+	}
+}
+
 func TestValidateOSArch(t *testing.T) {
 	if err := ValidateOSArch("memtest86plus", "amd64"); err != nil {
 		t.Errorf("memtest86plus/amd64 = %v, want nil", err)

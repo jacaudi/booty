@@ -55,6 +55,22 @@ func retentionFor(canonicalOS string, versions []string, n int) []string {
 	if !ok {
 		return []string{}
 	}
+	// Tool OSes: netboot.xyz publishes exactly ONE release per endpoint, and
+	// Artifacts refuses any version that is not that current tag — so a
+	// non-current tag can never be re-landed anyway. Retain the discovered set
+	// verbatim rather than sorting it.
+	//
+	// Sorting would be actively WRONG here: tool tags have no version grammar
+	// (CompareVersions is a string compare), so a newer tag that sorts lexically
+	// lower ("10.00-…" < "9.05-…") would lose to the cached one and the target
+	// would pin the old release forever.
+	if o.Family().Name == "tool" {
+		out := slices.Clone(versions)
+		if n < len(out) {
+			out = out[:n]
+		}
+		return out
+	}
 	sorted := slices.Clone(versions)
 	slices.SortFunc(sorted, func(a, b string) int { return o.CompareVersions(b, a) }) // newest first
 	if n < len(sorted) {

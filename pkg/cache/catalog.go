@@ -122,6 +122,11 @@ func validateCatalog(c catalogFile) error {
 		if r := e.retainOrDefault(); r < 0 {
 			return fmt.Errorf("cache: catalog[%d]: retain must be >= 0, got %d", i, r)
 		}
+		if o.Family().Name == "tool" {
+			if e.Retain != nil && *e.Retain != 1 {
+				return fmt.Errorf("cache: catalog[%d]: os %q is a tool; retain must be 1 (upstream publishes one release at a time)", i, e.OS)
+			}
+		}
 		if e.OS == "debian" {
 			if err := validateDebianEntry(i, e); err != nil {
 				return err

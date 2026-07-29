@@ -38,3 +38,12 @@ func TestRetentionFor_NonTalosNewestNByCompare(t *testing.T) {
 		t.Errorf("retentionFor(fedora-coreos) = %v, want %v", got, want)
 	}
 }
+
+func TestRetentionForToolKeepsDiscoveredNotLexicalMax(t *testing.T) {
+	// Upstream moved 9.05 -> 10.00. Lexicographically "9.05..." > "10.00...",
+	// so a plain descending sort would keep the OLD tag forever.
+	got := retentionFor("memtest86plus", []string{"10.00-bbbbbbbb", "9.05-aaaaaaaa"}, 1)
+	if len(got) != 1 || got[0] != "10.00-bbbbbbbb" {
+		t.Errorf("retentionFor = %v, want [10.00-bbbbbbbb]", got)
+	}
+}
