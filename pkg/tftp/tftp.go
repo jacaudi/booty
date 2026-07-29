@@ -153,11 +153,11 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	}
 
 	if filename == "booty.ipxe" {
-		kind, osToLoad := bootDispatch(host)
+		kind, _ := bootDispatch(host)
 		var toServe string
 		switch kind {
 		case "assigned":
-			toServe = applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
+			toServe = assignedScript(host, urlHost)
 		case "menu":
 			var inWindow, archEntries []cache.CacheEntry
 			if s := currentStore(); s != nil {
@@ -252,8 +252,26 @@ func bootTokensFor(osToLoad, segment, arch, version, urlHost string) map[string]
 	case "debian":
 		tokens["[[debian-arch]]"] = arch
 		tokens["[[debian-baseurl]]"] = debianBaseURL(urlHost, segment, arch, version, debianSourceMode(arch, segment))
+	default:
+		// Tool OSes (family "tool") share one generic token set: they all resolve
+		// to the same cache URL base and carry no per-OS template vocabulary.
+		// Guarded by isToolOS so an unknown/typo'd OS still yields the previous
+		// empty result.
+		if isToolOS(osToLoad) {
+			tokens["[[baseurl]]"] = "http://" + cache.CacheURLBase(urlHost, osToLoad, segment, arch, version)
+			tokens["[[version]]"] = version
+			tokens["[[arch]]"] = arch
+			tokens["[[server-ip]]"] = viper.GetString(config.ServerIP)
+		}
 	}
 	return tokens
+}
+
+// isToolOS reports whether an on-disk cache name belongs to the config-less
+// "tool" family.
+func isToolOS(cacheName string) bool {
+	o, ok := ostype.Lookup(cache.CacheNameToCanonical(cacheName))
+	return ok && o.Family().Name == "tool"
 }
 
 // debianBaseURL is the single source of the Debian boot base URL: the cached
@@ -383,6 +401,23 @@ func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string
 	}
 	// unknown os: only the shared [[server]] token (identical to the old fall-through).
 	return bootTokensFor(osToLoad, "", "", "", urlHost)
+}
+
+// assignedScript renders the boot script for an approved, assignment-mode host.
+// A tool OS is refused: tools have no per-host config and are reached through
+// menu mode. Serving the holding script is the safe fallback — the alternative
+// is a script with unsubstituted tokens, which design §6.4 forbids.
+func assignedScript(host *hardware.Host, urlHost string) string {
+	_, osToLoad := bootDispatch(host)
+	if isToolOS(osToLoad) {
+		slog.Warn("TFTP: refusing to boot a tool OS via assignment; use boot_mode=menu",
+			"os", osToLoad, "mac", host.MAC)
+		return applyTokens(PXEConfig["holding.ipxe"], map[string]string{
+			"[[server]]":    urlHost,
+			"[[server-ip]]": viper.GetString(config.ServerIP),
+		})
+	}
+	return applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
 }
 
 // writeHandler is called when client starts file upload to server
