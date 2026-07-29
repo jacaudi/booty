@@ -426,7 +426,12 @@ artifact an attacker would want to poison.
 **Lab gate (required before merge)**
 
 Three boots in the QEMU netboot lab, one per hard case: SystemRescue (multi-`initrd`), UEFI Shell
-on a UEFI client (firmware-gated), Memtest86+ (platform branch, exercised on both BIOS and UEFI).
+on a UEFI client (firmware-gated), Memtest86+ (exercised on both BIOS and UEFI).
+
+Scope note: the two SystemRescue cmdline questions (`initrd=initrd.magic`, `BOOTIF`) were settled
+from primary sources — iPXE, mkinitcpio-archiso, and klibc — and are **not** open lab questions.
+See §12. The lab exists to prove these images boot from booty's own cache and URLs on real
+firmware, which no source can establish.
 
 This is not ceremony. On the debianconfig branch, byte-exact goldens and two code reviews all
 passed while three real bugs sat in the output — they only manifested when debian-installer
@@ -517,6 +522,32 @@ tree and running the suite. Three of its findings were defects in this design, n
   fix is to short-circuit the `tool` family in `VerifyVersion` before `Artifacts` is called.
 
 Also corrected: the UEFI Shell endpoint (§4.2) and the API arch gate decision (§4.4).
+
+### Two "could not verify" items, subsequently RESOLVED from source
+
+The Gate 2 review left two SystemRescue cmdline questions open, and this document previously
+deferred both to the lab gate. Background research (2026-07-29) settled both against primary
+sources; neither is an open question, and neither should be re-opened in the lab.
+
+- **`initrd=initrd.magic` — keep it.** It is an **iPXE UEFI mechanism** (iPXE commit `e5f0255`),
+  not a kernel/archiso/netboot.xyz one: iPXE's EFI build synthesizes a file of that name holding
+  every loaded initrd concatenated, because the Linux EFI stub loads only the one file `initrd=`
+  names. It is a provable no-op on BIOS (`bzimage.c` never reads it; the kernel's `memparse`
+  rejects the value) and unread on iPXE ≥ Feb 2023 (`6a004be0` serves the same blob via
+  `EFI_LOAD_FILE2_PROTOCOL`, which the stub prefers) — but **load-bearing on older iPXE under
+  UEFI**, where its absence means no initrd loads at all. booty does not ship iPXE (the operator
+  stages the binaries), so the build is unknown and the zero-cost insurance is kept. The Flatcar
+  breakage (netbootxyz#1070, Feb 2022) predates LoadFile2 and involved an embedded-initramfs
+  kernel, a shape SystemRescue does not have.
+- **`BOOTIF` — matters only on multi-NIC.** Its entire effect is filling the device field of
+  klibc's `ip=` string (`mkinitcpio-archiso` `hooks/archiso_pxe_common:13-30`); with one
+  non-loopback NIC, pinning and racing are identical. It is **inert unless `ip=` is also present**
+  (the hook gates on it), and an unmatched value degrades to race-all rather than failing.
+  `${netX}` is an iPXE **built-in** (`netdev_settings.c` registers it; `find_netdev` maps it to
+  `last_opened_netdev()`), not a netboot.xyz variable, so it needs no preamble in a standalone
+  script. The bare form is retained over the canonical `01-…:hexhyp` PXELINUX form: both are
+  byte-identical after archiso's `${BOOTIF#01-}` and `-`→`:` transformations, and the bare form is
+  the one upstream ships.
 
 > **Process note:** `mcp__agentgateway__critical-thinking_criticalthinking` was not registered in
 > any of these sessions, so neither the design nor its two reviews passed the mandated
