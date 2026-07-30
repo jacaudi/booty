@@ -93,6 +93,19 @@ catalog:
   #   retain: 3
   #   spec: { schematic: 376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba }
 
+  # Tool / rescue images (netboot.xyz-sourced) — opt-in: SystemRescue alone is
+  # ~1 GB (airootfs.sfs), so none of the three ship active by default. Each
+  # appears under "Tools & rescue..." in the interactive boot menu once cached.
+  # - os: systemrescue
+  #   arch: amd64
+  #   retain: 1
+  # - os: uefi-shell
+  #   arch: amd64
+  #   retain: 1
+  # - os: memtest86plus
+  #   arch: amd64
+  #   retain: 1
+
   # Debian dvd, pre-enabled at catalog-authoring time — e.g. if you already
   # know you want the full offline install set from first boot (~44 GB for a
   # full 11+12 dvd set; see docs/CONFIGURATION.md). This is the ONLY way to
