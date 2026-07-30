@@ -23,6 +23,16 @@ var osTitle = map[string]string{
 	"memtest86plus": "Memtest86+",
 }
 
+// itemKey is the single source of the menu item-key format: the cache-relative
+// path <cacheName>/<segment>/<arch>/<version>. It is used verbatim as the
+// iPXE `item` key in every menu block (main, archived, tools), and must stay
+// in lockstep with the selection-boot path (menu/<key>/boot.ipxe) that
+// renderMenuSelection parses back into its four segments — a drift here
+// breaks every menu selection silently.
+func itemKey(e cache.CacheEntry) string {
+	return e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version
+}
+
 // menuItemText is the human-readable label for one cache entry, e.g.
 // "Talos v1.10.5 (amd64) [schemAAA]". A short schematic prefix disambiguates
 // multiple Talos schematics that share a version.
@@ -127,8 +137,7 @@ func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
 	b.WriteString("menu Booty - select an image to boot\n")
 	b.WriteString("item retry Wait / retry\n")
 	for _, e := range osEntries {
-		key := e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version
-		b.WriteString("item " + key + " " + menuItemText(e) + "\n")
+		b.WriteString("item " + itemKey(e) + " " + menuItemText(e) + "\n")
 	}
 	if len(toolEntries) > 0 {
 		b.WriteString("item tools Tools & rescue...\n")
@@ -162,8 +171,7 @@ func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
 		b.WriteString("menu Booty - Archived OSes\n")
 		b.WriteString("item back Back\n")
 		for _, e := range archived {
-			key := e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version
-			b.WriteString("item " + key + " " + menuItemText(e) + "\n")
+			b.WriteString("item " + itemKey(e) + " " + menuItemText(e) + "\n")
 		}
 		b.WriteString("choose --timeout 300000 --default back asel || goto top\n")
 		b.WriteString("iseq ${asel} back && goto top || goto bootarchived\n")
@@ -176,8 +184,7 @@ func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
 		b.WriteString("menu Booty - Tools & rescue\n")
 		b.WriteString("item back Back\n")
 		for _, e := range toolEntries {
-			key := e.CacheName + "/" + e.Segment + "/" + e.Arch + "/" + e.Version
-			b.WriteString("item " + key + " " + menuItemText(e) + "\n")
+			b.WriteString("item " + itemKey(e) + " " + menuItemText(e) + "\n")
 		}
 		// tsel: each menu needs its own choose variable (sel and asel are taken).
 		b.WriteString("choose --timeout 300000 --default back tsel || goto top\n")
