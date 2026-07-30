@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -96,10 +95,5 @@ func TestReconcileToolTargetEndToEnd(t *testing.T) {
 	// 3. The menu-selection boot path accepts the tuple.
 	if !ValidCachedSelection("memtest86plus", "-", "amd64", tag) {
 		t.Error("ValidCachedSelection rejected the freshly cached tool tuple")
-	}
-
-	// 4. The asset URL was composed against the configured base.
-	if !strings.HasPrefix(assets.URL, "http://") {
-		t.Fatalf("unexpected asset server URL %q", assets.URL)
 	}
 }

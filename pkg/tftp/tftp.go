@@ -167,10 +167,7 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 			}
 			toServe = renderMenu(inWindow, archEntries, viper.GetString(config.ServerIP))
 		default: // holding
-			toServe = applyTokens(PXEConfig["holding.ipxe"], map[string]string{
-				"[[server]]":    urlHost,
-				"[[server-ip]]": viper.GetString(config.ServerIP),
-			})
+			toServe = holdingScript(urlHost)
 		}
 		r := strings.NewReader(toServe)
 		n, err := rf.ReadFrom(r)
@@ -224,6 +221,18 @@ func applyTokens(s string, tokens map[string]string) string {
 		s = strings.ReplaceAll(s, k, v)
 	}
 	return s
+}
+
+// holdingScript renders the fully-substituted holding.ipxe script. Single
+// source of the holding-script token contract ("[[server]]", "[[server-ip]]")
+// shared by readHandler's holding/default arm and assignedScript's
+// tool-refusal branch — if that contract changes, both call sites must change
+// together.
+func holdingScript(urlHost string) string {
+	return applyTokens(PXEConfig["holding.ipxe"], map[string]string{
+		"[[server]]":    urlHost,
+		"[[server-ip]]": viper.GetString(config.ServerIP),
+	})
 }
 
 // bootTokensFor builds the [[token]] substitution map for one fully-specified
@@ -412,10 +421,7 @@ func assignedScript(host *hardware.Host, urlHost string) string {
 	if isToolOS(osToLoad) {
 		slog.Warn("TFTP: refusing to boot a tool OS via assignment; use boot_mode=menu",
 			"os", osToLoad, "mac", host.MAC)
-		return applyTokens(PXEConfig["holding.ipxe"], map[string]string{
-			"[[server]]":    urlHost,
-			"[[server-ip]]": viper.GetString(config.ServerIP),
-		})
+		return holdingScript(urlHost)
 	}
 	return applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
 }

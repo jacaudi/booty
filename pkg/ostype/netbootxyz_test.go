@@ -99,8 +99,10 @@ func TestReleaseTag(t *testing.T) {
 		"/asset-mirror/releases/download/13.01-d20a63ac/":       "13.01-d20a63ac",
 		"/asset-mirror/releases/download/8.00-32a14678":         "8.00-32a14678",
 		"/debian-squash/releases/download/0.72-beta8-2568400c/": "0.72-beta8-2568400c",
-		"":  "",
-		"/": "",
+		"":                                   "",
+		"/":                                  "",
+		"/asset-mirror/releases/download/.":  "", // guard: final segment "."
+		"/asset-mirror/releases/download/..": "", // guard: final segment ".."
 	}
 	for in, want := range cases {
 		if got := releaseTag(in); got != want {
