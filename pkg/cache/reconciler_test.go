@@ -5,11 +5,13 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
 
@@ -74,6 +76,63 @@ func TestReconciler_StartRunsStartupReconcileThenStop(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	r.Stop() // must return promptly and not panic / double-close
+}
+
+// TestReconcileAllFetchesNetbootxyzManifestOncePerPass is the regression test
+// for #73: the netboot.xyz endpoints manifest memo must be reset once per
+// reconcileAll PASS, not once per target. Before the fix,
+// ostype.ResetNetbootxyzCache() lived inside reconcileTarget, so a pass over
+// N tool targets re-fetched the ~35KB manifest N times instead of once.
+func TestReconcileAllFetchesNetbootxyzManifestOncePerPass(t *testing.T) {
+	var hits int32
+	manifest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = w.Write([]byte("endpoints:\n" +
+			"  systemrescue-amd64:\n" +
+			"    path: /asset-mirror/releases/download/13.01-d20a63ac/\n" +
+			"    files:\n" +
+			"    - vmlinuz\n" +
+			"  memtest86plus:\n" +
+			"    path: /asset-mirror/releases/download/8.00-32a14678/\n" +
+			"    files:\n" +
+			"    - mt86p_x86_64\n"))
+	}))
+	t.Cleanup(manifest.Close)
+	assets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("BINARY"))
+	}))
+	t.Cleanup(assets.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.NetbootxyzEndpointsURL, manifest.URL)
+	viper.Set(config.NetbootxyzAssetBase, assets.URL)
+	ostype.ResetNetbootxyzCache()
+	t.Cleanup(ostype.ResetNetbootxyzCache)
+
+	store, err := db.Open(filepath.Join(t.TempDir(), "booty.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// Two enabled tool targets — both sourced from the same manifest fetch.
+	for _, name := range []string{"systemrescue", "memtest86plus"} {
+		if _, err := store.CreateTarget(db.Target{
+			OS: name, Arch: "amd64", Params: "{}", Enabled: true, RetainN: 1,
+			Mode: "discovery", Source: "api",
+		}); err != nil {
+			t.Fatalf("CreateTarget(%s): %v", name, err)
+		}
+	}
+
+	r := NewReconciler(store, time.Hour, 2, nil)
+	r.reconcileAll(t.Context())
+
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("manifest fetched %d times in one pass, want 1 (one fetch shared across both tool targets)", got)
+	}
 }
 
 func TestTriggerCoalesces(t *testing.T) {
