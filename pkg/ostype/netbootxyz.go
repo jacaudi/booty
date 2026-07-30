@@ -75,9 +75,14 @@ func fetchNetbootxyzDoc(ctx context.Context) (map[string]netbootxyzEntry, error)
 	return doc.Endpoints, nil
 }
 
-// ResetNetbootxyzCache clears the memoized endpoint manifest. Called at exactly
-// the two sites ResetStreamsCache is: pkg/cache/reconcile.go (top of
-// reconcileTarget) and pkg/http/api_cache.go (before each reverify).
+// ResetNetbootxyzCache clears the memoized endpoint manifest. Called from
+// pkg/cache/reconciler.go (reconcileAll's pass entry, once per pass — NOT from
+// reconcileTarget, which runs once per target) and pkg/http/api_cache.go
+// (before each reverify). This intentionally diverges from ResetStreamsCache,
+// which still resets per-target: #73 found that a per-target netboot.xyz reset
+// re-fetched the ~35KB manifest once per tool target instead of once per tick.
+// Do NOT "restore parity" by moving this call back into reconcileTarget — that
+// is exactly the regression #73 fixed.
 func ResetNetbootxyzCache() {
 	netbootxyzCache.Lock()
 	netbootxyzCache.endpoints = nil

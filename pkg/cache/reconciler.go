@@ -114,6 +114,11 @@ func (r *Reconciler) reconcileAll(ctx context.Context) {
 	// #73: reset the netboot.xyz manifest memo once per PASS (here), not once
 	// per target (reconcileTarget) — the tool family shares one manifest fetch
 	// across every tool target in the same tick.
+	//
+	// Deliberately placed AFTER the ListTargets early-return above: a
+	// ListTargets failure means the target loop below never runs this pass
+	// either, so nothing consumes a stale memo on this bail-out, and the next
+	// pass resets it normally.
 	ostype.ResetNetbootxyzCache()
 	for _, t := range targets {
 		if !t.Enabled {
