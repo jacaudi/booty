@@ -1,8 +1,13 @@
 package tftp
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/jeefy/booty/pkg/ostype"
 )
 
 func TestToolScriptsRegistered(t *testing.T) {
@@ -68,5 +73,46 @@ func TestUEFIShellGuardsBIOSTerminally(t *testing.T) {
 	// label follows in the generated menu.
 	if !strings.Contains(s, "chain tftp://[[server-ip]]/booty.ipxe") {
 		t.Errorf("BIOS guard must re-chain rather than fall through:\n%s", s)
+	}
+}
+
+// TestToolFileAllowlistTracksBootScripts ties ostype's per-tool file allowlist
+// (pkg/ostype/tools.go) to the boot scripts in this file, so the two cannot
+// silently drift: an allowlist entry a script no longer needs, or a script
+// dependency the allowlist forgot, both fail this test.
+//
+// It checks the WHOLE source of tool_scripts.go, not just each PXEConfig map
+// value: the archiso_pxe_http hook fetches airootfs.sfs implicitly via the
+// archiso_http_srv token (see the comment above
+// PXEConfig["systemrescue.ipxe"]), so that filename is documented next to the
+// script rather than present in its literal iPXE text.
+func TestToolFileAllowlistTracksBootScripts(t *testing.T) {
+	toolFiles := ostype.ToolFiles()
+	if len(toolFiles) != 3 {
+		t.Fatalf("ToolFiles() returned %d tools, want 3 (systemrescue, uefi-shell, memtest86plus)", len(toolFiles))
+	}
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "tool_scripts.go"))
+	if err != nil {
+		t.Fatalf("read tool_scripts.go: %v", err)
+	}
+	text := string(src)
+
+	for name, files := range toolFiles {
+		if len(files) == 0 {
+			t.Errorf("%s: file allowlist is empty", name)
+		}
+		if _, ok := PXEConfig[name+".ipxe"]; !ok {
+			t.Errorf("%s: no PXEConfig entry %q", name, name+".ipxe")
+		}
+		for _, f := range files {
+			if !strings.Contains(text, f) {
+				t.Errorf("%s: allowlisted file %q not referenced anywhere in tool_scripts.go", name, f)
+			}
+		}
 	}
 }

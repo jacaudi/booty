@@ -123,6 +123,22 @@ func releaseTag(path string) string {
 type netbootxyzOS struct {
 	name      string
 	endpoints map[string]string
+
+	// files, when non-empty, restricts Artifacts to exactly these filenames
+	// instead of every file in the manifest entry. It exists because upstream
+	// manifests list files a release does not always publish — netboot.xyz's
+	// endpoints.yml lists 7 files for memtest86plus, but its own asset mirror
+	// serves only 3 at release 8.00-32a14678 — and pkg/cache/reconcile.go's
+	// reconcileTarget abandons the WHOLE version if a single artifact 404s, so
+	// an unfiltered fetch can permanently prevent that version from ever being
+	// marked cached (endless re-download every reconcile pass). It also
+	// excludes files no registered arch boots (uefi-shell's arm/aarch64
+	// builds on an amd64-only registration), which would otherwise be cached
+	// and served for nothing. Empty means "every file in the entry" (today's
+	// behaviour, unchanged). Artifacts fails loudly if an allowlisted name is
+	// absent from the manifest entry, because that means upstream renamed or
+	// dropped the exact file the boot script needs.
+	files []string
 }
 
 func (t netbootxyzOS) Name() string             { return t.name }
@@ -190,9 +206,10 @@ func (t netbootxyzOS) DiscoverVersions(ctx context.Context, _ map[string]string)
 	return tags, nil
 }
 
-// Artifacts returns one downloadable per file in the entry. No SHA256/SigURL:
-// netboot.xyz publishes neither, so artifacts land not-verifiable under every
-// signature policy (design §8.5, accepted risk).
+// Artifacts returns one downloadable per file in the entry, or per file in
+// t.files when that allowlist is non-empty (see its doc comment). No
+// SHA256/SigURL: netboot.xyz publishes neither, so artifacts land
+// not-verifiable under every signature policy (design §8.5, accepted risk).
 //
 // It REFUSES a version that is not the entry's current tag: the manifest holds
 // one path per endpoint, so honouring a stale version is impossible, and
@@ -209,9 +226,18 @@ func (t netbootxyzOS) Artifacts(ctx context.Context, version, arch string, _ map
 	if version != tag {
 		return nil, fmt.Errorf("ostype: %s/%s: requested version %q but upstream now publishes %q; refusing to mix releases", t.name, arch, version, tag)
 	}
+	names := e.Files
+	allowlisted := len(t.files) > 0
+	if allowlisted {
+		names = t.files
+	}
+
 	base := viper.GetString(config.NetbootxyzAssetBase)
-	out := make([]Artifact, 0, len(e.Files))
-	for _, f := range e.Files {
+	out := make([]Artifact, 0, len(names))
+	for _, f := range names {
+		if allowlisted && !slices.Contains(e.Files, f) {
+			return nil, fmt.Errorf("ostype: %s: allowlisted file %q is not in the manifest entry for %s/%s; upstream may have renamed or dropped it", t.name, f, t.name, arch)
+		}
 		u, err := artifactURL(base, e.Path, f)
 		if err != nil {
 			return nil, fmt.Errorf("ostype: %s: %w", t.name, err)
