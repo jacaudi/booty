@@ -116,6 +116,9 @@ func registerTargets(api huma.API, deps APIDeps) {
 		if err := cache.ValidateTargetParams(o, in.Body.Params); err != nil {
 			return nil, huma.Error422UnprocessableEntity(err.Error())
 		}
+		if err := cache.ValidateToolRetain(o, in.Body.RetainN); err != nil {
+			return nil, huma.Error422UnprocessableEntity(err.Error())
+		}
 		encoded, err := cache.EncodeParams(in.Body.Params)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid params", err)

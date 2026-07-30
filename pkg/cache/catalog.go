@@ -57,6 +57,23 @@ func ValidateOSArch(os, arch string) error {
 	return nil
 }
 
+// ValidateToolRetain reports whether retain is a valid retention count for o.
+// Tools retain exactly 1: netboot.xyz publishes one release at a time, and
+// Artifacts refuses any version that is not upstream's current tag — a higher
+// retain leaves the extra retained tags as desired-but-uncachable state
+// forever (every reconcile tick logs "artifacts unavailable; skipping version
+// this tick"). Exported so the API create path enforces the same rule the
+// catalog does — mirroring ValidateOSArch.
+func ValidateToolRetain(o ostype.OS, retain int) error {
+	if o.Family().Name != "tool" {
+		return nil
+	}
+	if retain != 1 {
+		return fmt.Errorf("os %q is a tool; retain must be 1 (upstream publishes one release at a time)", o.Name())
+	}
+	return nil
+}
+
 // CatalogEntry is one declared cache target. Enabled/Retain are pointers so an
 // omitted field is distinguishable from an explicit zero (default true / 1).
 // Spec holds the OS-specific path-discriminating params (channel or schematic)
@@ -119,13 +136,12 @@ func validateCatalog(c catalogFile) error {
 		if err := ValidateTargetParams(o, e.Spec); err != nil {
 			return fmt.Errorf("cache: catalog[%d] (%s/%s): %w", i, e.OS, e.Arch, err)
 		}
-		if r := e.retainOrDefault(); r < 0 {
+		r := e.retainOrDefault()
+		if r < 0 {
 			return fmt.Errorf("cache: catalog[%d]: retain must be >= 0, got %d", i, r)
 		}
-		if o.Family().Name == "tool" {
-			if e.Retain != nil && *e.Retain != 1 {
-				return fmt.Errorf("cache: catalog[%d]: os %q is a tool; retain must be 1 (upstream publishes one release at a time)", i, e.OS)
-			}
+		if err := ValidateToolRetain(o, r); err != nil {
+			return fmt.Errorf("cache: catalog[%d]: %w", i, err)
 		}
 		if e.OS == "debian" {
 			if err := validateDebianEntry(i, e); err != nil {
