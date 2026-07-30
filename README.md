@@ -54,6 +54,9 @@ It does one job: get your machines netbooted into the right OS.
 | **Flatcar Linux** | `<channel>.release.flatcar-linux.net` | Ignition (rendered from a Butane template) |
 | **Fedora CoreOS** | `builds.coreos.fedoraproject.org` streams | Ignition (rendered from a Butane template) |
 | **Talos Linux** | Talos Image Factory (`factory.talos.dev`) | Talos machine config (per-host schematic supported) |
+| **SystemRescue** | netboot.xyz endpoints manifest | none (config-less rescue tool) |
+| **UEFI Shell** | netboot.xyz endpoints manifest | none (config-less rescue tool, EFI-only) |
+| **Memtest86+** | netboot.xyz endpoints manifest | none (config-less rescue tool) |
 
 ## How a boot works
 
@@ -186,7 +189,7 @@ you most likely need:
 | `--serverIP` | `127.0.0.1` | LAN IP clients use to reach booty (set this!) |
 | `--httpPort` | `8080` | HTTP listener port |
 | `--serverHttpPort` | `80` | HTTP port advertised to clients (if different from the listener) |
-| `--updateSchedule` | `*/5 * * * *` | Cron schedule for upstream version checks |
+| `--cacheInterval` | `5m` | Interval between cache reconcile passes (discovery refresh) |
 | `--talosArchitecture` | `amd64` | Talos arch (`amd64` / `arm64`) |
 | `--talosRetainMinors` | `3` | Number of newest Talos minor lines to cache |
 | `--proxyDHCPEnabled` | `false` | Answer PXE boot requests without handing out leases |
