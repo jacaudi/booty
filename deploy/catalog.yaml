@@ -10,17 +10,21 @@
 # Schema (see pkg/cache/catalog.go for the authoritative validation):
 #   schemaVersion: 1              # required; the only version this build accepts
 #   catalog:                      # list of cache targets
-#     - os: <string>              # one of: flatcar, fedora-coreos, talos, debian
+#     - os: <string>              # one of: flatcar, fedora-coreos, talos, debian,
+#                                  #   systemrescue, uefi-shell, memtest86plus
 #       arch: <string>            # must be in the OS's supported arch set:
 #                                  #   flatcar/talos: amd64, arm64
 #                                  #   fedora-coreos: x86_64
 #                                  #   debian: amd64, arm64
+#                                  #   systemrescue/uefi-shell/memtest86plus: amd64
 #       enabled: <bool>            # optional, default true — whether the reconciler
 #                                   # actively discovers/caches this target
 #       retain: <int>               # optional, default 1 — how many newest versions
-#                                    # to keep cached (older ones are evicted)
+#                                    # to keep cached (older ones are evicted); the
+#                                    # three tools above must be left at 1
 #       spec:                       # OS-specific path-discriminating params (all
-#                                    # required keys for the OS must be present):
+#                                    # required keys for the OS must be present);
+#                                    # the three tools declare none and take no spec:
 #                                    #   flatcar/fedora-coreos: channel (e.g. stable, beta, lts)
 #                                    #   talos: schematic (Talos Image Factory schematic ID)
 #                                    #   debian: channel (one of "11", "12", "13")
@@ -90,3 +94,15 @@ catalog:
   #   retain: 1
   #   spec:
   #     channel: stable
+
+  # Tool / rescue images (netboot.xyz-sourced). Opt-in: uncomment to cache.
+  # They appear under "Tools & rescue..." in the interactive boot menu.
+  # - os: systemrescue      # ~1 GB (airootfs.sfs)
+  #   arch: amd64
+  #   retain: 1
+  # - os: uefi-shell        # a few MB; EFI clients only
+  #   arch: amd64
+  #   retain: 1
+  # - os: memtest86plus     # a few MB
+  #   arch: amd64
+  #   retain: 1

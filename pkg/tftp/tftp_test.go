@@ -538,3 +538,67 @@ func TestBootTokensForDebianModeSuffix(t *testing.T) {
 		t.Errorf("netinst base URL must not carry an install. suffix: %q", net["[[debian-baseurl]]"])
 	}
 }
+
+func TestBootTokensForTool(t *testing.T) {
+	// ServerIP MUST be set here. Nothing else in pkg/tftp sets it durably (the
+	// one test that does calls viper.Reset first), so without this the
+	// [[server-ip]] assertion below passes or fails depending on TEST ORDER.
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.ServerIP, "10.0.0.5")
+
+	got := bootTokensFor("memtest86plus", "-", "amd64", "8.00-32a14678", "10.0.0.5:8080")
+	want := "http://10.0.0.5:8080/data/cache/memtest86plus/-/amd64/8.00-32a14678"
+	if got["[[baseurl]]"] != want {
+		t.Errorf("[[baseurl]] = %q, want %q", got["[[baseurl]]"], want)
+	}
+	if got["[[version]]"] != "8.00-32a14678" || got["[[arch]]"] != "amd64" {
+		t.Errorf("version/arch tokens wrong: %#v", got)
+	}
+	if got["[[server-ip]]"] == "" {
+		t.Error("[[server-ip]] must be set: uefi-shell.ipxe re-chains with it")
+	}
+}
+
+func TestToolScriptFullySubstituted(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.ServerIP, "10.0.0.5")
+
+	for _, name := range []string{"memtest86plus", "systemrescue", "uefi-shell"} {
+		out := applyTokens(PXEConfig[name+".ipxe"],
+			bootTokensFor(name, "-", "amd64", "1.0-abc", "10.0.0.5:8080"))
+		if strings.Contains(out, "[[") {
+			t.Errorf("%s: unsubstituted token remains:\n%s", name, out)
+		}
+		// Absence of "[[" is NOT sufficient: an empty [[server-ip]] also removes
+		// the marker while emitting "chain tftp:///booty.ipxe". Assert the value
+		// actually landed.
+		if strings.Contains(out, "tftp:///") {
+			t.Errorf("%s: [[server-ip]] substituted as empty:\n%s", name, out)
+		}
+	}
+}
+
+func TestBootTokensByteIdenticalForRealOS(t *testing.T) {
+	got := bootTokensFor("talos", "abc123", "amd64", "v1.10.5", "10.0.0.5:8080")
+	if got["[[talos-version]]"] != "v1.10.5" {
+		t.Errorf("talos tokens regressed: %#v", got)
+	}
+	if _, ok := got["[[baseurl]]"]; ok {
+		t.Error("generic [[baseurl]] must not leak into a first-party OS token map")
+	}
+}
+
+// [Gate-2] The previous revision asserted on the token map, which passes green
+// while a half-substituted SCRIPT ships. Assert on what is actually served.
+func TestAssignedToolServesHoldingNotABrokenScript(t *testing.T) {
+	host := &hardware.Host{Approved: true, BootMode: "assigned", AssignedOS: "memtest86plus"}
+	got := assignedScript(host, "10.0.0.5:8080")
+	if strings.Contains(got, "[[") {
+		t.Fatalf("served script has unsubstituted tokens:\n%s", got)
+	}
+	if !strings.Contains(got, "not yet approved") {
+		t.Errorf("a tool assignment must fall back to the holding script, got:\n%s", got)
+	}
+}

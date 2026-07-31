@@ -1,0 +1,80 @@
+package tftp
+
+// Literal iPXE scripts for netboot.xyz-sourced tools, one per tool, pinned from
+// netboot.xyz's own menu templates. They are literal rather than generated from
+// a shared "boot form" because the tools differ STRUCTURALLY, not just in their
+// cmdline: SystemRescue needs two initrd lines, memtest86plus boots a single
+// binary, UEFI Shell is EFI-only. A form abstraction could not express that, and
+// this matches the existing PXEConfig["debian.ipxe"] idiom.
+//
+// [[baseurl]] resolves to the cached version directory (see bootTokensFor).
+// Scripts are flush-left rather than tab-indented like the older entries in
+// pxe_config.go: iPXE is whitespace-tolerant, and leading tabs in those entries
+// are an accident of Go's raw strings, not a convention worth propagating.
+func init() {
+	// Upstream: roles/netbootxyz/templates/menu/systemrescue.ipxe.j2 :boot,
+	// with ${ipparam} and kernel_params expanded from defaults/main.yml.
+	//
+	// initrd=initrd.magic is an iPXE UEFI mechanism, NOT a kernel or archiso
+	// one (ipxe commit e5f0255): iPXE's EFI build synthesizes a file of that
+	// name containing every loaded initrd concatenated, because the Linux EFI
+	// stub loads only the single file named by initrd=. It is:
+	//   - a provable no-op on BIOS (bzimage.c never reads initrd=; the kernel's
+	//     memparse rejects the value),
+	//   - never read on iPXE >= Feb 2023, which serves the same blob via
+	//     EFI_LOAD_FILE2_PROTOCOL and the stub prefers that,
+	//   - LOAD-BEARING on older iPXE under UEFI, where its absence means no
+	//     initrd is loaded at all.
+	// booty does not ship iPXE — the operator stages undionly.kpxe/ipxe.efi
+	// themselves — so the build is unknown and the cheap insurance is kept.
+	// If a filename is ever named here it must be initrd.magic: "initrd=initrd"
+	// would load only the first cpio and silently drop the hook below.
+	//
+	// BOOTIF's ENTIRE effect is filling the device field of klibc's ip= string
+	// (mkinitcpio-archiso hooks/archiso_pxe_common:13-30), so it matters only on
+	// multi-NIC hosts; on a single NIC "pin to X" and "race among {X}" are the
+	// same thing. Note it is INERT without ip= on the cmdline (the hook gates on
+	// it), and an unmatched value degrades to race-all rather than failing.
+	// ${netX} is an iPXE built-in resolving to last_opened_netdev() — not a
+	// netboot.xyz variable — so it needs no preamble in a standalone script.
+	// The bare (non-01-/hexhyp) form is upstream's and is what archiso's
+	// ${BOOTIF#01-} + tr both no-op on; kept deliberately over the canonical
+	// PXELINUX form, which would buy portability to an initramfs we do not have.
+	//
+	// archiso_http_srv has NO trailing slash: the netboot.xyz-patched
+	// archiso_pxe_http hook fetches "${archiso_http_srv}/airootfs.sfs", so a
+	// trailing slash yields a double slash that only resolves via booty's
+	// ServeMux 301 redirect.
+	PXEConfig["systemrescue.ipxe"] = `#!ipxe
+echo Booting SystemRescue from Booty
+imgfree
+kernel [[baseurl]]/vmlinuz archisobasedir=sysresccd BOOTIF=${netX/mac} ip=dhcp net.ifnames=0 archiso_http_srv=[[baseurl]] initrd=initrd.magic
+initrd [[baseurl]]/initrd
+initrd [[baseurl]]/archiso_pxe_http /hooks/archiso_pxe_http mode=755
+boot`
+
+	// Upstream type "direct" (utils-efi.ipxe.j2): imgfree + kernel + boot.
+	// EFI-only by construction, so fail readably on BIOS. The guard branch
+	// re-chains booty.ipxe rather than ending, so control never falls through
+	// into whatever label the generated menu places next.
+	PXEConfig["uefi-shell.ipxe"] = `#!ipxe
+iseq ${platform} efi || goto notefi
+echo Booting UEFI Shell from Booty
+imgfree
+kernel [[baseurl]]/uefi-shell-x64.efi
+boot
+:notefi
+echo UEFI Shell requires an EFI client; this machine booted in BIOS mode.
+sleep 10
+chain tftp://[[server-ip]]/booty.ipxe || shell`
+
+	// Upstream type "memtest": utils-efi and utils-pcbios-64 BOTH resolve
+	// util_path to mt86p_x86_64, so no firmware branch is needed on amd64
+	// (mt86p_i586 is the 32-bit build, a different booty arch). The endpoint
+	// ships seven files; only this one is booted.
+	PXEConfig["memtest86plus.ipxe"] = `#!ipxe
+echo Booting Memtest86+ from Booty
+imgfree
+kernel [[baseurl]]/mt86p_x86_64
+boot`
+}

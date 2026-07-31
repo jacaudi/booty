@@ -33,6 +33,9 @@ import (
 func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db.Target) error {
 	// D17: fetch the FCOS channel streams doc at most once per pass; reset the
 	// memo at pass entry so a later pass resolves new builds against a fresh doc.
+	// #73: the netboot.xyz manifest memo is reset once per PASS in reconcileAll,
+	// not here — this function runs once per TARGET, and resetting it here
+	// re-fetched the ~35KB manifest once per tool target instead of once per tick.
 	ostype.ResetStreamsCache()
 
 	o, ok := ostype.Lookup(t.OS) // t.OS is the canonical taxonomy name

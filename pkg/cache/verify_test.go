@@ -330,3 +330,61 @@ func TestVerifyVersion_AbsentFinalWithPartialIsNull(t *testing.T) {
 		t.Fatalf("failure verdict must carry a non-empty verify_err")
 	}
 }
+
+// TestVerifyVersionToolIsNotVerifiable pins the short-circuit that keeps
+// reverify from ever reaching Artifacts for a tool: tools carry no
+// verification material at all, and Artifacts refuses any version that is
+// not upstream's current tag — so calling it on an archived tool version
+// would surface as a permanent 500 on POST /api/v1/cache/{id}/reverify
+// instead of the "no verdict" this test requires.
+//
+// Adaptation note: the task brief's literal test called
+// store.UpsertCacheEntry(db.CacheEntry{TargetVersionID: vid}), but the real
+// pkg/db API (pkg/db/cache.go:47) is
+// UpsertCacheEntry(targetVersionID, size int64) error — there is no
+// db.CacheEntry input type. Adapted to the real signature below.
+func TestVerifyVersionToolIsNotVerifiable(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+
+	store := newReconcileStore(t)
+	tid, err := store.CreateTarget(db.Target{
+		OS: "memtest86plus", Arch: "amd64", Params: "{}", Enabled: true, RetainN: 1,
+		Mode: "discovery", Source: "api",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	// An ARCHIVED tag — deliberately NOT whatever upstream currently publishes.
+	const staleTag = "7.00-deadbeef"
+	if err := store.UpsertTargetVersion(db.TargetVersion{
+		TargetID: tid, Version: staleTag, Source: "discovered",
+	}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	vid, err := store.TargetVersionID(tid, staleTag)
+	if err != nil {
+		t.Fatalf("TargetVersionID: %v", err)
+	}
+	if err := store.UpsertCacheEntry(vid, 0); err != nil {
+		t.Fatalf("UpsertCacheEntry: %v", err)
+	}
+	rows, err := store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (%d rows)", err, len(rows))
+	}
+
+	// Must NOT error, and must NOT reach Artifacts (which would refuse the stale
+	// tag and surface as a permanent 500 on reverify).
+	verified, verifyErr, err := VerifyVersion(t.Context(), store, rows[0].ID)
+	if err != nil {
+		t.Fatalf("VerifyVersion on a tool = %v, want nil error", err)
+	}
+	if verified != nil {
+		t.Errorf("verified = %v, want nil (no verdict)", verified)
+	}
+	if verifyErr != "" {
+		t.Errorf("verifyErr = %q, want empty", verifyErr)
+	}
+}

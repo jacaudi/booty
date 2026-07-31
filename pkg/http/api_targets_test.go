@@ -58,6 +58,55 @@ func TestCreateTargetMissingRequiredParamIs422(t *testing.T) {
 	}
 }
 
+// TestCreateTargetRejectsWrongArchForOS covers the API create path enforcing
+// the same os/arch rule the catalog does (Task 5): a memtest86plus/arm64
+// target would 404 on every download since memtest86plus is amd64-only.
+func TestCreateTargetRejectsWrongArchForOS(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	resp := api.Post("/api/v1/targets", map[string]any{
+		"os": "memtest86plus", "arch": "arm64", "mode": "discovery", "retainN": 1,
+	})
+	if resp.Code != 422 {
+		t.Fatalf("memtest86plus/arm64 = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+	// Control: amd64 must be accepted, proving the gate rejects on arch and
+	// not on everything.
+	resp = api.Post("/api/v1/targets", map[string]any{
+		"os": "memtest86plus", "arch": "amd64", "mode": "discovery", "retainN": 1,
+	})
+	if resp.Code != 201 {
+		t.Fatalf("memtest86plus/amd64 = %d, want 201: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestCreateTargetRejectsBadRetainForTool closes the gap validateCatalog
+// already closes (a tool with retain != 1 is rejected): the API create path
+// must enforce the same rule, or an over-retained tool sits as
+// desired-but-uncachable state forever (Artifacts refuses any version that
+// isn't upstream's current tag, so every reconcile tick logs "artifacts
+// unavailable; skipping version this tick").
+func TestCreateTargetRejectsBadRetainForTool(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	resp := api.Post("/api/v1/targets", map[string]any{
+		"os": "memtest86plus", "arch": "amd64", "mode": "discovery", "retainN": 3,
+	})
+	if resp.Code != 422 {
+		t.Fatalf("memtest86plus retainN=3 = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+	// Control: a DIFFERENT tool with retainN=1 must be accepted, proving the
+	// gate rejects on retain and not on everything. targets has a UNIQUE
+	// constraint on (os, arch, params) — reusing memtest86plus here would 422
+	// on duplicate and look like the gate working when it is not.
+	resp = api.Post("/api/v1/targets", map[string]any{
+		"os": "systemrescue", "arch": "amd64", "mode": "discovery", "retainN": 1,
+	})
+	if resp.Code != 201 {
+		t.Fatalf("systemrescue retainN=1 = %d, want 201: %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestDeleteTargetIs403UntilAuth(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)

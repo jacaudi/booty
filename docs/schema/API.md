@@ -106,8 +106,17 @@ the boot contract above. All endpoints speak JSON.
 
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
-| `GET` | `/api/v1/families` | List boot-config families (`ignition`, `machineconfig`, …). | `{"families":[…]}` |
+| `GET` | `/api/v1/families` | List boot-config families (`ignition`, `talos`, `debian`, `tool`). | `{"families":[…]}` |
 | `GET` | `/api/v1/os` | List supported OS types with required params per OS. | `{"os":[…]}` |
+
+`GET /api/v1/os` reports all seven registered OSes: `flatcar`, `fedora-coreos`, `talos`,
+`debian`, `systemrescue`, `uefi-shell`, `memtest86plus`.
+
+`GET /api/v1/families` includes the `tool` family — the netboot.xyz-sourced rescue/diagnostic
+OSes (`systemrescue`, `uefi-shell`, `memtest86plus`). It takes no per-host config, so its
+`configKind` is `""` and its `authoringKinds` is an empty JSON **array** (`[]`), never `null` —
+a `null` there would survive into the UI's `flatMap` over every family's `authoringKinds` as a
+literal array element, rather than contributing nothing.
 
 ### Targets
 
@@ -141,7 +150,7 @@ Cache targets represent an (OS, arch, params) tuple that the reconciler discover
 | `desiredMode` | string | **Debian only.** Set to `dvd` by `promote-dvd` while a promote is pending; empty once the reconciler completes it and `sourceMode` reflects the new mode. Lets an operator see a promote land without querying the DB directly. |
 
 **Required params, per OS** (as of #48, `flatcar` and `fedora-coreos` join `debian` in requiring a
-channel; `talos` requires a schematic):
+channel; `talos` requires a schematic; the netboot.xyz-sourced tools require none):
 
 | OS | Required param(s) |
 |----|--------------------|
@@ -149,19 +158,27 @@ channel; `talos` requires a schematic):
 | `flatcar` | `channel` |
 | `fedora-coreos` | `channel` |
 | `debian` | `channel` |
+| `systemrescue` | *(none)* |
+| `uefi-shell` | *(none)* |
+| `memtest86plus` | *(none)* |
 
 `GET /api/v1/os` reports the authoritative required-params list per registered OS.
 
 **`POST /api/v1/targets` validation, in order** (all failures are `422`):
 
-1. `os` must be a registered OS (`ostype.Lookup`).
-2. `params` may only contain keys the OS's `RequiredParams()` declares — any other key is rejected
+1. `os` must be a registered OS (`ostype.Lookup`; `"unknown OS <os>"`).
+2. `arch` must be path-safe (`"invalid arch"`).
+3. `(os, arch)` must be a supported pairing (`ValidateOSArch`; `"invalid os/arch"`) — the same
+   check `catalog.yaml` applies, so a mismatched arch for the OS (e.g. `os: fedora-coreos, arch:
+   amd64`) is rejected here too rather than minting a target that 404s on every download.
+4. `params` may only contain keys the OS's `RequiredParams()` declares — any other key is rejected
    as `"unexpected param: <k>"`. This isn't just tidiness: `paramSegment` picks the
    path-discriminating cache segment by fixed key precedence (`schematic` > `channel`), so an
    unrequested key would silently become an **unvalidated** disk/URL path segment if it happened to
-   match one of those names.
-3. Every required param must be present and non-empty (`"missing required param: <p>"`).
-4. Every required param's **value** must match `^[a-z0-9][a-z0-9.-]*$` — lowercase-alnum start,
+   match one of those names. The three tools declare no required params, so any `params` key at all
+   on a tool target is rejected the same way.
+5. Every required param must be present and non-empty (`"missing required param: <p>"`).
+6. Every required param's **value** must match `^[a-z0-9][a-z0-9.-]*$` — lowercase-alnum start,
    then alnum/dot/dash, no `/` — since required params become the cache directory + URL segment
    (`"invalid param <p>"`). The same check runs on the `--flatcarChannel` / `--coreOSChannel` /
    `--talosSchematic` flags at startup and on the one-time #48 migration, so a malformed flag or a

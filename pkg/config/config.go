@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -51,6 +52,8 @@ const (
 	PreseedFile            = "preseedFile"
 	ConfigRevisionsKeep    = "configRevisionsKeep"
 	CatalogFile            = "catalogFile"
+	NetbootxyzEndpointsURL = "netbootxyzEndpointsURL"
+	NetbootxyzAssetBase    = "netbootxyzAssetBase"
 )
 
 // DefaultTalosSchematic is the Image Factory's "vanilla" (no-extensions)
@@ -86,6 +89,8 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(FlatcarURL, "https://%s.release.flatcar-linux.net/%s-usr/current")
 	viper.SetDefault(CoreOSURL, "https://builds.coreos.fedoraproject.org/prod/streams/%s/builds/%s/%s")
 	viper.SetDefault(SignaturePolicy, "warn")
+	viper.SetDefault(NetbootxyzEndpointsURL, "https://raw.githubusercontent.com/netbootxyz/netboot.xyz/development/endpoints.yml")
+	viper.SetDefault(NetbootxyzAssetBase, "https://github.com/netbootxyz")
 	// https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/39.20231101.3.0/x86_64/fedora-coreos-39.20231101.3.0-live-kernel-x86_64
 	// https://stable.release.flatcar-linux.net/amd64-usr/current/version.txt
 
@@ -159,6 +164,26 @@ func DatabasePathValue() string {
 		return p
 	}
 	return filepath.Join(viper.GetString(DataDir), "booty.db")
+}
+
+// PathSegmentRE admits single-segment path-safe values: lowercase alnum start,
+// then alnum/dot/dash/underscore. No "/", no leading dot — so a value can never
+// traverse out of its cache segment ("a..b" is an odd but harmless single
+// segment; a literal ".." or "" is rejected).
+//
+// It lives here rather than in pkg/cache because pkg/ostype must apply the same
+// rule to third-party-sourced versions and cannot import pkg/cache (that would
+// cycle: pkg/cache imports pkg/ostype).
+var PathSegmentRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// ValidatePathSegment rejects a value that cannot safely become a path segment
+// (disk dir + URL). Single knowledge site for "values that become path segments
+// must be path-safe".
+func ValidatePathSegment(v string) error {
+	if !PathSegmentRE.MatchString(v) {
+		return fmt.Errorf("config: value %q is not path-safe (must match %s)", v, PathSegmentRE)
+	}
+	return nil
 }
 
 // ValidateSignaturePolicy rejects an unknown --signaturePolicy value at startup

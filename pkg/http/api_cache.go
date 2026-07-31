@@ -152,7 +152,10 @@ func registerCache(api huma.API, deps APIDeps) {
 			return nil, huma.Error500InternalServerError("get entry", err)
 		}
 		// An explicit operator ask always verifies (ignores --signaturePolicy off).
-		// Reset the FCOS streams memo so reverify sees a fresh doc (D17).
+		// Reset the FCOS streams memo so reverify sees a fresh doc (D17). The
+		// netboot.xyz memo is deliberately NOT reset here: VerifyVersion
+		// short-circuits the tool family before it ever calls Artifacts (the
+		// only reader of that memo), so a tool reverify never observes it.
 		ostype.ResetStreamsCache()
 		verified, verifyErr, verr := cache.VerifyVersion(ctx, deps.Store, n)
 		if verr != nil {

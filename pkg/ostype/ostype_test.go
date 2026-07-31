@@ -26,8 +26,11 @@ func TestFamilyByName(t *testing.T) {
 	}
 }
 
-func TestRegistry_RegistersAllFour(t *testing.T) {
-	want := []string{"debian", "fedora-coreos", "flatcar", "talos"}
+func TestRegistry_RegistersAll(t *testing.T) {
+	want := []string{
+		"debian", "fedora-coreos", "flatcar", "memtest86plus",
+		"systemrescue", "talos", "uefi-shell",
+	}
 	names := make([]string, 0, len(All()))
 	for _, o := range All() {
 		names = append(names, o.Name())
@@ -52,5 +55,15 @@ func TestLookup_FamilyWiring(t *testing.T) {
 		if o.Family().Name != fam {
 			t.Errorf("%s.Family() = %q, want %q", osName, o.Family().Name, fam)
 		}
+	}
+}
+
+func TestToolFamilyIsConfigless(t *testing.T) {
+	f, ok := FamilyByName("tool")
+	if !ok {
+		t.Fatal(`FamilyByName("tool") not found`)
+	}
+	if f.ConfigKind != "" || f.Template != "" {
+		t.Errorf("tool family = %+v, want empty ConfigKind and Template", f)
 	}
 }

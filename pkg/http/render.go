@@ -38,6 +38,16 @@ func authoringKindsForFamily(familyConfigKind string) []string {
 		return []string{"butane"} // author butane, serve ignition
 	case "preseed":
 		return []string{"debianconfig"} // #59: raw preseed retired
+	case "":
+		// A config-less family (e.g. "tool") authors nothing. Without this arm the
+		// default would return []string{""}, advertising an empty authoringKinds
+		// entry on GET /api/v1/families and rendering an empty option in the UI's
+		// config-kind picker.
+		//
+		// []string{} and NOT nil: a nil slice marshals to JSON null, and
+		// web/src/api/catalog.ts flatMaps authoringKinds — flatMap only flattens
+		// array returns, so a null survives as an element and reaches the pickers.
+		return []string{}
 	default:
 		return []string{familyConfigKind} // machineconfig, ...
 	}

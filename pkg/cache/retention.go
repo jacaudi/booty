@@ -55,6 +55,34 @@ func retentionFor(canonicalOS string, versions []string, n int) []string {
 	if !ok {
 		return []string{}
 	}
+	// Tool OSes: netboot.xyz publishes exactly ONE release per endpoint, and
+	// Artifacts refuses any version that is not that current tag — so a
+	// non-current tag can never be re-landed anyway. Retain the discovered set
+	// verbatim rather than sorting it, then cap it at n (same shape as the
+	// non-tool branch below).
+	//
+	// Sorting would be actively WRONG here: tool tags have no version grammar
+	// (CompareVersions is a string compare), so a newer tag that sorts lexically
+	// lower ("10.00-…" < "9.05-…") would lose to the cached one and the target
+	// would pin the old release forever.
+	//
+	// Truncating to the first n elements (rather than re-sorting to pick which
+	// n to keep) is only correct because the caller — reconcileTarget's `known`
+	// construction in reconcile.go — always places the freshly-discovered tag(s)
+	// first: `known := slices.Clone(discovered)`, then any in-window-cached
+	// version NOT already in discovered is appended after. That ordering is a
+	// non-local invariant this function relies on but cannot enforce: a future
+	// change to reconcile.go that reorders or sorts `known` before calling
+	// retentionFor would silently reintroduce the "keep the old tag forever"
+	// bug this branch exists to fix, and no test here would catch it — the
+	// tool retention test hand-constructs its input already discovered-first.
+	if o.Family().Name == "tool" {
+		out := slices.Clone(versions)
+		if n < len(out) {
+			out = out[:n]
+		}
+		return out
+	}
 	sorted := slices.Clone(versions)
 	slices.SortFunc(sorted, func(a, b string) int { return o.CompareVersions(b, a) }) // newest first
 	if n < len(sorted) {

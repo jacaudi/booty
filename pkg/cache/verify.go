@@ -314,6 +314,14 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 	if err != nil {
 		return nil, "", fmt.Errorf("cache: verify params: %w", err)
 	}
+	// Tools carry no verification material at all (netboot.xyz publishes neither
+	// checksums nor signatures), so there is nothing to fetch and nothing to
+	// check. Short-circuit BEFORE Artifacts: it refuses any version that is not
+	// upstream's current tag, which would make reverify on an archived tool a
+	// permanent 500 rather than a verdict.
+	if o.Family().Name == "tool" {
+		return nil, "", nil
+	}
 	dir := cacheDir(canonicalToCacheName(row.OS), paramSegment(params), row.Arch, row.Version)
 	arts, err := o.Artifacts(ctx, row.Version, row.Arch, params)
 	if err != nil {

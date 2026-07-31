@@ -46,8 +46,11 @@ export function osNameForKind(kind: string): string {
 }
 
 // The create picker offers ONE choice — the OS. The kind follows from it; there
-// is no format choice and no content sniffing. These three cover every OS booty
-// supports (pkg/ostype registers four OSes across three families).
+// is no format choice and no content sniffing. These three cover every OS with
+// an authorable config (pkg/ostype now registers seven OSes across four
+// families — the fourth, `tool`, is netboot.xyz-sourced rescue/diagnostic
+// images that take no per-host config, so it contributes no authoring kind and
+// no entry here).
 export interface OSChoice {
   value: string
   label: string

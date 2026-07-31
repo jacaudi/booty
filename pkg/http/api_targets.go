@@ -110,7 +110,13 @@ func registerTargets(api huma.API, deps APIDeps) {
 		if err := cache.ValidatePathParam(in.Body.Arch); err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid arch", err)
 		}
+		if err := cache.ValidateOSArch(in.Body.OS, in.Body.Arch); err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid os/arch", err)
+		}
 		if err := cache.ValidateTargetParams(o, in.Body.Params); err != nil {
+			return nil, huma.Error422UnprocessableEntity(err.Error())
+		}
+		if err := cache.ValidateToolRetain(o, in.Body.RetainN); err != nil {
 			return nil, huma.Error422UnprocessableEntity(err.Error())
 		}
 		encoded, err := cache.EncodeParams(in.Body.Params)

@@ -59,6 +59,10 @@ var families = map[string]Family{
 	"ignition": {Name: "ignition", ConfigKind: "ignition", Template: "ignition.config.url="},
 	"talos":    {Name: "talos", ConfigKind: "machineconfig", Template: "talos.config="},
 	"debian":   {Name: "debian", ConfigKind: "preseed", Template: "auto url="},
+	// tool: netboot.xyz-sourced rescue/diagnostic images. They take NO per-host
+	// config, so there is no authorable kind and no config-URL directive to
+	// inject into the kernel cmdline — both fields are deliberately empty.
+	"tool": {Name: "tool", ConfigKind: "", Template: ""},
 }
 
 // FamilyByName returns the named family.

@@ -69,6 +69,36 @@ minutes; on timeout it re-chains `booty.ipxe`, which re-renders the menu with wh
 since finished caching. An empty cache therefore still produces a valid menu that simply
 loops until something is available.
 
+### Tools & rescue
+
+Alongside the OS entries, booty can also cache **tools** — netboot.xyz-sourced rescue and
+diagnostic images that take no per-host config: `systemrescue` (SystemRescue, ~1 GB),
+`uefi-shell` (UEFI Shell, EFI-only), and `memtest86plus` (Memtest86+). Whenever at least one
+tool target is cached, the main menu grows a `Tools & rescue...` item — a nested submenu
+alongside (and shaped like) `Archived OSes...`, with its own `Back` item, listing every cached
+tool.
+
+**A tool's menu label shows its release tag, not a prettier version.** netboot.xyz release
+tags share no common grammar (`13.01-d20a63ac`, `edk2-stable202002-a6917535`), so booty uses
+the tag itself as the label's version, e.g.:
+
+```
+Memtest86+ 8.00-32a14678 (amd64)
+```
+
+An earlier revision of this design intended a prettier upstream version string; that was
+withdrawn — `menuItemText` reads the version straight off disk, and resolving a nicer label
+would mean fetching the upstream manifest from the boot path itself, which booty does not do.
+
+Booting UEFI Shell on a BIOS-mode client doesn't fail silently: the script detects the
+firmware, prints "UEFI Shell requires an EFI client; this machine booted in BIOS mode.", and
+re-chains back into `booty.ipxe` after a short pause rather than hanging.
+
+Tool artifacts are never checksum- or signature-verified — netboot.xyz publishes neither — so
+their `verified` state stays unset (NULL) in the Cache view regardless of
+`--signaturePolicy`. Tools are opt-in: none are cached by default, see
+[Add a target](#1-add-a-target-catalogyaml) below.
+
 ---
 
 ## Adding more OSes and versions to the menu
@@ -108,16 +138,29 @@ catalog:
     retain: 1
     spec:
       channel: beta
+
+  # Tools & rescue: uncomment any of these to add them to the "Tools & rescue..."
+  # submenu. They take no spec and retain must stay 1 — see CATALOG.md.
+  # - os: systemrescue      # ~1 GB (airootfs.sfs)
+  #   arch: amd64
+  #   retain: 1
+  # - os: uefi-shell        # a few MB; EFI clients only
+  #   arch: amd64
+  #   retain: 1
+  # - os: memtest86plus     # a few MB
+  #   arch: amd64
+  #   retain: 1
 ```
 
 booty reconciles to this file on each cache tick — new entries are created and downloaded,
 removed entries are **disabled, never deleted**. A malformed catalog **aborts startup**
 rather than silently mass-downloading or mass-disabling; that's intentional.
 
-The four OS families booty can cache today are `flatcar`, `fedora-coreos`, `talos`, and
-`debian`. Adding a family beyond those is a code change, not a catalog edit. See
-[schema/CATALOG.md](schema/CATALOG.md) for the full schema, the per-OS `arch` tokens and
-`spec` keys, and the Debian `sourceMode: netinst|dvd` options.
+The families booty can cache today are `ignition` (Flatcar / Fedora CoreOS), `talos`,
+`debian`, and `tool` (`systemrescue` / `uefi-shell` / `memtest86plus`). Adding a family beyond
+those is a code change, not a catalog edit. See [schema/CATALOG.md](schema/CATALOG.md) for the
+full schema, the per-OS `arch` tokens and `spec` keys, and the Debian `sourceMode: netinst|dvd`
+options.
 
 ### 2. Offer more versions of a target — `retain`
 

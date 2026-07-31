@@ -195,3 +195,111 @@ func TestOSTitle_Debian(t *testing.T) {
 		t.Fatalf("osTitle[debian]=%q want Debian", osTitle["debian"])
 	}
 }
+
+func toolEntry(name, version string) cache.CacheEntry {
+	return cache.CacheEntry{CacheName: name, Segment: "-", Arch: "amd64", Version: version}
+}
+
+func TestMenuToolsSubmenu(t *testing.T) {
+	in := []cache.CacheEntry{
+		{CacheName: "talos", Segment: "abc", Arch: "amd64", Version: "v1.10.5"},
+		toolEntry("memtest86plus", "8.00-32a14678"),
+	}
+	out := renderMenu(in, nil, "10.0.0.5")
+
+	if !strings.Contains(out, "item tools ") {
+		t.Fatalf("missing the tools sentinel item:\n%s", out)
+	}
+	idx := strings.Index(out, ":tools")
+	if idx < 0 {
+		t.Fatalf("missing the :tools label:\n%s", out)
+	}
+	if strings.Contains(out[:idx], "memtest86plus/") {
+		t.Errorf("tool leaked into the main menu:\n%s", out[:idx])
+	}
+	// Its own choose variable — sel and asel are taken.
+	if !strings.Contains(out, "choose --timeout 300000 --default back tsel") {
+		t.Errorf("tools submenu must choose into tsel:\n%s", out)
+	}
+}
+
+func TestMenuNoToolsNoSubmenu(t *testing.T) {
+	in := []cache.CacheEntry{{CacheName: "talos", Segment: "abc", Arch: "amd64", Version: "v1.10.5"}}
+	out := renderMenu(in, nil, "10.0.0.5")
+	if strings.Contains(out, "item tools ") || strings.Contains(out, ":tools\n") {
+		t.Errorf("tools submenu emitted with no tools cached:\n%s", out)
+	}
+}
+
+func TestArchivedToolGoesToArchived(t *testing.T) {
+	out := renderMenu(nil, []cache.CacheEntry{toolEntry("memtest86plus", "7.00-old")}, "10.0.0.5")
+	if strings.Contains(out, "item tools ") {
+		t.Errorf("an archived-only tool must not create a tools submenu:\n%s", out)
+	}
+	if !strings.Contains(out, "item archived ") {
+		t.Errorf("missing archived submenu:\n%s", out)
+	}
+}
+
+func TestMenuItemKeysWellFormed(t *testing.T) {
+	out := renderMenu(
+		[]cache.CacheEntry{
+			{CacheName: "talos", Segment: "abc", Arch: "amd64", Version: "v1.10.5"},
+			toolEntry("memtest86plus", "8.00-32a14678"),
+		},
+		[]cache.CacheEntry{toolEntry("systemrescue", "12.00-old")},
+		"10.0.0.5")
+
+	sentinels := map[string]bool{"retry": true, "tools": true, "archived": true, "back": true}
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "item ") {
+			continue
+		}
+		key := strings.Fields(line)[1]
+		if sentinels[key] {
+			continue
+		}
+		if n := strings.Count(key, "/"); n != 3 {
+			t.Errorf("item key %q has %d slashes, want 3 (os/segment/arch/version)", key, n)
+		}
+	}
+}
+
+// [Gate-2] The no-tools output must be byte-identical to today's, including no
+// stray unreachable "goto boot".
+func TestMenuNoToolsOutputUnchanged(t *testing.T) {
+	in := []cache.CacheEntry{{CacheName: "talos", Segment: "abc", Arch: "amd64", Version: "v1.10.5"}}
+	arch := []cache.CacheEntry{{CacheName: "talos", Segment: "abc", Arch: "amd64", Version: "v1.9.1"}}
+	out := renderMenu(in, arch, "10.0.0.5")
+	if strings.Count(out, "goto boot\n") != 1 {
+		t.Errorf("expected exactly one 'goto boot' dispatch line:\n%s", out)
+	}
+}
+
+func TestMenuAllFourCombinations(t *testing.T) {
+	tool := toolEntry("memtest86plus", "8.00-32a14678")
+	osEntry := cache.CacheEntry{CacheName: "talos", Segment: "abc", Arch: "amd64", Version: "v1.10.5"}
+	for _, tc := range []struct {
+		name             string
+		in, arch         []cache.CacheEntry
+		wantTools, wantA bool
+	}{
+		{"none", nil, nil, false, false},
+		{"tools only", []cache.CacheEntry{tool}, nil, true, false},
+		{"archived only", nil, []cache.CacheEntry{osEntry}, false, true},
+		{"both", []cache.CacheEntry{tool, osEntry}, []cache.CacheEntry{osEntry}, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := renderMenu(tc.in, tc.arch, "10.0.0.5")
+			if got := strings.Contains(out, "item tools "); got != tc.wantTools {
+				t.Errorf("tools submenu = %v, want %v\n%s", got, tc.wantTools, out)
+			}
+			if got := strings.Contains(out, "item archived "); got != tc.wantA {
+				t.Errorf("archived submenu = %v, want %v\n%s", got, tc.wantA, out)
+			}
+			if !strings.Contains(out, "item retry ") {
+				t.Errorf("retry item must always be present:\n%s", out)
+			}
+		})
+	}
+}

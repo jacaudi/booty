@@ -10,7 +10,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/ostype"
@@ -127,20 +126,14 @@ func paramSegment(params map[string]string) string {
 	return "-"
 }
 
-// pathParamRE admits single-segment path-safe values: lowercase alnum start,
-// then alnum/dot/dash/underscore. No "/", no leading dot — so a value can
-// never traverse out of its cache segment ("a..b" is an odd but harmless
-// single segment; a literal ".." or "" is rejected).
-var pathParamRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-
 // ValidatePathParam rejects a value that cannot safely become a cache path
-// segment (disk dir + URL). Single knowledge site for "values that become
-// path segments must be path-safe": it guards ALL such values — params
-// (schematic/channel) AND arch — and is called by the API create handler,
-// the catalog-apply pass, and the startup migration.
+// segment (disk dir + URL). It guards ALL such values — params
+// (schematic/channel) AND arch — and is called by the API create handler, the
+// catalog-apply pass, and the startup migration. The rule itself lives in
+// pkg/config so pkg/ostype can apply it too without an import cycle.
 func ValidatePathParam(v string) error {
-	if !pathParamRE.MatchString(v) {
-		return fmt.Errorf("cache: value %q is not path-safe (must match %s)", v, pathParamRE)
+	if err := config.ValidatePathSegment(v); err != nil {
+		return fmt.Errorf("cache: value %q is not path-safe (must match %s)", v, config.PathSegmentRE)
 	}
 	return nil
 }

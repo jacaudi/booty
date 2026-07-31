@@ -65,8 +65,12 @@ func registerCatalog(api huma.API) {
 				continue
 			}
 			seen[f.Name] = true
+			ak := authoringKindsForFamily(f.ConfigKind)
+			if ak == nil {
+				ak = []string{}
+			}
 			out.Body.Families = append(out.Body.Families, FamilyDTO{
-				Name: f.Name, ConfigKind: f.ConfigKind, AuthoringKinds: authoringKindsForFamily(f.ConfigKind),
+				Name: f.Name, ConfigKind: f.ConfigKind, AuthoringKinds: ak,
 			})
 		}
 		return out, nil
