@@ -714,6 +714,29 @@ BIOS booting outright, and the failure would present as iPXE's `-ENOBUFS`, not a
   a live filesystem` (netbootxyz#1104, reproduced on VirtualBox and KVM). The lab gate must account
   for this before concluding a Tails failure is booty's fault.
 
+**Clonezilla / Rescatux, from the same source (netbootxyz#1254, #1626):**
+
+- **booty is immune to upstream's open DNS bug.** netbootxyz#1254 (still open) has Debian-based live
+  boots — Clonezilla included — failing because the initramfs runs `wget` for the squashfs
+  immediately after writing `/etc/resolv.conf`, and the lookup loses the race. **booty's
+  `[[baseurl]]` is an IP-and-port, never a hostname**, so the `fetch=` URL needs no DNS at all. Worth
+  knowing so the symptom is not misdiagnosed as a booty defect, and worth *not* "fixing".
+- **netbootxyz#1626 is the one that should change how we think about caching.** Clonezilla hung at
+  *"Waiting for ethernet cards up"* on every machine, confirmed by the maintainer on both Debian and
+  Ubuntu images, and it persisted past 8 GB of RAM. The root cause was **not** the boot script: the
+  *mirrored* `initrd` had been built without network drivers. The fix was a rebuilt asset.
+
+  booty caches exactly those mirrored assets, so a bad upstream build is served faithfully to every
+  client. **This is an argument for D7, not against it** — the release tag changes when the artifacts
+  are rebuilt, so a fixed asset arrives as a new tag and booty re-caches it automatically.
+
+  **The residual risk is asset mutation at a fixed tag.** booty's skip-if-cached short-circuit
+  (`cachedByVersion[version] && finalFilesPresent(...)`) means that if upstream ever *replaces* files
+  under an existing tag rather than cutting a new one, booty keeps serving the broken bytes forever
+  and no reconcile pass will notice — there are no checksums to compare against (§8.5). Record this
+  as a known limitation; the mitigation if it ever bites is an operator-triggered re-fetch, which
+  `POST /api/v1/cache/{id}/reverify` does not currently provide for tools (it short-circuits, §8.3).
+
 **What cannot be copied from upstream: the caching.** netboot.xyz sets
 `live_endpoint: https://github.com/netbootxyz` (`defaults/main.yml:182`) — its clients stream every
 artifact **directly from GitHub**, and it never writes the ISO to its own disk. booty caches
