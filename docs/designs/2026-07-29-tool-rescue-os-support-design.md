@@ -62,6 +62,9 @@ become ordinary cache targets and therefore ordinary menu entries.
 | D7 | On-disk version identity | **The netboot.xyz release tag** (`13.01-d20a63ac`), not the pretty `version`. **The menu label shows the tag too.** | Revised twice. The tag changes exactly when the artifacts change, making version→path total; the pretty version does not (§8.1). An earlier revision promised the pretty version in the menu label — **withdrawn**, see §7. |
 | D8 | Boot-script shape | **One literal iPXE script per tool**, tokenized on `[[baseurl]]` — **no form taxonomy**. | Revised post-review. The eight tools need 1–3 `initrd` lines, `${platform}` branches, and per-tool cmdlines that no three-form abstraction can express (§6.1). This is also the repo's existing idiom and strictly less code. |
 | D9 | Snapshot memoization shape | **Mutex-guarded memo + explicit reset**, mirroring `pkg/ostype/streams.go`. No TTL, no single-flight. | Revised post-review. Targets reconcile **sequentially** (`pkg/cache/reconciler.go:113-120`), so single-flight guards nothing; the mutex exists for the API-goroutine reader (§8.3). |
+| D10 | Which files a tool caches | **A per-tool `files []string` allowlist** on the registration row. `Artifacts` requests only those and errors if one is missing from the manifest. | **Added 2026-07-30 after the slice-1 lab gate**, reversing §6's original "cache-more-than-you-boot" stance. netboot.xyz lists files its releases do not publish (`memtest86plus`: 7 listed, 3 published), and one 404 aborts the whole version forever. Fail-loud is deliberate: a missing allowlisted file means upstream renamed the exact artifact the boot script needs, which must not degrade to a silent half-cache. |
+| D11 | Clonezilla endpoint choice | **`clonezilla-debian-stable-amd64` only**, registered as `clonezilla`. | Upstream publishes four (debian/ubuntu × stable/testing). Tools are param-less (D4/§4.3), so the choice cannot be a `spec` key, and the user's dedupe is explicitly one-tool-per-function. Ubuntu-based builds (newer kernels for very new hardware) and testing builds remain additive later as separate registrations. |
+| D12 | ShredOS destructiveness | **Ship it, behind an in-script iPXE confirmation gate** that defaults to "go back". | ShredOS wipes every disk the moment it boots, and booty's `Tools & rescue...` submenu boots a selection immediately with no confirmation — so an unguarded entry makes a misclick destructive. Upstream gates it behind a full-screen warning and a method choice; booty ports the warning into its literal script (D8 makes this natural) and hardcodes the wipe method, since tools take no params. |
 
 ## 4. Architecture
 
@@ -88,8 +91,11 @@ which is precisely why `streamsCache` has one.
 
 - `DiscoverVersions` — returns the **release tag** derived from the snapshot entry's `path`
   (D7), after validating it (§8.2).
-- `Artifacts` — reads the entry's `path` + `files`, emitting one `Artifact` per file at
-  `https://github.com/netbootxyz<path><file>`. No `SHA256`/`SigURL` — none are published (§8.5).
+- `Artifacts` — reads the entry's `path` + `files`, emitting one `Artifact` per **allowlisted** file
+  at `https://github.com/netbootxyz<path><file>`. Each tool registration carries a `files []string`
+  allowlist (D10); `Artifacts` requests only those and **fails loudly** if an allowlisted name is
+  absent from the manifest entry. An empty allowlist means every manifest file. No `SHA256`/`SigURL`
+  — none are published (§8.5).
 - `RequiredParams` — empty. Tools have no path-discriminating params.
 - `ValidateVersion` — path-safe charset (§8.2).
 - `CompareVersions` — string compare (§8.4 documents the consequences).
@@ -223,10 +229,16 @@ cmdline string cannot repair it because the differences are *structural*, not te
 All upstream utility entries emit a leading **`imgfree`** before `kernel`/`sanboot`; booty's scripts
 do the same.
 
-**Cache-more-than-you-boot is accepted.** `Artifacts` returns one entry per `files` member, so
-Memtest86+ caches seven files and boots one. They are a few MB each; filtering would add a
-per-tool "which files matter" list that only this tool needs (YAGNI). Revisit only if a tool ships
-something large it never boots.
+**~~Cache-more-than-you-boot is accepted.~~ REVERSED by the slice-1 lab gate (2026-07-30) — see
+D10.** This section originally argued that `Artifacts` should emit one entry per `files` member and
+that filtering "would add a per-tool 'which files matter' list that only this tool needs (YAGNI)."
+That reasoning was wrong on a fact nobody had checked: **netboot.xyz's manifest lists files its own
+asset mirror does not publish.** `memtest86plus` lists seven; only three exist. The four 404s made
+`reconcileTarget` abandon the whole version every pass forever (~2,000 GitHub req/day) and left
+untracked orphans on disk. The per-tool allowlist is now **mandatory**, not a nice-to-have — it is
+the only thing that stops booty asking for files that do not exist. It also removes the cross-arch
+waste the original text dismissed (an amd64 `uefi-shell` target was downloading arm and aarch64
+EFI binaries).
 
 So: each tool gets a literal iPXE script in `pkg/tftp`, tokenized on `[[baseurl]]`, exactly as
 `PXEConfig["debian.ipxe"]`/`["talos.ipxe"]`/`["coreos.ipxe"]` already are (`pxe_config.go:19-58`).
@@ -484,14 +496,47 @@ A cold `sr-go-engineer` whole-branch review that drives the built binary, per re
   (pkg/ostype registers four OSes across three families)" goes stale. Comment only; no functional
   web change (§4.3).
 
-## 11. Slice 2 (deferred, additive)
+## 11. Slice 2 — the remaining five tools
 
-Clonezilla, Rescatux, and Tails; ZFSBootMenu; ShredOS (`shredos-x86_64`).
+**Verified against live netboot.xyz on 2026-07-30** (manifest entries, GitHub release assets, and
+upstream menu templates all re-fetched — not carried over from the earlier draft).
 
-Each is **four sites**, stated honestly rather than the "one row in two files" an earlier draft
-claimed: the `pkg/ostype/tools.go` row, the `catalogArches` row (or its derivation, §4.4), the
-literal boot script in `pkg/tftp`, and the `osTitle` label. No change to the shared implementation,
-the family, the menu, or the catalog schema.
+Each tool is **four sites** plus its allowlist, stated honestly rather than the "one row in two
+files" an earlier draft claimed: the `pkg/ostype/tools.go` row (now including `files`, D10), the
+`catalogArches` derivation (§4.4), the literal boot script in `pkg/tftp`, and the `osTitle` label.
+No change to the shared implementation, the family, the menu, or the catalog schema.
+
+| Tool | Endpoint key | Release tag | Boot shape | Cached size |
+|---|---|---|---|---|
+| Clonezilla | `clonezilla-debian-stable-amd64` (D11) | `3.3.3-15-1a41a72c` | kernel + 1 `initrd`; squashfs pulled by live-boot via `fetch=` | 574 MB |
+| Rescatux | `rescatux` | `0.72-beta8-2568400c` | same debian-squash live shape | 778 MB |
+| ShredOS | `shredos-x86_64` | `2025.11_31_x86-64_0.42-bf7a6bdf` | **kernel-only**, no initrd; behind a confirm gate (D12) | 97 MB |
+| ZFSBootMenu | `zfsbootmenu` | `3.1.0-1620b6a3` | single `.efi` chainload — **EFI-only** | 86 MB |
+| Tails | `tails` | `7.10-17629562` | kernel + **three** `initrd` lines, incl. the ISO at `/tails.iso` | 2.05 GB |
+
+**All five publish every file their manifest lists** (checked asset-by-asset), so none reproduces
+the `memtest86plus` 404 defect today. The D10 allowlist is still mandatory — it is the guard against
+this changing under us, which is exactly how the defect arose.
+
+Notes that change the work:
+
+- **Arch tokens differ upstream.** `shredos-x86_64` declares `arch: x86_64` and `zfsbootmenu` /
+  `rescatux` declare no arch at all. booty's tool family uses `amd64` throughout, and the
+  `endpoints` map exists precisely to absorb this (§4.2) — map booty `amd64` → the upstream key.
+  Do **not** introduce an `x86_64` arch token for tools.
+- **Rescatux publishes `version: current`** — the literal string, forever. This is the case D7 was
+  written for; the release tag `0.72-beta8-2568400c` is the on-disk version and the code already
+  does this. It is the strongest live confirmation of D7 available.
+- **ZFSBootMenu is EFI-only** and needs the same `iseq ${platform} efi || goto notefi` guard as
+  UEFI Shell, including the re-chain so the branch terminates (§6.3). Its file is
+  `zfsbootmenu-recovery-x86_64.efi` — the *recovery* image, the only one the endpoint publishes.
+- **Two tools have no upstream menu template**: ZFSBootMenu and Rescatux. Their scripts must be
+  **derived** (ZFSBootMenu from the UEFI Shell precedent; Rescatux from Clonezilla's debian-squash
+  live shape) rather than pinned from an oracle. This is a weaker footing than slice 1 had, where
+  every script came from an upstream template — the lab gate matters more here, not less.
+- **Tails is 2.05 GB**, of which 1.94 GB is `tails-amd64.iso` mounted as a third initrd. It is the
+  single largest artifact booty will cache. D6 (opt-in) carries the weight here.
+- All five together are **≈3.6 GB** if an operator enables everything.
 
 ## 12. Review provenance
 
