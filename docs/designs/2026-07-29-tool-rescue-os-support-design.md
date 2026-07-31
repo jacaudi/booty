@@ -683,14 +683,42 @@ a measured figure yet (only a lab boot settles it):
   top of the 97 MB `initrd.img`; Tails' own documented minimum is 2 GB before that.
 - **Rescatux** (639 MB) and **Clonezilla** (489 MB) pull their squashfs into tmpfs via `fetch=`.
 
-**A hard architectural ceiling worth stating next to Tails.** Linux sets
-`initrd_addr_max = 0x7fffffff` (`arch/x86/boot/header.S`), and iPXE clamps initrd placement to it,
+**The initrd ceiling is real but not a blocker — upstream already boots this.** Linux sets
+`initrd_addr_max = 0x7fffffff` (`arch/x86/boot/header.S`) and iPXE clamps initrd placement to it,
 returning `-ENOBUFS` when the payload will not fit (`src/arch/x86/image/bzimage.c`). Tails' three
-initrds total **2,033,548,455 bytes** against a 2,147,483,647 ceiling — **113.9 MB of headroom,
-94.7 % consumed**, before the kernel's own protected-mode image is subtracted. This is not a
-prediction of failure; the exact placement depends on iPXE's heap positioning, which is not
-determinable from source alone. It does mean **the lab gate must boot Tails on a BIOS client
-specifically**, and that a future upstream ISO growth of >113 MB breaks it outright.
+initrds total **2,033,548,455 bytes** against a 2,147,483,647 ceiling — 113.9 MB of headroom.
+
+An earlier revision of this section treated that as an open risk requiring a BIOS-specific lab boot.
+**That was overstated**: netboot.xyz PXE-boots this exact payload with these exact three `initrd`
+lines, and its maintainer confirms reaching the "Welcome to Tails" screen on KVM/Proxmox and ESXi
+(netbootxyz#1102, #1104). The existence proof outranks the arithmetic. What the headroom figure
+*does* justify is a **watch item, not a gate**: a future upstream ISO growth beyond ~113 MB breaks
+BIOS booting outright, and the failure would present as iPXE's `-ENOBUFS`, not as a booty bug.
+
+**Three gotchas taken from netboot.xyz's issue history — all cost their users real time:**
+
+- **Client RAM is 4–8 GB for Tails, not ~3 GB.** Upstream maintainer: *"You'll need a lot of memory,
+  probably 4GB to 8GB as it's loading the ISO into RAM and still needs space to run. (2GB probably
+  wouldn't cut it)"* (netbootxyz#1102). A reporter independently landed on ~4 GB minimum
+  (netbootxyz#1104). This is the highest client requirement of any tool booty caches — document it
+  next to the catalog entry, and size the lab VM accordingly.
+- **`9990-misc-helpers.sh` is netboot.xyz's PATCH, not an incidental extra file.** netbootxyz#1624
+  ("Tails Failing to Boot") was `mount: /run/live/fromiso: mount failed: Operation not permitted` —
+  the kernel was not loading the **loop** module, so the ISO could not be mounted. The fix forces a
+  `modprobe loop` and shipped in the **asset-mirror build**, i.e. in this helper. That is why the
+  file exists in the manifest at all, and it means the helper is **version-coupled to the ISO**: an
+  upstream bump that changes one and not the other breaks the boot silently. Both are allowlisted
+  (D10) and land in the same release tag (D7), so booty's release-tag identity already keeps them in
+  step — a benefit of D7 that was not anticipated when it was written.
+- **Some VMs need an emulated CD-ROM drive** or Tails fails with `unable to find a medium containing
+  a live filesystem` (netbootxyz#1104, reproduced on VirtualBox and KVM). The lab gate must account
+  for this before concluding a Tails failure is booty's fault.
+
+**What cannot be copied from upstream: the caching.** netboot.xyz sets
+`live_endpoint: https://github.com/netbootxyz` (`defaults/main.yml:182`) — its clients stream every
+artifact **directly from GitHub**, and it never writes the ISO to its own disk. booty caches
+locally, which is the entire point of booty. So D13's 5-minute download ceiling has no upstream
+counterpart to imitate; it is a consequence of booty's architecture and must be solved in booty.
 
 ## 12. Review provenance
 
