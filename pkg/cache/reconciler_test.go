@@ -92,6 +92,9 @@ func TestReconcileAllFetchesNetbootxyzManifestOncePerPass(t *testing.T) {
 			"    path: /asset-mirror/releases/download/13.01-d20a63ac/\n" +
 			"    files:\n" +
 			"    - vmlinuz\n" +
+			"    - initrd\n" +
+			"    - archiso_pxe_http\n" +
+			"    - airootfs.sfs\n" +
 			"  memtest86plus:\n" +
 			"    path: /asset-mirror/releases/download/8.00-32a14678/\n" +
 			"    files:\n" +

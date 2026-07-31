@@ -76,16 +76,33 @@ func TestUEFIShellGuardsBIOSTerminally(t *testing.T) {
 	}
 }
 
+// wholeFileAllowlistException is the ONE filename permitted to satisfy
+// TestToolFileAllowlistTracksBootScripts via a whole-file search instead of
+// its own tool's actual PXEConfig script value: the archiso_pxe_http hook
+// fetches airootfs.sfs implicitly via the archiso_http_srv=[[baseurl]] token
+// (see the comment above PXEConfig["systemrescue.ipxe"]), so it is never
+// written literally into the script — only named in the comment beside it.
+// Every OTHER allowlisted file must appear in its own script's literal text,
+// so a comment mentioning a filename elsewhere in tool_scripts.go (this file
+// says "initrd" 15 times and "mt86p_x86_64" twice, almost all in prose) can
+// never substitute for the real boot-script dependency.
+const wholeFileAllowlistException = "airootfs.sfs"
+
 // TestToolFileAllowlistTracksBootScripts ties ostype's per-tool file allowlist
 // (pkg/ostype/tools.go) to the boot scripts in this file, so the two cannot
 // silently drift: an allowlist entry a script no longer needs, or a script
-// dependency the allowlist forgot, both fail this test.
+// dependency the allowlist forgot, both fail this test. Renaming a kernel/
+// initrd filename in any tool's PXEConfig entry, or removing one of its
+// initrd lines, fails this test even though the old name may still appear in
+// a nearby comment.
 //
-// It checks the WHOLE source of tool_scripts.go, not just each PXEConfig map
-// value: the archiso_pxe_http hook fetches airootfs.sfs implicitly via the
-// archiso_http_srv token (see the comment above
-// PXEConfig["systemrescue.ipxe"]), so that filename is documented next to the
-// script rather than present in its literal iPXE text.
+// Every script references its files as "[[baseurl]]/<file>" (see the
+// [[baseurl]] doc comment atop this file) — matching that exact prefix,
+// rather than the bare filename, is required: systemrescue.ipxe's kernel line
+// also carries the LITERAL iPXE directive "initrd=initrd.magic" (see its
+// comment), which contains the substring "initrd" and would otherwise let a
+// bare-filename check pass even after the real "initrd [[baseurl]]/initrd"
+// line was deleted.
 func TestToolFileAllowlistTracksBootScripts(t *testing.T) {
 	toolFiles := ostype.ToolFiles()
 	if len(toolFiles) != 3 {
@@ -100,18 +117,26 @@ func TestToolFileAllowlistTracksBootScripts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read tool_scripts.go: %v", err)
 	}
-	text := string(src)
+	wholeFile := string(src)
 
 	for name, files := range toolFiles {
+		script, ok := PXEConfig[name+".ipxe"]
+		if !ok {
+			t.Errorf("%s: no PXEConfig entry %q", name, name+".ipxe")
+			continue
+		}
 		if len(files) == 0 {
 			t.Errorf("%s: file allowlist is empty", name)
 		}
-		if _, ok := PXEConfig[name+".ipxe"]; !ok {
-			t.Errorf("%s: no PXEConfig entry %q", name, name+".ipxe")
-		}
 		for _, f := range files {
-			if !strings.Contains(text, f) {
-				t.Errorf("%s: allowlisted file %q not referenced anywhere in tool_scripts.go", name, f)
+			if f == wholeFileAllowlistException {
+				if !strings.Contains(wholeFile, f) {
+					t.Errorf("%s: allowlisted file %q not referenced anywhere in tool_scripts.go", name, f)
+				}
+				continue
+			}
+			if !strings.Contains(script, "[[baseurl]]/"+f) {
+				t.Errorf("%s: allowlisted file %q not referenced as [[baseurl]]/%s in PXEConfig[%q]:\n%s", name, f, f, name+".ipxe", script)
 			}
 		}
 	}
