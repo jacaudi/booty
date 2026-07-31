@@ -64,7 +64,9 @@ become ordinary cache targets and therefore ordinary menu entries.
 | D9 | Snapshot memoization shape | **Mutex-guarded memo + explicit reset**, mirroring `pkg/ostype/streams.go`. No TTL, no single-flight. | Revised post-review. Targets reconcile **sequentially** (`pkg/cache/reconciler.go:113-120`), so single-flight guards nothing; the mutex exists for the API-goroutine reader (§8.3). |
 | D10 | Which files a tool caches | **A per-tool `files []string` allowlist** on the registration row. `Artifacts` requests only those and errors if one is missing from the manifest. | **Added 2026-07-30 after the slice-1 lab gate**, reversing §6's original "cache-more-than-you-boot" stance. netboot.xyz lists files its releases do not publish (`memtest86plus`: 7 listed, 3 published), and one 404 aborts the whole version forever. Fail-loud is deliberate: a missing allowlisted file means upstream renamed the exact artifact the boot script needs, which must not degrade to a silent half-cache. |
 | D11 | Clonezilla endpoint choice | **`clonezilla-debian-stable-amd64` only**, registered as `clonezilla`. | Upstream publishes four (debian/ubuntu × stable/testing). Tools are param-less (D4/§4.3), so the choice cannot be a `spec` key, and the user's dedupe is explicitly one-tool-per-function. Ubuntu-based builds (newer kernels for very new hardware) and testing builds remain additive later as separate registrations. |
-| D12 | ShredOS destructiveness | **Ship it, behind an in-script iPXE confirmation gate** that defaults to "go back". | ShredOS wipes every disk the moment it boots, and booty's `Tools & rescue...` submenu boots a selection immediately with no confirmation — so an unguarded entry makes a misclick destructive. Upstream gates it behind a full-screen warning and a method choice; booty ports the warning into its literal script (D8 makes this natural) and hardcodes the wipe method, since tools take no params. |
+| D12 | ShredOS destructiveness | **Ship it, behind an in-script iPXE confirmation gate.** Three sub-decisions settled at Gate 1 — see §6.5. | ShredOS wipes every disk the moment it boots, and booty's `Tools & rescue...` submenu boots a selection immediately with no confirmation — so an unguarded entry makes a misclick destructive. Upstream gates it behind a full-screen warning and a method choice; booty ports the warning into its literal script (D8 makes this natural) and hardcodes the wipe method, since tools take no params. |
+| D13 | How Tails' 1.94 GB ISO is fetched | **Route it through the existing `downloadLargeFile`**, not `config.DownloadStaged`. | **Added at Gate 1 — blocking.** `config.httpClient` sets `Timeout: 5 * time.Minute` as a hard ceiling over the *entire* request, so landing 1,936,009,216 B requires **6.45 MB/s sustained, stall-free**. Below that, `io.Copy` errors → the `.partial` is removed → `reconcile.go`'s `if vg.Wait() != nil { continue }` abandons the whole version with nothing kept, and retries the full ~1.9 GB every `--cacheInterval` forever. That is D10's permanent-abandon failure arriving through a different door, and the allowlist cannot prevent it because the file is present and allowlisted. `pkg/cache/isodownload.go` already solves exactly this: `isoClient` has **no** timeout, it resumes via HTTP `Range`, and its `.download` suffix survives `SweepPartials` (which deletes `*.partial` at the top of every pass). Precedent: `debiandvd.go:221` (`isoDownload = downloadLargeFile`). Clonezilla (574 MB) and Rescatux (778 MB) need only ~1.6–2.1 MB/s and are fine on the ordinary path — this is a Tails-specific routing decision, not a general one. |
+| D14 | Empty allowlist mode | **`files` is mandatory** for every tool; delete the "empty means every manifest file" fallback. | Added at Gate 1 (subtraction). All three shipped tools set `files`, all five slice-2 tools will, and `TestToolFileAllowlistTracksBootScripts` already errors on an empty allowlist — so the fallback branch is unreachable by policy. Dead flexibility; removing it deletes a code path and a mental model. |
 
 ## 4. Architecture
 
@@ -107,6 +109,7 @@ which is precisely why `streamsCache` has one.
 register(netbootxyzOS{
     name:      "systemrescue",
     endpoints: map[string]string{"amd64": "systemrescue-amd64"},
+    files:     []string{"vmlinuz", "initrd", "archiso_pxe_http", "airootfs.sfs"}, // D10, mandatory
 })
 // "uefishell", NOT the "uefi-shell-x64" endpoint: both ship the same
 // uefi-shell-x64.efi, but netboot.xyz's own menus reference uefishell and
@@ -257,8 +260,10 @@ determine the script's shape, so deferring them would defer a structural decisio
   never appears in either pcbios menu, so firmware-gating is real for this tool. (An earlier
   revision cited a separate `memtest86legacy` BIOS entry as the evidence here; that is unrelated to
   UEFI Shell and was left over from the pre-Memtest86+ draft.)
-- **Memtest86+** — the plain single-binary case, and the cache-more-than-you-boot case (seven
-  files cached, one booted). This **replaces Memtest86 (free)**, whose endpoint is
+- **Memtest86+** — the plain single-binary case. It was also chosen as the
+  cache-more-than-you-boot case (seven files cached, one booted) — **that rationale is dead**: it
+  turned out four of the seven are 404 upstream, which is what produced D10, and the shipped
+  allowlist caches exactly one file. This **replaces Memtest86 (free)**, whose endpoint is
   `enabled: false` upstream and appears only in the ARM menu.
 
 Together they cover: multiple `initrd` lines, a firmware-gated single binary, and the simple
@@ -295,6 +300,51 @@ that template with **unsubstituted `[[baseurl]]`**, where today an unknown assig
 empty script. §2 makes assigning a tool a non-goal, but the API path exists. Either give
 `bootTokens` a tool arm or have the assigned path refuse a tool family explicitly — silently
 emitting a broken script is not acceptable.
+
+### 6.5 ShredOS's confirmation gate (D12) — the three sub-decisions
+
+D12 says "an in-script gate defaulting to go back". Gate 1 established that the concept is sound but
+that three things an implementer must decide were left undecided. All three are settled here, from
+iPXE source.
+
+**(a) The destructive block MUST be last in the file.** This is the load-bearing rule, and it is a
+safety property, not style. iPXE `goto` is script-local and lines otherwise execute sequentially, so
+in the obvious ordering —
+
+```
+choose --default goback ans || goto goback
+iseq ${ans} proceed && goto wipe || goto goback
+:goback
+chain tftp://[[server-ip]]/booty.ipxe || shell
+:wipe
+kernel [[baseurl]]/shredos …
+boot
+```
+
+— a `chain` that *succeeds and later returns* falls straight through into `:wipe` and wipes the
+disks. `uefi-shell.ipxe` is safe only incidentally, because its `:notefi` block happens to be last.
+For ShredOS the requirement is explicit: **either the wipe block is the final block in the script, or
+the safe arm ends in `exit`.** §7 states this rule for ZFSBootMenu, where a fall-through is merely
+confusing; here it destroys data.
+
+**(b) `choose` gets an explicit `--timeout`, matching booty's other menus.** iPXE's `--timeout` is
+optional and a `struct menu_ui` timeout of 0 means *indefinite* (`src/hci/tui/menu_ui.c`), so
+upstream's `shredos.ipxe.j2` — which passes none — blocks forever. Every booty menu uses
+`--timeout 300000` (`menu.go`). ShredOS follows booty's convention, and because timeout expiry
+selects the *highlighted* item, the `--default` must be the safe arm so an unattended machine falls
+back rather than wiping. Confirmed from source: `--default <name>` is honored, absent it the first
+named item is highlighted, and ESC/Ctrl-C returns `-ECANCELED` so `|| goto <safe>` fires.
+
+> **Caveat to document in the script:** `--retimeout` defaults to 0 and **any** keypress sets the
+> remaining timeout to it, so a half-interacted gate parks indefinitely regardless of `--timeout`.
+> That is acceptable — a parked gate is safe; only an auto-proceeding one is not.
+
+**(c) The wipe method is `prng`.** Upstream offers six (`dodshort`, `dod522022m`, `dod3pass`,
+`ops2`, `gutmann`, `prng`) differing by >30× in runtime. "Hardcodes the wipe method" is not an
+executable instruction. `prng` is a single-pass cryptographic-stream wipe — the modern default for
+non-classified media, and the fastest of the six, which matters because a multi-day Gutmann pass on
+a misclick is its own hazard. An operator wanting a DoD or Gutmann pass boots ShredOS's own menu
+from other media; booty offers one safe default, not a policy engine.
 
 ## 7. Menu integration
 
@@ -396,8 +446,11 @@ and have both delegate. Verified: the existing charset accepts all eight tool ta
   therefore validates the manifest **path** — rejecting absolute, protocol-relative, or non-rooted
   values, and an unset asset base which would otherwise yield a silently *relative* URL. A
   composed-URL host check would be dead code, since the authority always comes from the base.
-  Superseded text follows for the record. Decide whether an
-  off-org entry is a hard fail or a skip; do not assume it cannot happen.
+  *(An earlier revision trailed an instruction here to "decide whether an off-org entry is a hard
+  fail or a skip". Deleted at Gate 1: it contradicted the paragraph above it and asked for a decision
+  that cannot be made, since the threat is not expressible in the field booty reads. Verified across
+  all 164 endpoints — `grep -c "path: http" endpoints.yml` → 0. The one absolute URL upstream ships,
+  `boot.dasharo.com` for `dts`, lives in `defaults/main.yml`, not in a `path:`.)*
 
 ### 8.4 Retention and ordering
 
@@ -422,11 +475,26 @@ operator is never silently ignored.
 
 ### 8.5 No integrity verification — accepted risk
 
-`endpoints.yml` publishes no checksums and no signatures, so `Artifact.SHA256`/`SigURL` stay empty
-and artifacts land as `classNotVerifiable`, which is accepted under **every** policy including
+**`endpoints.yml` publishes no checksums and no signatures**, so `Artifact.SHA256`/`SigURL` stay
+empty and artifacts land as `classNotVerifiable`, which is accepted under **every** policy including
 `strict` (`verify.go:107-116`). `--signaturePolicy strict` genuinely does not help — there is no
-mechanism to be strict about. Same posture as Talos and Debian netboot artifacts today; the trust
-anchor is HTTPS plus GitHub's release-asset hosting.
+mechanism *in the manifest* to be strict about. Same posture as Talos and Debian netboot artifacts
+today; the trust anchor is HTTPS plus GitHub's release-asset hosting.
+
+**Narrowed at Gate 1 — the broader claim was false.** An earlier revision (and §2's non-goals) said
+"no mechanism exists upstream". That is true of the manifest but **not of every release**: the Tails
+release `7.10-17629562` publishes `sha256-checksums.txt`
+(`6dab23b2…  tails-amd64.iso`) **and** `tails-amd64.iso.sig` as assets the manifest simply does not
+reference. The correct statement is: *the manifest publishes no verification material; some releases
+publish sidecar files it does not list.*
+
+This matters most where the design's own reasoning bites hardest — §8.5 argues the risk is recorded
+because "a rescue tool is exactly the artifact an attacker would want to poison", and the 1.94 GB
+anonymity distro is the sharpest instance, yet it is the one with a checksum available.
+`Artifact.SHA256` already exists and `landArtifact` already consumes it, so wiring it is not
+speculative machinery. **Accepting the risk remains the decision** (checked: one release; whether
+every Tails release publishes these is unverified), but it is now an informed acceptance rather than
+a claim that nothing is available. Recorded as a slice-2 follow-up, not a blocker.
 
 Recorded explicitly because the risk profile differs from the existing cases: these are third-party
 binaries executed with full hardware privilege on bare metal, and a rescue tool is exactly the
@@ -444,7 +512,17 @@ artifact an attacker would want to poison.
   `os`/`arch`/`flavor`/`kernel` and netboot.xyz adds keys freely (measured: it errors).
 - Release-tag derivation from `path`, including trailing-slash handling.
 - `ValidateVersion` rejects traversal and non-path-safe strings; accepts all eight real tags.
-- URL construction, including the constructed-URL host check and the redirect caveat.
+- URL construction: that the **manifest path** is rejected when absolute, protocol-relative, or
+  non-rooted, and that an empty asset base fails rather than composing a relative URL. *(An earlier
+  revision asked for a test of the "constructed-URL host check" — deleted at Gate 1: §8.3 concludes
+  that check is not expressible and the shipped code documents it as dead. Do not test for it.)*
+- **The D10 allowlist:** that `Artifacts` returns only allowlisted files, that a missing allowlisted
+  filename is a **loud error** rather than a short cache, and that every allowlisted filename is
+  actually referenced as `[[baseurl]]/<file>` in that tool's script — the anti-drift guard. Slice 1
+  learned the hard way that matching the bare filename against the whole source file is not enough:
+  `initrd` appears ~15 times in prose, so a deleted `initrd [[baseurl]]/initrd` line still passed.
+  Match the `[[baseurl]]/` prefix against the `PXEConfig` **value**, with `airootfs.sfs` the single
+  documented exception (the archiso hook fetches it via `archiso_http_srv`, so it is never literal).
 - Per-tool script goldens for all three slice-1 tools. Note Memtest86+ has **no** `${platform}`
   branch (§6.3) — the golden asserts its absence; UEFI Shell is the one that branches.
 - `renderMenu` across all four combinations of tools present/absent × archived present/absent,
@@ -501,10 +579,26 @@ A cold `sr-go-engineer` whole-branch review that drives the built binary, per re
 **Verified against live netboot.xyz on 2026-07-30** (manifest entries, GitHub release assets, and
 upstream menu templates all re-fetched — not carried over from the earlier draft).
 
-Each tool is **four sites** plus its allowlist, stated honestly rather than the "one row in two
-files" an earlier draft claimed: the `pkg/ostype/tools.go` row (now including `files`, D10), the
-`catalogArches` derivation (§4.4), the literal boot script in `pkg/tftp`, and the `osTitle` label.
-No change to the shared implementation, the family, the menu, or the catalog schema.
+Each tool is **3 code sites + 3 test sites + ~5 doc sites** — corrected at Gate 1 against the shipped
+code, which found the previous "four sites" wrong in *both* directions. No change to the shared
+implementation, the family, the menu, or the catalog schema.
+
+| Kind | Site | Note |
+|---|---|---|
+| code | `pkg/ostype/tools.go` row | name + `endpoints` + `files` (D10/D14) |
+| code | literal boot script in `pkg/tftp/tool_scripts.go` | pinned from the oracle, below |
+| code | `osTitle` label in `pkg/tftp/menu.go` | |
+| ~~code~~ | ~~`catalogArches`~~ | **Not a site.** `pkg/cache/catalog.go` derives tool rows from `ostype.ToolArches()`. The earlier draft listed it; nothing to edit. |
+| test | `pkg/tftp/tool_scripts_test.go` | hard-codes the script-key list **and** asserts the tool count |
+| test | `pkg/ostype/ostype_test.go` | hard-codes the full registry name list |
+| test | `pkg/cache/reconciler_test.go` | its fixture manifest must carry each tool's allowlisted files |
+| docs | `docs/schema/CATALOG.md` | names the tools in ~6 places |
+| docs | `deploy/catalog.yaml`, `docs/examples/catalog.yaml` | commented opt-in blocks, both files |
+| docs | `README.md`, `docs/BOOT-MENU.md`, `docs/schema/API.md` | supported-OS lists |
+
+The two test sites that assert an exact count or list will **fail loudly** on the first new tool,
+which is the intended behaviour — the same guard that caught `TestRegistry_RegistersAllFour` in
+slice 1. Budget for editing them rather than treating them as breakage.
 
 | Tool | Endpoint key | Release tag | Boot shape | Cached size |
 |---|---|---|---|---|
@@ -530,13 +624,73 @@ Notes that change the work:
 - **ZFSBootMenu is EFI-only** and needs the same `iseq ${platform} efi || goto notefi` guard as
   UEFI Shell, including the re-chain so the branch terminates (§6.3). Its file is
   `zfsbootmenu-recovery-x86_64.efi` — the *recovery* image, the only one the endpoint publishes.
-- **Two tools have no upstream menu template**: ZFSBootMenu and Rescatux. Their scripts must be
-  **derived** (ZFSBootMenu from the UEFI Shell precedent; Rescatux from Clonezilla's debian-squash
-  live shape) rather than pinned from an oracle. This is a weaker footing than slice 1 had, where
-  every script came from an upstream template — the lab gate matters more here, not less.
+- **All five scripts are pinned from an upstream oracle — none is derived.** An earlier revision of
+  this section claimed ZFSBootMenu and Rescatux "have no upstream menu template" and must be derived
+  from the UEFI Shell and Clonezilla precedents. That is **literally true and materially wrong**, and
+  the prescribed derivation was actively harmful — corrected at Gate 1. There is no `.j2` template
+  for either because both are `type: direct` entries, which upstream defines **inline in
+  `roles/netbootxyz/defaults/main.yml`** — the same file this design already reads for
+  `kernel_params`. Transcribe from there, verbatim:
+
+  ```yaml
+  # defaults/main.yml:885-889 (utilitiesefi)
+  zfsbootmenu:
+    kernel: ${live_endpoint}{{ endpoints.zfsbootmenu.path }}zfsbootmenu-recovery-x86_64.efi
+    type: direct
+
+  # defaults/main.yml:855-861 (utilitiesefi) and :987-993 (utilitiespcbios64) — identical
+  rescatux:
+    initrd: ${live_endpoint}{{ endpoints.rescatux.path }}initrd
+    kernel: ${live_endpoint}{{ endpoints.rescatux.path }}vmlinuz boot=live
+      fetch=${live_endpoint}{{ endpoints.rescatux.path }}filesystem.squashfs
+      selinux=1 security=selinux enforcing=0 {{ kernel_params }}
+    type: direct
+  ```
+
+  **Do not derive Rescatux from Clonezilla.** Their cmdlines are not the same shape: Clonezilla
+  carries seven options Rescatux does not (`username=user union=overlay components noswap edd=on
+  nomodeset ocs_live_run=… ocs_live_batch=no nosplash noprompt`), and Rescatux carries
+  `selinux=1 security=selinux enforcing=0`, which the Clonezilla derivation would have **silently
+  dropped**. An implementer following the old text would have produced a wrong script with no way to
+  notice.
+
+- **Platform guards, settled from the same file.** `zfsbootmenu` appears **only** under
+  `utilitiesefi` — it is genuinely EFI-only and needs the `iseq ${platform} efi || goto notefi` guard
+  plus the terminating re-chain, exactly as `uefi-shell.ipxe` does. `rescatux` appears under **both**
+  `utilitiesefi` and `utilitiespcbios64`, so it must **not** get a platform guard.
 - **Tails is 2.05 GB**, of which 1.94 GB is `tails-amd64.iso` mounted as a third initrd. It is the
-  single largest artifact booty will cache. D6 (opt-in) carries the weight here.
-- All five together are **≈3.6 GB** if an operator enables everything.
+  single largest artifact booty will cache. **D6 (opt-in) does NOT carry the weight here** — an
+  earlier revision said it did, which was wrong: opt-in governs whether you *try*, not whether it can
+  *succeed*. See D13; Tails cannot land through the ordinary tool download path at all.
+- All five together are **≈3.6 GB** of booty disk if an operator enables everything.
+
+**Transcription hazards — each of these has already bitten once, or is one keystroke from doing so:**
+
+| Hazard | Rule |
+|---|---|
+| Registered booty OS names are *not* the endpoint keys in the table above | Use `clonezilla`, `rescatux`, `shredos`, `zfsbootmenu`, `tails` — **not** `shredos-x86_64` |
+| Upstream templates use `${url}`/`${kernel_url}` **with** a trailing slash (`${url}vmlinuz`); booty's `[[baseurl]]` has **none** | Always `[[baseurl]]/vmlinuz` — including inside `fetch=` and `fromiso=` values |
+| Tails' ISO is `tails-${os_arch}.iso` upstream | The literal must be `tails-amd64.iso` |
+| ShredOS uses bare `${cmdline}`, *not* `{{ kernel_params }}` | So upstream deliberately emits **no** `initrd=initrd.magic` for this kernel-only boot — do not copy SystemRescue's preamble. Its full line is `kernel … console=tty3 loglevel=3 nwipe_options="--method=…"` — note `loglevel=3` |
+| `${cmdline}` and `${ipparam}` are netboot.xyz variables, set in its own `boot.cfg` | booty must not copy them; iPXE expands an unset setting to empty, so they are harmless but dead |
+
+**Client RAM, not just booty disk.** The table's size column is booty's cache. What decided whether
+slice-1 boots worked was the *client's* RAM — SystemRescue needed ≳3 GB because archiso stages its
+1.05 GB squashfs in tmpfs twice. Three of these five are RAM-dominated by construction and none has
+a measured figure yet (only a lab boot settles it):
+
+- **Tails** boots `fromiso=/tails.iso`, so the 1.936 GB ISO stays resident for the whole session on
+  top of the 97 MB `initrd.img`; Tails' own documented minimum is 2 GB before that.
+- **Rescatux** (639 MB) and **Clonezilla** (489 MB) pull their squashfs into tmpfs via `fetch=`.
+
+**A hard architectural ceiling worth stating next to Tails.** Linux sets
+`initrd_addr_max = 0x7fffffff` (`arch/x86/boot/header.S`), and iPXE clamps initrd placement to it,
+returning `-ENOBUFS` when the payload will not fit (`src/arch/x86/image/bzimage.c`). Tails' three
+initrds total **2,033,548,455 bytes** against a 2,147,483,647 ceiling — **113.9 MB of headroom,
+94.7 % consumed**, before the kernel's own protected-mode image is subtracted. This is not a
+prediction of failure; the exact placement depends on iPXE's heap positioning, which is not
+determinable from source alone. It does mean **the lab gate must boot Tails on a BIOS client
+specifically**, and that a future upstream ISO growth of >113 MB breaks it outright.
 
 ## 12. Review provenance
 
