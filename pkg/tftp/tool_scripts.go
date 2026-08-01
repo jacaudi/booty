@@ -89,4 +89,16 @@ imgfree
 kernel [[baseurl]]/vmlinuz boot=live username=user union=overlay config components noswap edd=on nomodeset ocs_live_run="ocs-live-general" ocs_live_batch=no net.ifnames=0 nosplash noprompt fetch=[[baseurl]]/filesystem.squashfs initrd=initrd.magic
 initrd [[baseurl]]/initrd
 boot`
+
+	// Upstream: defaults/main.yml rescatux (type: direct), identical under
+	// utilitiesefi and utilitiespcbios64 — hence no platform guard. Do NOT
+	// derive this from clonezilla.ipxe.j2: Clonezilla carries seven options
+	// Rescatux does not, and Rescatux carries the SELinux trio below, which a
+	// Clonezilla derivation silently drops.
+	PXEConfig["rescatux.ipxe"] = `#!ipxe
+echo Booting Rescatux from Booty
+imgfree
+kernel [[baseurl]]/vmlinuz boot=live fetch=[[baseurl]]/filesystem.squashfs selinux=1 security=selinux enforcing=0 initrd=initrd.magic
+initrd [[baseurl]]/initrd
+boot`
 }

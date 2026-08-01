@@ -57,6 +57,15 @@ func init() {
 		endpoints: map[string]string{"amd64": "clonezilla-debian-stable-amd64"},
 		files:     []string{"vmlinuz", "initrd", "filesystem.squashfs"},
 	})
+	// Upstream declares no arch for this endpoint; booty registers it under
+	// amd64 like every other tool. Its manifest `version` is the literal string
+	// "current" forever — the on-disk version is the release tag (D7), which is
+	// exactly the case D7 exists for.
+	register(netbootxyzOS{
+		name:      "rescatux",
+		endpoints: map[string]string{"amd64": "rescatux"},
+		files:     []string{"vmlinuz", "initrd", "filesystem.squashfs"},
+	})
 }
 
 // ToolFiles reports each registered tool's file allowlist. Same shape and

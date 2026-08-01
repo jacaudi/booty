@@ -11,7 +11,7 @@ import (
 )
 
 func TestToolScriptsRegistered(t *testing.T) {
-	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe"} {
+	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe", "rescatux.ipxe"} {
 		s, ok := PXEConfig[k]
 		if !ok {
 			t.Errorf("PXEConfig[%q] missing", k)
@@ -90,6 +90,37 @@ func TestClonezillaMatchesOracle(t *testing.T) {
 	}
 }
 
+func TestRescatuxMatchesOracle(t *testing.T) {
+	s := PXEConfig["rescatux.ipxe"]
+	if got := strings.Count(s, "\ninitrd "); got != 1 {
+		t.Errorf("initrd lines = %d, want 1\n%s", got, s)
+	}
+	for _, want := range []string{
+		"[[baseurl]]/vmlinuz",
+		"boot=live",
+		"fetch=[[baseurl]]/filesystem.squashfs",
+		"selinux=1",
+		"security=selinux",
+		"enforcing=0",
+		"initrd=initrd.magic", // {{ kernel_params }}
+		"\ninitrd [[baseurl]]/initrd",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q:\n%s", want, s)
+		}
+	}
+	// Upstream lists rescatux under BOTH utilitiesefi and utilitiespcbios64.
+	if strings.Contains(s, "${platform}") {
+		t.Errorf("rescatux must not branch on platform:\n%s", s)
+	}
+	// Guard against the derivation mistake: these are Clonezilla-only options.
+	for _, forbidden := range []string{"ocs_live_run", "union=overlay", "username=user"} {
+		if strings.Contains(s, forbidden) {
+			t.Errorf("Clonezilla-only option %q leaked into rescatux:\n%s", forbidden, s)
+		}
+	}
+}
+
 func TestUEFIShellGuardsBIOSTerminally(t *testing.T) {
 	s := PXEConfig["uefi-shell.ipxe"]
 	if !strings.Contains(s, "${platform}") {
@@ -134,8 +165,8 @@ const wholeFileAllowlistException = "airootfs.sfs"
 // line was deleted.
 func TestToolFileAllowlistTracksBootScripts(t *testing.T) {
 	toolFiles := ostype.ToolFiles()
-	if len(toolFiles) != 4 {
-		t.Fatalf("ToolFiles() returned %d tools, want 4 (systemrescue, uefi-shell, memtest86plus, clonezilla)", len(toolFiles))
+	if len(toolFiles) != 5 {
+		t.Fatalf("ToolFiles() returned %d tools, want 5 (systemrescue, uefi-shell, memtest86plus, clonezilla, rescatux)", len(toolFiles))
 	}
 
 	_, thisFile, _, ok := runtime.Caller(0)
