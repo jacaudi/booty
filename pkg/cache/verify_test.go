@@ -331,26 +331,46 @@ func TestVerifyVersion_AbsentFinalWithPartialIsNull(t *testing.T) {
 	}
 }
 
-// TestVerifyVersionToolIsNotVerifiable pins the short-circuit that keeps
-// reverify from ever reaching Artifacts for a tool: tools carry no
-// verification material at all, and Artifacts refuses any version that is
-// not upstream's current tag — so calling it on an archived tool version
-// would surface as a permanent 500 on POST /api/v1/cache/{id}/reverify
-// instead of the "no verdict" this test requires.
-//
-// Adaptation note: the task brief's literal test called
-// store.UpsertCacheEntry(db.CacheEntry{TargetVersionID: vid}), but the real
-// pkg/db API (pkg/db/cache.go:47) is
-// UpsertCacheEntry(targetVersionID, size int64) error — there is no
-// db.CacheEntry input type. Adapted to the real signature below.
+// TestLandArtifactLargeUsesResumableDownloader proves the Large artifact is
+// actually routed through downloadLargeFile (pkg/cache/isodownload.go), not
+// merely that the outcome LOOKS the same as the ordinary staged path would
+// produce. A plain single-shot 200 response can't discriminate the two: with
+// no SHA256/SigURL declared, config.DownloadStaged would ALSO land the file at
+// the final name with no .partial left behind and classNotVerifiable — an
+// observably identical result. The discriminator is the Range header:
+// downloadLargeFile resumes from an existing ".download" file with
+// `Range: bytes=<offset>-`; config.DownloadStaged never sends one. So this
+// test pre-seeds a ".download" prefix (as a prior, interrupted attempt would
+// leave behind) and asserts the server actually received a Range request —
+// an assertion only satisfiable by the Large routing firing — plus that the
+// landed file is the full prefix+remainder, proving the resume reassembled
+// it rather than truncating.
 func TestLandArtifactLargeUsesResumableDownloader(t *testing.T) {
-	body := []byte("LARGE-PAYLOAD")
+	full := []byte("LARGE-PAYLOAD-CONTENT-FOR-RESUME-TEST")
+	prefix := full[:8]    // what a prior, interrupted attempt already wrote
+	remainder := full[8:] // what the server must supply on resume
+
+	gotRange := make(chan bool, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(body)
+		if r.Header.Get("Range") != "" {
+			gotRange <- true
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(remainder)
+			return
+		}
+		gotRange <- false
+		_, _ = w.Write(full)
 	}))
 	t.Cleanup(srv.Close)
 
 	dir := t.TempDir()
+	// Pre-seed the in-progress file downloadLargeFile resumes from. The
+	// ".download" suffix (not ".partial") is what lets it survive
+	// SweepPartials between reconcile passes.
+	if err := os.WriteFile(filepath.Join(dir, "big.iso.download"), prefix, 0o644); err != nil {
+		t.Fatalf("seed .download: %v", err)
+	}
+
 	a := ostype.Artifact{Filename: "big.iso", URL: srv.URL + "/big.iso", Large: true}
 	landed, v, err := landArtifact(t.Context(), dir, a, "strict")
 	if err != nil {
@@ -370,8 +390,34 @@ func TestLandArtifactLargeUsesResumableDownloader(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "big.iso.partial")); err == nil {
 		t.Error("a .partial was left behind; the large path must not use .partial")
 	}
+	// Discriminator: only downloadLargeFile ever sends a Range header. If the
+	// Large routing were dropped and landArtifact fell through to
+	// config.DownloadStaged instead, the request would arrive with no Range
+	// header and this assertion would fail.
+	if !<-gotRange {
+		t.Error("server did not receive a Range header; Large artifact was not routed through the resumable downloader")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "big.iso"))
+	if err != nil {
+		t.Fatalf("read landed file: %v", err)
+	}
+	if string(got) != string(full) {
+		t.Errorf("landed content = %q, want %q (resume must reassemble prefix+remainder, not truncate)", got, full)
+	}
 }
 
+// TestVerifyVersionToolIsNotVerifiable pins the short-circuit that keeps
+// reverify from ever reaching Artifacts for a tool: tools carry no
+// verification material at all, and Artifacts refuses any version that is
+// not upstream's current tag — so calling it on an archived tool version
+// would surface as a permanent 500 on POST /api/v1/cache/{id}/reverify
+// instead of the "no verdict" this test requires.
+//
+// Adaptation note: the task brief's literal test called
+// store.UpsertCacheEntry(db.CacheEntry{TargetVersionID: vid}), but the real
+// pkg/db API (pkg/db/cache.go:47) is
+// UpsertCacheEntry(targetVersionID, size int64) error — there is no
+// db.CacheEntry input type. Adapted to the real signature below.
 func TestVerifyVersionToolIsNotVerifiable(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
