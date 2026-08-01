@@ -115,6 +115,7 @@ func TestReleaseTag(t *testing.T) {
 var testSysrescue = netbootxyzOS{
 	name:      "systemrescue",
 	endpoints: map[string]string{"amd64": "systemrescue-amd64"},
+	files:     []string{"vmlinuz", "initrd", "archiso_pxe_http", "airootfs.sfs"},
 }
 
 func TestNetbootxyzOSDiscoverReturnsReleaseTag(t *testing.T) {
@@ -276,5 +277,17 @@ endpoints:
 	}
 	if !strings.Contains(err.Error(), "mt86p_x86_64") {
 		t.Errorf("error must name the missing file %q, got: %v", "mt86p_x86_64", err)
+	}
+}
+
+func TestNetbootxyzOSRequiresAllowlist(t *testing.T) {
+	serveFixture(t, fixtureDoc, nil)
+	noFiles := netbootxyzOS{
+		name:      "systemrescue",
+		endpoints: map[string]string{"amd64": "systemrescue-amd64"},
+		// files deliberately unset
+	}
+	if _, err := noFiles.Artifacts(context.Background(), "13.01-d20a63ac", "amd64", nil); err == nil {
+		t.Fatal("Artifacts accepted an empty allowlist; every tool must declare files (D14)")
 	}
 }
