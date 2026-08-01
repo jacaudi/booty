@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -86,6 +87,29 @@ func landArtifact(ctx context.Context, dir string, a ostype.Artifact, policy str
 	// fetch, so replicate that here (idempotent, safe under concurrent calls).
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return false, artifactVerdict{}, fmt.Errorf("cache: mkdir %s: %w", dir, err)
+	}
+	if a.Large {
+		// Fail-closed, matching this file's stated invariant that a DECLARED
+		// sha256/.sig which cannot be evaluated is corruption, never NULL. Nothing
+		// sets Large AND a checksum today, but this is a shared function and the
+		// landmine is one struct field away.
+		if a.SHA256 != "" || a.SigURL != "" {
+			return false, artifactVerdict{}, fmt.Errorf(
+				"cache: %s: Large artifacts carry no verification path, but sha256/sig was declared", a.Filename)
+		}
+		// D13: resumable, untimed, and its ".download" in-progress file survives
+		// SweepPartials between passes. The endpoints MANIFEST references no
+		// checksums or signatures, so nothing reaches Artifact.SHA256/SigURL and
+		// the verdict is classNotVerifiable — same as the staged path would
+		// conclude. Note this is narrower than "upstream publishes none": the
+		// Tails release does publish sha256-checksums.txt and a .sig as assets the
+		// manifest never references (design §8.5). Wiring those is a recorded
+		// follow-up; until then the guard above keeps this path fail-closed.
+		final := filepath.Join(dir, a.Filename)
+		if err := downloadLargeFile(ctx, a.URL, final); err != nil {
+			return false, artifactVerdict{}, err
+		}
+		return true, artifactVerdict{class: classNotVerifiable}, nil
 	}
 	partial, streamedSHA, err := config.DownloadStaged(ctx, dir, a.URL)
 	if err != nil {

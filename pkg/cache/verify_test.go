@@ -343,6 +343,35 @@ func TestVerifyVersion_AbsentFinalWithPartialIsNull(t *testing.T) {
 // pkg/db API (pkg/db/cache.go:47) is
 // UpsertCacheEntry(targetVersionID, size int64) error — there is no
 // db.CacheEntry input type. Adapted to the real signature below.
+func TestLandArtifactLargeUsesResumableDownloader(t *testing.T) {
+	body := []byte("LARGE-PAYLOAD")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	a := ostype.Artifact{Filename: "big.iso", URL: srv.URL + "/big.iso", Large: true}
+	landed, v, err := landArtifact(t.Context(), dir, a, "strict")
+	if err != nil {
+		t.Fatalf("landArtifact: %v", err)
+	}
+	if !landed {
+		t.Fatal("large artifact did not land")
+	}
+	if v.class != classNotVerifiable {
+		t.Errorf("class = %v, want classNotVerifiable", v.class)
+	}
+	// It must land at the FINAL name with no .partial left behind: the large
+	// path writes via a ".download" file that survives SweepPartials.
+	if _, err := os.Stat(filepath.Join(dir, "big.iso")); err != nil {
+		t.Errorf("final file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "big.iso.partial")); err == nil {
+		t.Error("a .partial was left behind; the large path must not use .partial")
+	}
+}
+
 func TestVerifyVersionToolIsNotVerifiable(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
