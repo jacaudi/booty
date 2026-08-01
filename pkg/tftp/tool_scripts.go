@@ -115,4 +115,42 @@ boot
 echo ZFSBootMenu requires an EFI client; this machine booted in BIOS mode.
 sleep 10
 chain tftp://[[server-ip]]/booty.ipxe || shell`
+
+	// Upstream: menu/shredos.ipxe.j2 :shredos_boot for the kernel line, plus its
+	// warning menu ported here (design D12/§6.5).
+	//
+	// This boots a disk eraser. ShredOS lands in nwipe's INTERACTIVE interface
+	// with disks listed and PRNG preselected — upstream's README is explicit that
+	// it "does not autonuke your discs at launch", and booty does not pass
+	// --autonuke. So this gate is defense in depth ahead of nwipe's own
+	// confirmation, not the only thing between a keystroke and data loss.
+	// Three properties are still load-bearing:
+	//   1. The kernel/boot pair is the LAST thing in the file. iPXE executes
+	//      sequentially, so if the safe arm's chain succeeds and later returns,
+	//      anything placed after it would fall into the wipe. Do not append.
+	//   2. choose defaults to the SAFE arm: timeout expiry selects the
+	//      highlighted item, so an unattended machine must land on "back".
+	//   3. The method is prng — a single-pass cryptographic-stream wipe, the
+	//      fastest of the six upstream offers. A misclicked Gutmann pass would
+	//      run for days.
+	// Note iPXE's --retimeout defaults to 0, so ANY keypress makes the gate wait
+	// indefinitely. That is fine: a parked gate is safe, an auto-proceeding one
+	// is not. Upstream uses bare ${cmdline}, so there is deliberately no
+	// initrd=initrd.magic here — ShredOS is kernel-only.
+	PXEConfig["shredos.ipxe"] = `#!ipxe
+menu ShredOS - disk eraser
+item --gap This boots nwipe, which erases disks irreversibly.
+item --gap You will still choose disks in nwipe; nothing is erased automatically.
+item back Go back to the Booty menu (safe)
+item wipe Continue to ShredOS
+choose --timeout 300000 --default back sel || goto back
+iseq ${sel} wipe && goto wipe || goto back
+:back
+chain tftp://[[server-ip]]/booty.ipxe || shell
+exit 0
+:wipe
+echo Starting ShredOS. nwipe will list your disks; erasure is irreversible.
+imgfree
+kernel [[baseurl]]/shredos console=tty3 loglevel=3 nwipe_options="--method=prng"
+boot`
 }

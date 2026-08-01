@@ -24,6 +24,7 @@ var osTitle = map[string]string{
 	"clonezilla":    "Clonezilla",
 	"rescatux":      "Rescatux",
 	"zfsbootmenu":   "ZFSBootMenu",
+	"shredos":       "ShredOS (disk eraser)",
 }
 
 // itemKey is the single source of the menu item-key format: the cache-relative

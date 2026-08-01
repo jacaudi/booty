@@ -73,6 +73,14 @@ func init() {
 		endpoints: map[string]string{"amd64": "zfsbootmenu"},
 		files:     []string{"zfsbootmenu-recovery-x86_64.efi"},
 	})
+	// Upstream key is shredos-x86_64 (its manifest arch is x86_64); booty
+	// registers it under amd64 like every other tool — the endpoints map exists
+	// to absorb exactly this. The 32-bit shredos-i686 endpoint is not offered.
+	register(netbootxyzOS{
+		name:      "shredos",
+		endpoints: map[string]string{"amd64": "shredos-x86_64"},
+		files:     []string{"shredos"},
+	})
 }
 
 // ToolFiles reports each registered tool's file allowlist. Same shape and

@@ -20,7 +20,7 @@ func TestToolScriptsRegistered(t *testing.T) {
 		"zfsbootmenu.ipxe": true, // EFI-only guard
 		"shredos.ipxe":     true, // safe arm of the destructive-confirm gate
 	}
-	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe", "rescatux.ipxe", "zfsbootmenu.ipxe"} {
+	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe", "rescatux.ipxe", "zfsbootmenu.ipxe", "shredos.ipxe"} {
 		s, ok := PXEConfig[k]
 		if !ok {
 			t.Errorf("PXEConfig[%q] missing", k)
@@ -130,6 +130,46 @@ func TestRescatuxMatchesOracle(t *testing.T) {
 	}
 }
 
+func TestShredOSGateIsSafe(t *testing.T) {
+	s := PXEConfig["shredos.ipxe"]
+
+	// 1. The destructive kernel/boot pair must be LAST — nothing may fall into it.
+	trimmed := strings.TrimRight(s, "\n")
+	lines := strings.Split(trimmed, "\n")
+	if n := len(lines); n < 2 ||
+		!strings.HasPrefix(lines[n-2], "kernel ") || lines[n-1] != "boot" {
+		t.Fatalf("the kernel/boot pair must be the final two lines so nothing falls into the wipe:\n%s", s)
+	}
+
+	// 2. The choose must default to the SAFE arm and carry a timeout.
+	if !strings.Contains(s, "--default back") {
+		t.Errorf("choose must default to the safe arm:\n%s", s)
+	}
+	if !strings.Contains(s, "--timeout 300000") {
+		t.Errorf("choose must carry booty's standard timeout:\n%s", s)
+	}
+
+	// 3. The wipe method is pinned.
+	if !strings.Contains(s, `nwipe_options="--method=prng"`) {
+		t.Errorf("wipe method must be prng:\n%s", s)
+	}
+
+	// 4. The gate must warn, without overstating: ShredOS does NOT autonuke at
+	// launch, so the wording says "erases disks irreversibly", not "wipes on boot".
+	if !strings.Contains(strings.ToLower(s), "irreversib") {
+		t.Errorf("gate must warn that erasure is irreversible:\n%s", s)
+	}
+
+	// 5. Kernel-only: ShredOS boots a single image with no initrd.
+	if got := strings.Count(s, "\ninitrd "); got != 0 {
+		t.Errorf("initrd lines = %d, want 0\n%s", got, s)
+	}
+	// 6. Upstream uses bare ${cmdline}, NOT kernel_params — so no initrd.magic.
+	if strings.Contains(s, "initrd.magic") {
+		t.Errorf("ShredOS is kernel-only; initrd=initrd.magic must not appear:\n%s", s)
+	}
+}
+
 func TestZFSBootMenuGuardsBIOSTerminally(t *testing.T) {
 	s := PXEConfig["zfsbootmenu.ipxe"]
 	if !strings.Contains(s, "${platform}") {
@@ -195,8 +235,8 @@ const wholeFileAllowlistException = "airootfs.sfs"
 // line was deleted.
 func TestToolFileAllowlistTracksBootScripts(t *testing.T) {
 	toolFiles := ostype.ToolFiles()
-	if len(toolFiles) != 6 {
-		t.Fatalf("ToolFiles() returned %d tools, want 6 (systemrescue, uefi-shell, memtest86plus, clonezilla, rescatux, zfsbootmenu)", len(toolFiles))
+	if len(toolFiles) != 7 {
+		t.Fatalf("ToolFiles() returned %d tools, want 7 (systemrescue, uefi-shell, memtest86plus, clonezilla, rescatux, zfsbootmenu, shredos)", len(toolFiles))
 	}
 
 	_, thisFile, _, ok := runtime.Caller(0)
