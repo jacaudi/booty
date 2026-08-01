@@ -94,8 +94,11 @@ catalog:
   #   spec: { schematic: 376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba }
 
   # Tool / rescue images (netboot.xyz-sourced) — opt-in: SystemRescue alone is
-  # ~1 GB (airootfs.sfs), so none of the three ship active by default. Each
-  # appears under "Tools & rescue..." in the interactive boot menu once cached.
+  # ~1 GB (airootfs.sfs), Clonezilla ~574 MB, Rescatux ~778 MB, ZFSBootMenu
+  # ~86 MB (EFI clients only), ShredOS ~97 MB (disk eraser — boots to nwipe's
+  # interactive UI, does not auto-erase), and Tails ~2.05 GB (needs 4-8 GB of
+  # client RAM) — so none of the eight ship active by default. Each appears
+  # under "Tools & rescue..." in the interactive boot menu once cached.
   # - os: systemrescue
   #   arch: amd64
   #   retain: 1
@@ -103,6 +106,21 @@ catalog:
   #   arch: amd64
   #   retain: 1
   # - os: memtest86plus
+  #   arch: amd64
+  #   retain: 1
+  # - os: clonezilla
+  #   arch: amd64
+  #   retain: 1
+  # - os: rescatux
+  #   arch: amd64
+  #   retain: 1
+  # - os: zfsbootmenu
+  #   arch: amd64
+  #   retain: 1
+  # - os: shredos
+  #   arch: amd64
+  #   retain: 1
+  # - os: tails
   #   arch: amd64
   #   retain: 1
 

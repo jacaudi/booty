@@ -109,11 +109,13 @@ the boot contract above. All endpoints speak JSON.
 | `GET` | `/api/v1/families` | List boot-config families (`ignition`, `talos`, `debian`, `tool`). | `{"families":[…]}` |
 | `GET` | `/api/v1/os` | List supported OS types with required params per OS. | `{"os":[…]}` |
 
-`GET /api/v1/os` reports all seven registered OSes: `flatcar`, `fedora-coreos`, `talos`,
-`debian`, `systemrescue`, `uefi-shell`, `memtest86plus`.
+`GET /api/v1/os` reports all twelve registered OSes: `flatcar`, `fedora-coreos`, `talos`,
+`debian`, `systemrescue`, `uefi-shell`, `memtest86plus`, `clonezilla`, `rescatux`,
+`zfsbootmenu`, `shredos`, `tails`.
 
 `GET /api/v1/families` includes the `tool` family — the netboot.xyz-sourced rescue/diagnostic
-OSes (`systemrescue`, `uefi-shell`, `memtest86plus`). It takes no per-host config, so its
+OSes (`systemrescue`, `uefi-shell`, `memtest86plus`, `clonezilla`, `rescatux`, `zfsbootmenu`,
+`shredos`, `tails`). It takes no per-host config, so its
 `configKind` is `""` and its `authoringKinds` is an empty JSON **array** (`[]`), never `null` —
 a `null` there would survive into the UI's `flatMap` over every family's `authoringKinds` as a
 literal array element, rather than contributing nothing.
@@ -161,6 +163,11 @@ channel; `talos` requires a schematic; the netboot.xyz-sourced tools require non
 | `systemrescue` | *(none)* |
 | `uefi-shell` | *(none)* |
 | `memtest86plus` | *(none)* |
+| `clonezilla` | *(none)* |
+| `rescatux` | *(none)* |
+| `zfsbootmenu` | *(none)* |
+| `shredos` | *(none)* |
+| `tails` | *(none)* |
 
 `GET /api/v1/os` reports the authoritative required-params list per registered OS.
 
@@ -175,7 +182,7 @@ channel; `talos` requires a schematic; the netboot.xyz-sourced tools require non
    as `"unexpected param: <k>"`. This isn't just tidiness: `paramSegment` picks the
    path-discriminating cache segment by fixed key precedence (`schematic` > `channel`), so an
    unrequested key would silently become an **unvalidated** disk/URL path segment if it happened to
-   match one of those names. The three tools declare no required params, so any `params` key at all
+   match one of those names. The eight tools declare no required params, so any `params` key at all
    on a tool target is rejected the same way.
 5. Every required param must be present and non-empty (`"missing required param: <p>"`).
 6. Every required param's **value** must match `^[a-z0-9][a-z0-9.-]*$` — lowercase-alnum start,

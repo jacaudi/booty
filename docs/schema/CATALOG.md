@@ -54,7 +54,8 @@ a silent fallback could mass-download or mass-disable targets unexpectedly.
 ```yaml
 schemaVersion: 1                                # must be 1 (the only version this build accepts)
 catalog:
-  - os: flatcar | fedora-coreos | talos | debian | systemrescue | uefi-shell | memtest86plus
+  - os: flatcar | fedora-coreos | talos | debian | systemrescue | uefi-shell | memtest86plus |
+        clonezilla | rescatux | zfsbootmenu | shredos | tails
     arch: amd64 | arm64 | x86_64                # per-OS allowed token, see table below
     enabled: true                               # optional, default true
     retain: 1                                   # optional, default 1; must be >= 0
@@ -68,11 +69,11 @@ catalog:
 
 | Field | Required | Meaning |
 |-------|----------|---------|
-| `os` | yes | One of `flatcar`, `fedora-coreos`, `talos`, `debian`, `systemrescue`, `uefi-shell`, `memtest86plus` (see [per-OS arch](#per-os-arch-tokens)). |
+| `os` | yes | One of `flatcar`, `fedora-coreos`, `talos`, `debian`, `systemrescue`, `uefi-shell`, `memtest86plus`, `clonezilla`, `rescatux`, `zfsbootmenu`, `shredos`, `tails` (see [per-OS arch](#per-os-arch-tokens)). |
 | `arch` | yes | The OS's arch token — validated against the OS (below). |
 | `enabled` | no, default `true` | Whether the target is active. |
-| `retain` | no, default `1` | Newest-N versions to keep (Talos: newest-N **minor lines**, per [STORAGE.md](STORAGE.md)). Must be `>= 0`. **Tools** (`systemrescue`/`uefi-shell`/`memtest86plus`) must be `1` — see the caveat below. |
-| `spec` | conditional | OS-specific map building the target's **identity params** — the same value the `/api/v1/targets` create API validates against `RequiredParams` (`ValidateTargetParams`, shared by both paths). Required only for OSes that declare required params (`flatcar`, `fedora-coreos`, `talos`, `debian`); the three tools declare none, so a tool entry carries **no** `spec` at all — one is rejected as an unexpected param if present. |
+| `retain` | no, default `1` | Newest-N versions to keep (Talos: newest-N **minor lines**, per [STORAGE.md](STORAGE.md)). Must be `>= 0`. **Tools** (`systemrescue`/`uefi-shell`/`memtest86plus`/`clonezilla`/`rescatux`/`zfsbootmenu`/`shredos`/`tails`) must be `1` — see the caveat below. |
+| `spec` | conditional | OS-specific map building the target's **identity params** — the same value the `/api/v1/targets` create API validates against `RequiredParams` (`ValidateTargetParams`, shared by both paths). Required only for OSes that declare required params (`flatcar`, `fedora-coreos`, `talos`, `debian`); the eight tools declare none, so a tool entry carries **no** `spec` at all — one is rejected as an unexpected param if present. |
 | `sourceMode` | no, default `netinst` | **Debian only.** `netinst` or `dvd`. Top-level (not a `spec` key) so it doesn't perturb `spec`'s identity-param contract. `dvd` requires `arch: amd64` (Debian ships no arm64 DVD ISOs). |
 | `dvdCount` | no, default `1` | **Debian `dvd` mode only.** Number of DVD images to mirror. Top-level, same reason as `sourceMode`. Must be `>= 0`. |
 
@@ -84,7 +85,7 @@ catalog:
 | `fedora-coreos` | `channel` |
 | `talos` | `schematic` |
 | `debian` | `channel` — must be `"11"`, `"12"`, or `"13"` (Debian's numeric release, **not** `stable`/`bookworm`/etc.) |
-| `systemrescue` / `uefi-shell` / `memtest86plus` | none — these are netboot.xyz-sourced rescue/diagnostic tools with no per-host config, so they declare no required params and take no `spec` at all. |
+| `systemrescue` / `uefi-shell` / `memtest86plus` / `clonezilla` / `rescatux` / `zfsbootmenu` / `shredos` / `tails` | none — these are netboot.xyz-sourced rescue/diagnostic tools with no per-host config, so they declare no required params and take no `spec` at all. |
 
 `channel`/`schematic` are **not** enum-validated for `flatcar`/`fedora-coreos`/
 `talos` — any non-empty, path-safe value is accepted (values shown above, e.g.
@@ -94,7 +95,8 @@ a specific point-release discovery and codename, not an arbitrary path
 segment. A value must be path-safe because it becomes a cache-directory and
 URL segment (`ValidatePathParam`); an unsafe value is rejected.
 
-**Tool `retain` must be `1`.** `systemrescue`, `uefi-shell`, and `memtest86plus`
+**Tool `retain` must be `1`.** `systemrescue`, `uefi-shell`, `memtest86plus`,
+`clonezilla`, `rescatux`, `zfsbootmenu`, `shredos`, and `tails`
 are netboot.xyz-sourced tools with no version grammar — their release tags
 (e.g. `13.01-d20a63ac`, `edk2-stable202002-a6917535`) share no common shape, so
 `CompareVersions` orders them by a plain lexicographic string compare. That
@@ -114,6 +116,11 @@ debian         amd64, arm64   (dvd sourceMode: amd64 only)
 systemrescue   amd64
 uefi-shell     amd64
 memtest86plus  amd64
+clonezilla     amd64
+rescatux       amd64
+zfsbootmenu    amd64
+shredos        amd64
+tails          amd64
 ```
 
 A mismatched arch (e.g. `os: fedora-coreos, arch: amd64`) is rejected at load
@@ -129,14 +136,16 @@ rejected for the same reason: Debian does not publish arm64 DVD ISOs.
 - An unknown top-level or entry key (unknown-fields decoding — a typo'd key is
   a hard error, not silently ignored).
 - An unsupported `os` (anything other than `flatcar`/`fedora-coreos`/`talos`/
-  `debian`/`systemrescue`/`uefi-shell`/`memtest86plus`).
+  `debian`/`systemrescue`/`uefi-shell`/`memtest86plus`/`clonezilla`/`rescatux`/
+  `zfsbootmenu`/`shredos`/`tails`).
 - An `arch` not valid for that `os` (see [table above](#per-os-arch-tokens)).
 - A `spec` with a missing required key, an unexpected key, an empty value, or a
-  value that isn't path-safe. Since the three tools declare no required keys,
+  value that isn't path-safe. Since the eight tools declare no required keys,
   any `spec` key at all on a tool entry is rejected as unexpected.
 - A negative `retain`.
-- A tool (`systemrescue`/`uefi-shell`/`memtest86plus`) entry with `retain`
-  explicitly set to anything other than `1`.
+- A tool (`systemrescue`/`uefi-shell`/`memtest86plus`/`clonezilla`/`rescatux`/
+  `zfsbootmenu`/`shredos`/`tails`) entry with `retain` explicitly set to
+  anything other than `1`.
 - A Debian `channel` not in `"11"`/`"12"`/`"13"`.
 - A Debian `sourceMode` other than `""`/`"netinst"`/`"dvd"`.
 - A Debian `sourceMode: dvd` entry with `arch` other than `amd64`.

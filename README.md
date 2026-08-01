@@ -57,6 +57,11 @@ It does one job: get your machines netbooted into the right OS.
 | **SystemRescue** | netboot.xyz endpoints manifest | none (config-less rescue tool) |
 | **UEFI Shell** | netboot.xyz endpoints manifest | none (config-less rescue tool, EFI-only) |
 | **Memtest86+** | netboot.xyz endpoints manifest | none (config-less rescue tool) |
+| **Clonezilla** | netboot.xyz endpoints manifest | none (config-less rescue tool; disk imaging/cloning) |
+| **Rescatux** | netboot.xyz endpoints manifest | none (config-less rescue tool; boot/GRUB repair, password reset) |
+| **ZFSBootMenu** | netboot.xyz endpoints manifest | none (config-less rescue tool, EFI-only; ZFS boot environments) |
+| **ShredOS** | netboot.xyz endpoints manifest | none (config-less rescue tool; disk eraser, boots to an interactive UI) |
+| **Tails** | netboot.xyz endpoints manifest | none (config-less rescue tool; needs 4-8 GB client RAM) |
 
 ## How a boot works
 

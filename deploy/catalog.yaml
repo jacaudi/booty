@@ -11,20 +11,22 @@
 #   schemaVersion: 1              # required; the only version this build accepts
 #   catalog:                      # list of cache targets
 #     - os: <string>              # one of: flatcar, fedora-coreos, talos, debian,
-#                                  #   systemrescue, uefi-shell, memtest86plus
+#                                  #   systemrescue, uefi-shell, memtest86plus,
+#                                  #   clonezilla, rescatux, zfsbootmenu, shredos, tails
 #       arch: <string>            # must be in the OS's supported arch set:
 #                                  #   flatcar/talos: amd64, arm64
 #                                  #   fedora-coreos: x86_64
 #                                  #   debian: amd64, arm64
-#                                  #   systemrescue/uefi-shell/memtest86plus: amd64
+#                                  #   systemrescue/uefi-shell/memtest86plus/clonezilla/
+#                                  #   rescatux/zfsbootmenu/shredos/tails: amd64
 #       enabled: <bool>            # optional, default true — whether the reconciler
 #                                   # actively discovers/caches this target
 #       retain: <int>               # optional, default 1 — how many newest versions
 #                                    # to keep cached (older ones are evicted); the
-#                                    # three tools above must be left at 1
+#                                    # eight tools above must be left at 1
 #       spec:                       # OS-specific path-discriminating params (all
 #                                    # required keys for the OS must be present);
-#                                    # the three tools declare none and take no spec:
+#                                    # the eight tools declare none and take no spec:
 #                                    #   flatcar/fedora-coreos: channel (e.g. stable, beta, lts)
 #                                    #   talos: schematic (Talos Image Factory schematic ID)
 #                                    #   debian: channel (one of "11", "12", "13")
@@ -104,5 +106,20 @@ catalog:
   #   arch: amd64
   #   retain: 1
   # - os: memtest86plus     # a few MB
+  #   arch: amd64
+  #   retain: 1
+  # - os: clonezilla       # ~574 MB; disk imaging and cloning
+  #   arch: amd64
+  #   retain: 1
+  # - os: rescatux         # ~778 MB; boot/GRUB repair and password reset
+  #   arch: amd64
+  #   retain: 1
+  # - os: zfsbootmenu      # ~86 MB; ZFS boot environments. EFI clients only
+  #   arch: amd64
+  #   retain: 1
+  # - os: shredos          # ~97 MB; disk eraser (nwipe). Boots to its UI, does not auto-erase
+  #   arch: amd64
+  #   retain: 1
+  # - os: tails            # ~2.05 GB; needs 4-8 GB of client RAM
   #   arch: amd64
   #   retain: 1
