@@ -77,4 +77,16 @@ echo Booting Memtest86+ from Booty
 imgfree
 kernel [[baseurl]]/mt86p_x86_64
 boot`
+
+	// Upstream: menu/clonezilla.ipxe.j2 :clonezilla-boot. filesystem.squashfs is
+	// NOT loaded as an initrd — the live-boot initramfs fetches it over HTTP
+	// from the fetch= URL, so it must be cached but never appears on an initrd
+	// line. booty serves it from an IP, which is why netbootxyz#1254 (an open
+	// DNS race in the same fetch= path) cannot affect us.
+	PXEConfig["clonezilla.ipxe"] = `#!ipxe
+echo Booting Clonezilla from Booty
+imgfree
+kernel [[baseurl]]/vmlinuz boot=live username=user union=overlay config components noswap edd=on nomodeset ocs_live_run="ocs-live-general" ocs_live_batch=no net.ifnames=0 nosplash noprompt fetch=[[baseurl]]/filesystem.squashfs initrd=initrd.magic
+initrd [[baseurl]]/initrd
+boot`
 }

@@ -21,6 +21,7 @@ var osTitle = map[string]string{
 	"systemrescue":  "SystemRescue",
 	"uefi-shell":    "UEFI Shell",
 	"memtest86plus": "Memtest86+",
+	"clonezilla":    "Clonezilla",
 }
 
 // itemKey is the single source of the menu item-key format: the cache-relative

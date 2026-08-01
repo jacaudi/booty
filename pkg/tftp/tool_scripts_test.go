@@ -11,7 +11,7 @@ import (
 )
 
 func TestToolScriptsRegistered(t *testing.T) {
-	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe"} {
+	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe"} {
 		s, ok := PXEConfig[k]
 		if !ok {
 			t.Errorf("PXEConfig[%q] missing", k)
@@ -61,6 +61,35 @@ func TestMemtest86PlusBootsSingleBinary(t *testing.T) {
 	}
 }
 
+func TestClonezillaMatchesOracle(t *testing.T) {
+	s := PXEConfig["clonezilla.ipxe"]
+	if !strings.HasPrefix(s, "#!ipxe\n") {
+		t.Fatal("missing shebang")
+	}
+	if got := strings.Count(s, "\ninitrd "); got != 1 {
+		t.Errorf("initrd lines = %d, want 1\n%s", got, s)
+	}
+	for _, want := range []string{
+		"[[baseurl]]/vmlinuz",
+		"boot=live",
+		`ocs_live_run="ocs-live-general"`,
+		"ocs_live_batch=no",
+		"net.ifnames=0",
+		"fetch=[[baseurl]]/filesystem.squashfs",
+		"initrd=initrd.magic", // {{ kernel_params }} expands to this; absence = no initrd on old UEFI iPXE
+		"\ninitrd [[baseurl]]/initrd",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q:\n%s", want, s)
+		}
+	}
+	// Clonezilla is not firmware-gated upstream (it appears in both the EFI and
+	// pcbios menus), so it must NOT carry a platform guard.
+	if strings.Contains(s, "${platform}") {
+		t.Errorf("clonezilla must not branch on platform:\n%s", s)
+	}
+}
+
 func TestUEFIShellGuardsBIOSTerminally(t *testing.T) {
 	s := PXEConfig["uefi-shell.ipxe"]
 	if !strings.Contains(s, "${platform}") {
@@ -105,8 +134,8 @@ const wholeFileAllowlistException = "airootfs.sfs"
 // line was deleted.
 func TestToolFileAllowlistTracksBootScripts(t *testing.T) {
 	toolFiles := ostype.ToolFiles()
-	if len(toolFiles) != 3 {
-		t.Fatalf("ToolFiles() returned %d tools, want 3 (systemrescue, uefi-shell, memtest86plus)", len(toolFiles))
+	if len(toolFiles) != 4 {
+		t.Fatalf("ToolFiles() returned %d tools, want 4 (systemrescue, uefi-shell, memtest86plus, clonezilla)", len(toolFiles))
 	}
 
 	_, thisFile, _, ok := runtime.Caller(0)

@@ -48,6 +48,15 @@ func init() {
 		endpoints: map[string]string{"amd64": "memtest86plus"},
 		files:     []string{"mt86p_x86_64"},
 	})
+	// Debian-stable of the four Clonezilla endpoints upstream publishes
+	// (debian/ubuntu x stable/testing) — D11. Tools are param-less, so the
+	// choice cannot be a spec key; the Ubuntu and testing variants remain
+	// additive later as separate registrations.
+	register(netbootxyzOS{
+		name:      "clonezilla",
+		endpoints: map[string]string{"amd64": "clonezilla-debian-stable-amd64"},
+		files:     []string{"vmlinuz", "initrd", "filesystem.squashfs"},
+	})
 }
 
 // ToolFiles reports each registered tool's file allowlist. Same shape and
