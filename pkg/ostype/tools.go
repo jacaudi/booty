@@ -81,6 +81,20 @@ func init() {
 		endpoints: map[string]string{"amd64": "shredos-x86_64"},
 		files:     []string{"shredos"},
 	})
+	// The ISO is 1.9 GB and mounted as a third initrd via fromiso=. It is marked
+	// large so it lands through the resumable downloader (D13) — the staged path's
+	// 5-minute whole-request ceiling cannot fetch it on most links.
+	//
+	// 9990-misc-helpers.sh is netboot.xyz's PATCH, not an extra: netbootxyz#1624
+	// was Tails failing to mount the ISO because the loop module was not loaded,
+	// and the modprobe fix ships in this helper. It is version-coupled to the
+	// ISO; both share the release tag, so D7 keeps them in step.
+	register(netbootxyzOS{
+		name:      "tails",
+		endpoints: map[string]string{"amd64": "tails"},
+		files:     []string{"vmlinuz", "initrd.img", "9990-misc-helpers.sh", "tails-amd64.iso"},
+		large:     map[string]bool{"tails-amd64.iso": true},
+	})
 }
 
 // ToolFiles reports each registered tool's file allowlist. Same shape and

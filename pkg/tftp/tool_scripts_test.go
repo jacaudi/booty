@@ -20,7 +20,7 @@ func TestToolScriptsRegistered(t *testing.T) {
 		"zfsbootmenu.ipxe": true, // EFI-only guard
 		"shredos.ipxe":     true, // safe arm of the destructive-confirm gate
 	}
-	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe", "rescatux.ipxe", "zfsbootmenu.ipxe", "shredos.ipxe"} {
+	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe", "rescatux.ipxe", "zfsbootmenu.ipxe", "shredos.ipxe", "tails.ipxe"} {
 		s, ok := PXEConfig[k]
 		if !ok {
 			t.Errorf("PXEConfig[%q] missing", k)
@@ -170,6 +170,30 @@ func TestShredOSGateIsSafe(t *testing.T) {
 	}
 }
 
+func TestTailsMatchesOracle(t *testing.T) {
+	s := PXEConfig["tails.ipxe"]
+	if got := strings.Count(s, "\ninitrd "); got != 3 {
+		t.Fatalf("initrd lines = %d, want 3\n%s", got, s)
+	}
+	for _, want := range []string{
+		"[[baseurl]]/vmlinuz",
+		"boot=live",
+		"fromiso=/tails.iso",
+		"initrd=initrd.magic", // {{ kernel_params }}
+		"\ninitrd [[baseurl]]/initrd.img",
+		"\ninitrd [[baseurl]]/9990-misc-helpers.sh /usr/lib/live/boot/9990-misc-helpers.sh",
+		"\ninitrd [[baseurl]]/tails-amd64.iso /tails.iso",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q:\n%s", want, s)
+		}
+	}
+	// Upstream writes tails-${os_arch}.iso; booty's literal must be resolved.
+	if strings.Contains(s, "${os_arch}") {
+		t.Errorf("os_arch must be resolved to amd64:\n%s", s)
+	}
+}
+
 func TestZFSBootMenuGuardsBIOSTerminally(t *testing.T) {
 	s := PXEConfig["zfsbootmenu.ipxe"]
 	if !strings.Contains(s, "${platform}") {
@@ -235,8 +259,8 @@ const wholeFileAllowlistException = "airootfs.sfs"
 // line was deleted.
 func TestToolFileAllowlistTracksBootScripts(t *testing.T) {
 	toolFiles := ostype.ToolFiles()
-	if len(toolFiles) != 7 {
-		t.Fatalf("ToolFiles() returned %d tools, want 7 (systemrescue, uefi-shell, memtest86plus, clonezilla, rescatux, zfsbootmenu, shredos)", len(toolFiles))
+	if len(toolFiles) != 8 {
+		t.Fatalf("ToolFiles() returned %d tools, want 8 (systemrescue, uefi-shell, memtest86plus, clonezilla, rescatux, zfsbootmenu, shredos, tails)", len(toolFiles))
 	}
 
 	_, thisFile, _, ok := runtime.Caller(0)

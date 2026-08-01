@@ -29,7 +29,8 @@ func TestFamilyByName(t *testing.T) {
 func TestRegistry_RegistersAll(t *testing.T) {
 	want := []string{
 		"clonezilla", "debian", "fedora-coreos", "flatcar", "memtest86plus",
-		"rescatux", "shredos", "systemrescue", "talos", "uefi-shell", "zfsbootmenu",
+		"rescatux", "shredos", "systemrescue", "tails", "talos", "uefi-shell",
+		"zfsbootmenu",
 	}
 	names := make([]string, 0, len(All()))
 	for _, o := range All() {

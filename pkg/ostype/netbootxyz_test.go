@@ -30,6 +30,15 @@ endpoints:
     - mt86p_x86_64
     os: memtest86-plus
     version: '8.00'
+  tails:
+    path: /asset-mirror/releases/download/7.10-17629562/
+    files:
+    - vmlinuz
+    - initrd.img
+    - 9990-misc-helpers.sh
+    - tails-amd64.iso
+    os: tails
+    version: '7.10'
 `
 
 func serveFixture(t *testing.T, body string, hits *int32) {
@@ -277,6 +286,46 @@ endpoints:
 	}
 	if !strings.Contains(err.Error(), "mt86p_x86_64") {
 		t.Errorf("error must name the missing file %q, got: %v", "mt86p_x86_64", err)
+	}
+}
+
+func TestTailsISOIsMarkedLarge(t *testing.T) {
+	o, ok := Lookup("tails")
+	if !ok {
+		t.Fatal("tails not registered")
+	}
+	tool, ok := o.(netbootxyzOS)
+	if !ok {
+		t.Fatal("tails is not a netbootxyzOS")
+	}
+	if !tool.large["tails-amd64.iso"] {
+		t.Error("the 1.9 GB ISO must be marked Large or it cannot land (D13)")
+	}
+	if tool.large["vmlinuz"] {
+		t.Error("small files must NOT take the untimed path")
+	}
+}
+
+// The registration data above is inert unless Artifacts actually copies it onto
+// the Artifact. Without this test, omitting that one field leaves every test
+// green while Tails silently reverts to the 5-minute ceiling — the exact failure
+// D13 exists to prevent.
+func TestTailsArtifactsCarryLarge(t *testing.T) {
+	serveFixture(t, fixtureDoc, nil)
+	o, _ := Lookup("tails")
+	arts, err := o.Artifacts(context.Background(), "7.10-17629562", "amd64", nil)
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	got := map[string]bool{}
+	for _, a := range arts {
+		got[a.Filename] = a.Large
+	}
+	if !got["tails-amd64.iso"] {
+		t.Error("the ISO artifact must carry Large=true")
+	}
+	if got["vmlinuz"] {
+		t.Error("vmlinuz must carry Large=false")
 	}
 }
 

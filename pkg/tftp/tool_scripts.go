@@ -153,4 +153,20 @@ echo Starting ShredOS. nwipe will list your disks; erasure is irreversible.
 imgfree
 kernel [[baseurl]]/shredos console=tty3 loglevel=3 nwipe_options="--method=prng"
 boot`
+
+	// Upstream: menu/live-tails.ipxe.j2 :boot. Three initrds — the base initrd,
+	// netboot.xyz's patched live-boot helper, and the ISO itself mounted at
+	// /tails.iso, which is what fromiso= consumes.
+	//
+	// Client RAM is 4-8 GB (netbootxyz#1102/#1104: the maintainer says 2 GB will
+	// not do). Some VMs also need an emulated CD-ROM or the live filesystem is
+	// not found (netbootxyz#1104) — that is a client-side quirk, not a booty bug.
+	PXEConfig["tails.ipxe"] = `#!ipxe
+echo Booting Tails from Booty
+imgfree
+kernel [[baseurl]]/vmlinuz boot=live fromiso=/tails.iso config nopersistence noprompt timezone=Etc/UTC splash noautologin module=Tails slab_nomerge slub_debug=FZP mce=0 vsyscall=none page_poison=1 init_on_free=1 mds=full,nosmt initrd=initrd.magic
+initrd [[baseurl]]/initrd.img
+initrd [[baseurl]]/9990-misc-helpers.sh /usr/lib/live/boot/9990-misc-helpers.sh
+initrd [[baseurl]]/tails-amd64.iso /tails.iso
+boot`
 }

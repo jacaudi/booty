@@ -141,6 +141,12 @@ type netbootxyzOS struct {
 	// because that means upstream renamed or dropped the exact file the boot
 	// script needs.
 	files []string
+
+	// large marks allowlisted filenames that must bypass the 5-minute staged
+	// download ceiling (D13). Keyed by filename rather than a size threshold
+	// because the size is not known until the request is already in flight, and
+	// the ceiling is on the whole request. Only Tails needs it today.
+	large map[string]bool
 }
 
 func (t netbootxyzOS) Name() string             { return t.name }
@@ -248,7 +254,7 @@ func (t netbootxyzOS) Artifacts(ctx context.Context, version, arch string, _ map
 		if err != nil {
 			return nil, fmt.Errorf("ostype: %s: %w", t.name, err)
 		}
-		out = append(out, Artifact{Filename: f, URL: u})
+		out = append(out, Artifact{Filename: f, URL: u, Large: t.large[f]})
 	}
 	return out, nil
 }
