@@ -101,4 +101,18 @@ imgfree
 kernel [[baseurl]]/vmlinuz boot=live fetch=[[baseurl]]/filesystem.squashfs selinux=1 security=selinux enforcing=0 initrd=initrd.magic
 initrd [[baseurl]]/initrd
 boot`
+
+	// Upstream: defaults/main.yml zfsbootmenu (type: direct) — imgfree + kernel
+	// + boot, EFI-only. Same shape and guard as uefi-shell.ipxe; the :notefi
+	// block is LAST so control can never fall into the boot path.
+	PXEConfig["zfsbootmenu.ipxe"] = `#!ipxe
+iseq ${platform} efi || goto notefi
+echo Booting ZFSBootMenu from Booty
+imgfree
+kernel [[baseurl]]/zfsbootmenu-recovery-x86_64.efi
+boot
+:notefi
+echo ZFSBootMenu requires an EFI client; this machine booted in BIOS mode.
+sleep 10
+chain tftp://[[server-ip]]/booty.ipxe || shell`
 }

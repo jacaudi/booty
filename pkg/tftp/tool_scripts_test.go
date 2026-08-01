@@ -11,7 +11,16 @@ import (
 )
 
 func TestToolScriptsRegistered(t *testing.T) {
-	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe", "rescatux.ipxe"} {
+	// These scripts re-chain booty.ipxe from a guard branch so the branch
+	// TERMINATES rather than falling through into whatever label follows.
+	// That is the opposite of booting via chain — no tool boots its payload
+	// with chain, which is what this guard actually protects.
+	rechains := map[string]bool{
+		"uefi-shell.ipxe":  true, // EFI-only guard
+		"zfsbootmenu.ipxe": true, // EFI-only guard
+		"shredos.ipxe":     true, // safe arm of the destructive-confirm gate
+	}
+	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe", "rescatux.ipxe", "zfsbootmenu.ipxe"} {
 		s, ok := PXEConfig[k]
 		if !ok {
 			t.Errorf("PXEConfig[%q] missing", k)
@@ -23,7 +32,7 @@ func TestToolScriptsRegistered(t *testing.T) {
 		if !strings.Contains(s, "[[baseurl]]") {
 			t.Errorf("%s: must reference the [[baseurl]] token", k)
 		}
-		if strings.Contains(s, "chain ") && k != "uefi-shell.ipxe" {
+		if strings.Contains(s, "chain ") && !rechains[k] {
 			t.Errorf("%s: tools boot via kernel/sanboot, never chain", k)
 		}
 	}
@@ -121,6 +130,27 @@ func TestRescatuxMatchesOracle(t *testing.T) {
 	}
 }
 
+func TestZFSBootMenuGuardsBIOSTerminally(t *testing.T) {
+	s := PXEConfig["zfsbootmenu.ipxe"]
+	if !strings.Contains(s, "${platform}") {
+		t.Errorf("must branch on platform (EFI-only upstream):\n%s", s)
+	}
+	if !strings.Contains(s, "[[baseurl]]/zfsbootmenu-recovery-x86_64.efi") {
+		t.Errorf("must boot the recovery EFI:\n%s", s)
+	}
+	if got := strings.Count(s, "\ninitrd "); got != 0 {
+		t.Errorf("initrd lines = %d, want 0 (direct EFI chainload)\n%s", got, s)
+	}
+	// The guard branch must END the script, not fall through.
+	if !strings.Contains(s, "chain tftp://[[server-ip]]/booty.ipxe") {
+		t.Errorf("BIOS guard must re-chain rather than fall through:\n%s", s)
+	}
+	// The guard must be the LAST block, so nothing can fall into the boot path.
+	if strings.Index(s, ":notefi") < strings.Index(s, "kernel ") {
+		t.Errorf(":notefi must come after the kernel line:\n%s", s)
+	}
+}
+
 func TestUEFIShellGuardsBIOSTerminally(t *testing.T) {
 	s := PXEConfig["uefi-shell.ipxe"]
 	if !strings.Contains(s, "${platform}") {
@@ -165,8 +195,8 @@ const wholeFileAllowlistException = "airootfs.sfs"
 // line was deleted.
 func TestToolFileAllowlistTracksBootScripts(t *testing.T) {
 	toolFiles := ostype.ToolFiles()
-	if len(toolFiles) != 5 {
-		t.Fatalf("ToolFiles() returned %d tools, want 5 (systemrescue, uefi-shell, memtest86plus, clonezilla, rescatux)", len(toolFiles))
+	if len(toolFiles) != 6 {
+		t.Fatalf("ToolFiles() returned %d tools, want 6 (systemrescue, uefi-shell, memtest86plus, clonezilla, rescatux, zfsbootmenu)", len(toolFiles))
 	}
 
 	_, thisFile, _, ok := runtime.Caller(0)

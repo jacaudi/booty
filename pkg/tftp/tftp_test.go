@@ -565,7 +565,7 @@ func TestToolScriptFullySubstituted(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set(config.ServerIP, "10.0.0.5")
 
-	for _, name := range []string{"memtest86plus", "systemrescue", "uefi-shell", "clonezilla", "rescatux"} {
+	for _, name := range []string{"memtest86plus", "systemrescue", "uefi-shell", "clonezilla", "rescatux", "zfsbootmenu"} {
 		out := applyTokens(PXEConfig[name+".ipxe"],
 			bootTokensFor(name, "-", "amd64", "1.0-abc", "10.0.0.5:8080"))
 		if strings.Contains(out, "[[") {

@@ -66,6 +66,13 @@ func init() {
 		endpoints: map[string]string{"amd64": "rescatux"},
 		files:     []string{"vmlinuz", "initrd", "filesystem.squashfs"},
 	})
+	// Upstream declares no arch and publishes exactly one file: the RECOVERY
+	// EFI image. It appears only under utilitiesefi, so it is EFI-only.
+	register(netbootxyzOS{
+		name:      "zfsbootmenu",
+		endpoints: map[string]string{"amd64": "zfsbootmenu"},
+		files:     []string{"zfsbootmenu-recovery-x86_64.efi"},
+	})
 }
 
 // ToolFiles reports each registered tool's file allowlist. Same shape and

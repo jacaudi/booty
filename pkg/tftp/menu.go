@@ -23,6 +23,7 @@ var osTitle = map[string]string{
 	"memtest86plus": "Memtest86+",
 	"clonezilla":    "Clonezilla",
 	"rescatux":      "Rescatux",
+	"zfsbootmenu":   "ZFSBootMenu",
 }
 
 // itemKey is the single source of the menu item-key format: the cache-relative
