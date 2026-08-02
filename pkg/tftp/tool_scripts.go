@@ -158,9 +158,10 @@ boot`
 	// netboot.xyz's patched live-boot helper, and the ISO itself mounted at
 	// /tails.iso, which is what fromiso= consumes.
 	//
-	// Client RAM is 4-8 GB (netbootxyz#1102/#1104: the maintainer says 2 GB will
-	// not do). Some VMs also need an emulated CD-ROM or the live filesystem is
-	// not found (netbootxyz#1104) — that is a client-side quirk, not a booty bug.
+	// Client RAM is 4-8 GB (netbootxyz#1104: the maintainer says 2 GB will not
+	// do; a reporter measured the floor at 3840 MB). Some VMs also need an
+	// emulated CD-ROM or the live filesystem is not found (netbootxyz#1104) —
+	// that is a client-side quirk, not a booty bug.
 	PXEConfig["tails.ipxe"] = `#!ipxe
 echo Booting Tails from Booty
 imgfree

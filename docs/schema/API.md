@@ -190,6 +190,14 @@ channel; `talos` requires a schematic; the netboot.xyz-sourced tools require non
    (`"invalid param <p>"`). The same check runs on the `--flatcarChannel` / `--coreOSChannel` /
    `--talosSchematic` flags at startup and on the one-time #48 migration, so a malformed flag or a
    malformed API param are rejected the same way.
+7. `retainN` must be `>= 0` (huma schema `minimum`), and for a **tool** OS it must be exactly `1`
+   (`ValidateToolRetain`; `"os <n> is a tool; retain must be 1 …"`) — netboot.xyz publishes one
+   release per endpoint, so any other value pins or drops releases incorrectly.
+
+**`PATCH /api/v1/targets/{id}` validation.** `retainN` is subject to the *same* two checks as step 7
+above — `minimum: 0` plus `ValidateToolRetain` against the target's existing OS. Both are required
+here and not merely mirrored for symmetry: a persisted negative `retainN` reaches `retentionFor`'s
+truncation on the next reconcile pass, which would panic the reconcile goroutine.
 
 **Catalog-managed targets (`source=catalog`).** Which targets exist and their declared fields
 (`enabled`, `retainN`) are driven by the declarative `catalog.yaml` — see

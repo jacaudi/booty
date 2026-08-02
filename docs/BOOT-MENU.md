@@ -91,7 +91,7 @@ grows a `Tools & rescue...` item — a nested submenu alongside (and shaped like
 - **Tails needs 4–8 GB of client RAM** (2 GB is not enough). Some VMs also need an emulated
   CD-ROM drive, or the live filesystem is not found at boot — this is a client-side quirk,
   not a booty bug.
-- **Clonezilla and Rescatux** each pull a ~0.5–0.6 GB squashfs (`filesystem.squashfs`) into
+- **Clonezilla and Rescatux** each pull a ~0.5–0.65 GB squashfs (`filesystem.squashfs`) into
   client RAM at boot, alongside the base initrd.
 
 **A tool's menu label shows its release tag, not a prettier version.** netboot.xyz release

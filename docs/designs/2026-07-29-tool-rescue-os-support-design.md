@@ -494,7 +494,9 @@ anonymity distro is the sharpest instance, yet it is the one with a checksum ava
 `Artifact.SHA256` already exists and `landArtifact` already consumes it, so wiring it is not
 speculative machinery. **Accepting the risk remains the decision** (checked: one release; whether
 every Tails release publishes these is unverified), but it is now an informed acceptance rather than
-a claim that nothing is available. Recorded as a slice-2 follow-up, not a blocker.
+a claim that nothing is available. Deferred to a **later slice**, not a blocker — slice 2 closed
+without wiring it, so "a slice-2 follow-up" would now read as work that was silently dropped. It
+needs its own tracking issue when the owner decides to schedule it.
 
 Recorded explicitly because the risk profile differs from the existing cases: these are third-party
 binaries executed with full hardware privilege on bare metal, and a rescue tool is exactly the
@@ -697,11 +699,12 @@ BIOS booting outright, and the failure would present as iPXE's `-ENOBUFS`, not a
 
 **Three gotchas taken from netboot.xyz's issue history — all cost their users real time:**
 
-- **Client RAM is 4–8 GB for Tails, not ~3 GB.** Upstream maintainer: *"You'll need a lot of memory,
-  probably 4GB to 8GB as it's loading the ISO into RAM and still needs space to run. (2GB probably
-  wouldn't cut it)"* (netbootxyz#1102). A reporter independently landed on ~4 GB minimum
-  (netbootxyz#1104). This is the highest client requirement of any tool booty caches — document it
-  next to the catalog entry, and size the lab VM accordingly.
+- **Client RAM is 4–8 GB for Tails, not ~3 GB.** Upstream maintainer `antonym`: *"You'll need a lot
+  of memory, probably 4GB to 8GB as it's loading the ISO into RAM and still needs space to run. (2GB
+  probably wouldn't cut it)"* — **netbootxyz#1104**, not #1102 (#1102 carries only the shorter
+  *"You may need to increase the memory to 8GB or so"*). A reporter in the same thread measured the
+  hard floor at *"3840MB (3.75GB)"* with 4 GB+ recommended. This is the highest client requirement
+  of any tool booty caches — document it next to the catalog entry, and size the lab VM accordingly.
 - **`9990-misc-helpers.sh` is netboot.xyz's PATCH, not an incidental extra file.** netbootxyz#1624
   ("Tails Failing to Boot") was `mount: /run/live/fromiso: mount failed: Operation not permitted` —
   the kernel was not loading the **loop** module, so the ISO could not be mounted. The fix forces a
