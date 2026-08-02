@@ -48,6 +48,15 @@ func selectRetained(tags []string, n int) []string {
 // it to an ostype.OS method when a 2nd grouping OS appears (YAGNI/No-Wall: do
 // not widen the frozen P1a interface for a variant that does not exist).
 func retentionFor(canonicalOS string, versions []string, n int) []string {
+	// Clamp before any truncation. Both branches below slice with [:n], which
+	// on a negative n is a bounds panic on the reconcile goroutine — i.e. the
+	// whole process. The API paths validate RetainN >= 0, but this runs on
+	// whatever is already in the targets table (a row predating that gate, a
+	// direct DB edit), so the arithmetic must be safe on its own. "Retain -5"
+	// has no meaning beyond "retain nothing", which is what retain: 0 means.
+	if n < 0 {
+		n = 0
+	}
 	if canonicalOS == "talos" {
 		return selectRetained(versions, n)
 	}

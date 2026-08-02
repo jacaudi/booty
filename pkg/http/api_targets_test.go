@@ -252,3 +252,67 @@ func TestPromoteDVD_RejectsArm64NonDebianAndAlreadyDVD(t *testing.T) {
 		t.Fatal("already-dvd must be rejected (409)")
 	}
 }
+
+// PATCH is the second write path onto a target's RetainN, and until this test
+// it validated nothing: POST carries `minimum:"0"` AND calls ValidateToolRetain,
+// PATCH did neither. A negative value persisted here reaches retentionFor's
+// `out[:n]` on the next reconcile pass and panics the process — HTTP 200 first,
+// then the server is gone. Catalog-managed targets self-heal because
+// applyCatalog reasserts retain every pass; source=api targets do not.
+func TestPatchTargetRejectsNegativeRetainN(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	create := api.Post("/api/v1/targets", map[string]any{
+		"os": "talos", "arch": "amd64", "params": map[string]string{"schematic": "abc"},
+		"mode": "discovery", "retainN": 3,
+	})
+	if create.Code != 201 {
+		t.Fatalf("POST /targets = %d: %s", create.Code, create.Body.String())
+	}
+	resp := api.Patch("/api/v1/targets/1", map[string]any{"retainN": -5})
+	if resp.Code != 422 {
+		t.Fatalf("PATCH retainN=-5 = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// The tool-retain rule must hold on PATCH for the same reason ValidateOSArch
+// and ValidateToolRetain were single-sourced across the catalog and POST paths:
+// a tool target at retain != 1 pins or drops releases incorrectly, and a second
+// unguarded write path silently reopens the hole the POST gate closed.
+// retainN 5 is >= 0, so huma's schema check passes and the handler-level
+// ValidateToolRetain call is what this exercises.
+func TestPatchTargetRejectsToolRetainNotOne(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	create := api.Post("/api/v1/targets", map[string]any{
+		"os": "clonezilla", "arch": "amd64", "mode": "discovery", "retainN": 1,
+	})
+	if create.Code != 201 {
+		t.Fatalf("POST /targets = %d: %s", create.Code, create.Body.String())
+	}
+	resp := api.Patch("/api/v1/targets/1", map[string]any{"retainN": 5})
+	if resp.Code != 422 {
+		t.Fatalf("PATCH tool retainN=5 = %d, want 422: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// The control: a legal PATCH must still succeed, so the two gates above cannot
+// pass by rejecting everything.
+func TestPatchTargetAcceptsValidRetainN(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+	create := api.Post("/api/v1/targets", map[string]any{
+		"os": "talos", "arch": "amd64", "params": map[string]string{"schematic": "abc"},
+		"mode": "discovery", "retainN": 3,
+	})
+	if create.Code != 201 {
+		t.Fatalf("POST /targets = %d: %s", create.Code, create.Body.String())
+	}
+	resp := api.Patch("/api/v1/targets/1", map[string]any{"retainN": 2})
+	if resp.Code != 200 {
+		t.Fatalf("PATCH retainN=2 = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"retainN":2`) {
+		t.Fatalf("retainN not applied: %s", resp.Body.String())
+	}
+}
