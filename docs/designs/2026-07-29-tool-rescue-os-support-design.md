@@ -495,8 +495,15 @@ anonymity distro is the sharpest instance, yet it is the one with a checksum ava
 speculative machinery. **Accepting the risk remains the decision** (checked: one release; whether
 every Tails release publishes these is unverified), but it is now an informed acceptance rather than
 a claim that nothing is available. Deferred to a **later slice**, not a blocker — slice 2 closed
-without wiring it, so "a slice-2 follow-up" would now read as work that was silently dropped. It
-needs its own tracking issue when the owner decides to schedule it.
+without wiring it, so "a slice-2 follow-up" would now read as work that was silently dropped.
+Tracked as [jacaudi/booty#76](https://github.com/jacaudi/booty/issues/76).
+
+**One claim above is wrong and #76 records the correction.** "`Artifact.SHA256` already exists and
+`landArtifact` already consumes it, so wiring it is not speculative machinery" holds for *staged*
+artifacts and **not** for this one: the Tails ISO is `Large` (D13), and `landArtifact` hard-fails a
+Large artifact that declares a checksum, because the resumable path has no verification path at
+all. Setting `SHA256` on it today would break caching rather than verify it. The follow-up must
+first give `downloadLargeFile` a verification path.
 
 Recorded explicitly because the risk profile differs from the existing cases: these are third-party
 binaries executed with full hardware privilege on bare metal, and a rescue tool is exactly the
