@@ -3,10 +3,13 @@ package cache
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -113,5 +116,47 @@ func TestDownloadLargeFile_CancelStops(t *testing.T) {
 	cancel()
 	if err := downloadLargeFile(ctx, srv.URL, filepath.Join(t.TempDir(), "y.iso")); err == nil {
 		t.Fatal("expected error on cancelled context")
+	}
+}
+
+// downloadLargeFile is the only artifact path with no timeout, moving the
+// largest payloads booty handles. Silence here is indistinguishable from a
+// hang, so the start/complete pair is load-bearing operator-facing behaviour,
+// not decoration. The completion size must be the WHOLE file, not just the
+// bytes this attempt copied — a resumed transfer that reports only its delta
+// reads as a truncated download.
+func TestDownloadLargeFile_LogsStartAndCompletionWithResumeOffset(t *testing.T) {
+	payload := bytes.Repeat([]byte("iso\n"), 4096) // 16384 bytes
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "x.iso", time.Unix(0, 0), bytes.NewReader(payload))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "x.iso")
+	const seeded = 100
+	if err := os.WriteFile(dest+".download", payload[:seeded], 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if err := downloadLargeFile(t.Context(), srv.URL+"/x.iso", dest); err != nil {
+		t.Fatal(err)
+	}
+
+	out := logs.String()
+	for _, want := range []string{
+		`msg="downloading (resumable)"`,
+		"resumeOffset=100",
+		`msg="resumable download complete"`,
+		fmt.Sprintf("bytes=%d", len(payload)),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log missing %q\ngot:\n%s", want, out)
+		}
 	}
 }
