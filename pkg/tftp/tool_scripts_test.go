@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,7 +21,11 @@ func TestToolScriptsRegistered(t *testing.T) {
 		"zfsbootmenu.ipxe": true, // EFI-only guard
 		"shredos.ipxe":     true, // safe arm of the destructive-confirm gate
 	}
-	for _, k := range []string{"systemrescue.ipxe", "uefi-shell.ipxe", "memtest86plus.ipxe", "clonezilla.ipxe", "rescatux.ipxe", "zfsbootmenu.ipxe", "shredos.ipxe", "tails.ipxe"} {
+	// Derived from the registry, not a literal list: a new tool registered
+	// without a script must FAIL here, and a hardcoded list would just not
+	// look for it.
+	for name := range ostype.ToolFiles() {
+		k := name + ".ipxe"
 		s, ok := PXEConfig[k]
 		if !ok {
 			t.Errorf("PXEConfig[%q] missing", k)
@@ -293,5 +298,43 @@ func TestToolFileAllowlistTracksBootScripts(t *testing.T) {
 				t.Errorf("%s: allowlisted file %q not referenced as [[baseurl]]/%s in PXEConfig[%q]:\n%s", name, f, f, name+".ipxe", script)
 			}
 		}
+
+		// The OTHER direction, which the loop above cannot see. A script that
+		// fetches a file the allowlist omits compiles, passes every other
+		// test, and then 404s at BOOT time — Artifacts never caches the file,
+		// so [[baseurl]]/<it> is not on disk. That is the expensive failure
+		// mode (a lab boot or a user's bare metal finds it), so it is asserted
+		// here rather than promised in prose.
+		for _, ref := range baseurlRefs(script) {
+			if !slices.Contains(files, ref) {
+				t.Errorf("%s: PXEConfig[%q] fetches [[baseurl]]/%s but %q is NOT in the allowlist — "+
+					"booty will not cache it and the boot will 404. Add it to files in pkg/ostype/tools.go.",
+					name, name+".ipxe", ref, ref)
+			}
+		}
+	}
+}
+
+// baseurlRefs returns every filename an iPXE script fetches as
+// "[[baseurl]]/<file>". A reference ends at the first whitespace or quote —
+// clonezilla.ipxe's "fetch=[[baseurl]]/filesystem.squashfs initrd=..." puts a
+// space immediately after the name, and nothing in these scripts quotes a URL.
+func baseurlRefs(script string) []string {
+	const marker = "[[baseurl]]/"
+	var out []string
+	for rest := script; ; {
+		i := strings.Index(rest, marker)
+		if i < 0 {
+			return out
+		}
+		rest = rest[i+len(marker):]
+		end := strings.IndexAny(rest, " \t\n\"'")
+		if end < 0 {
+			end = len(rest)
+		}
+		if name := rest[:end]; name != "" && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+		rest = rest[end:]
 	}
 }
