@@ -309,7 +309,19 @@ to forget. The `Large` branch chooses only *how bytes arrive* and *which suffix 
 verification and disposition are unreachable-around. A future contributor cannot skip verification
 for `Large` without deleting the shared tail, which every staged artifact also depends on.
 
-Backstopped by a mutation-checkable test (§10).
+**Scoped precisely, because the strong form of that claim is not true.** The regression is
+unreachable for anything flowing through `landArtifact` — which is every `ostype.Artifact` booty
+caches, for every OS. It is *not* a package-wide impossibility: `downloadLargeFile` survives for the
+Debian DVD path and still renames internally, so someone wiring a future `Large` artifact through
+that older-looking function instead of `downloadLargeInto` would land unverified bytes with no
+compiler complaint. The DVD tree is not an `Artifact` and has its own verify step
+(`verifyDVDChecksums` + `removeUnverifiedISOs`), so this is not a second unverified landing path
+today — but it is a live footgun, and the mitigation is a doc comment on `downloadLargeFile`
+stating that it is the **DVD-only** wrapper and that artifact landing goes through
+`downloadLargeInto` + `landArtifact`. Implementation must add that comment; it is not optional
+polish.
+
+Backstopped by a mutation-checkable test (§10.6).
 
 ### 5.3 Verify before the rename
 
@@ -508,14 +520,24 @@ wanted (the lab's cached 1.94 GB ISO and its known-good digest are on disk) but 
 
 ## 11. Documentation surface
 
-- `docs/schema/CATALOG.md` — Tails is now verifiable; the tool cohort's blanket "no verification
-  material" statement is narrowed, and the retain-1 caveat is untouched.
-- `docs/CONFIGURATION.md` — new `verifyRetryAfter`; `--signaturePolicy` gains the §8.1 note.
+Each entry below was checked against the file, not assumed.
+
+- `docs/schema/CATALOG.md` — **grepped: it contains no verification, checksum, or signature content
+  at all.** An earlier draft of this section claimed the change "narrows the tool cohort's blanket
+  'no verification material' statement" there; no such statement exists, and that claim is
+  withdrawn. What CATALOG.md needs is a *new* one-line note that Tails alone among the tools carries
+  an upstream checksum. The retain-1 caveat is untouched.
+- `docs/CONFIGURATION.md` — new `verifyRetryAfter`; `--signaturePolicy` gains the §8.1 note. Line
+  417 already describes the tri-state verdict generically and needs no correction.
 - `docs/designs/2026-07-29-tool-rescue-os-support-design.md` §8.5 — updated from "deferred to a later
   slice" to "resolved by #76", retaining the correction it already carries.
 - Release notes — the `strict` behaviour change and the honest trust-model sentence from §8.
-- `docs/schema/API.md` / `DATABASE.md` — **no change**; `verified`/`verify_err` semantics are
-  untouched by design (D1).
+- `docs/schema/API.md` (line 465) / `DATABASE.md` (line 108) — **no change, verified by reading
+  both.** They define the `verified` tri-state generically ("no verification mechanism declared"),
+  never asserting that tool artifacts are unverifiable, so a Tails version moving from `NULL` to `1`
+  is a change in *which rows hold which value*, not in what the column means. DATABASE.md's
+  parenthetical lists Talos/Debian/FCOS-pins as examples of `NULL`; it is illustrative, not
+  exhaustive, so it stays correct as written.
 
 ---
 
