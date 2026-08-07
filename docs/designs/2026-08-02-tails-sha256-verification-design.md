@@ -1,7 +1,8 @@
 # Design: verify the Tails ISO against its published sha256
 
 **Issue:** [jacaudi/booty#76](https://github.com/jacaudi/booty/issues/76)
-**Status:** design — Gate 1 returned (5 blocking, 9 significant); all findings addressed below
+**Status:** design — Gate 1 (5 blocking, 9 significant) and a scoped re-review (2 blocking, 4 new
+defects) have both returned; all findings addressed below
 **Extends:** `docs/designs/2026-07-29-tool-rescue-os-support-design.md` §8.5 (the recorded deferral),
 `docs/designs/2026-07-01-p3b-signature-verification-design.md` (the `--signaturePolicy` model this
 extends rather than reinvents)
@@ -44,11 +45,11 @@ the cached ISO. Every claim in this table survived that second pass.
 | No other release in that repo publishes one | Same sweep, inverted | Exactly 76 releases in the repo carry the sidecar; all are Tails. |
 | The other two tool sources publish none | Independent sweep of `netbootxyz/debian-squash` (1267 releases), which serves `clonezilla-debian-stable-amd64` and `rescatux` | Only `filesystem.squashfs*`, `initrd`, `vmlinuz`. No checksums. |
 | Sidecar format | `curl` + `sed -n l` on `7.10-17629562`, `7.9.1-17629562`, `7.3.1-00388326`, `6.6-cfd50f75`, `4.22-28906ec3` | One LF-terminated line, `<64 hex>` + **two spaces** + `<filename>`. No `./`, no binary-mode `*`, no trailing blank. 82 bytes for `tails-amd64.iso`. |
-| **The ISO filename has changed across releases** | Same fetches | `tails-amd64.iso` now; `tails-amd64-6.6.iso` and `tails-amd64-4.22.iso` historically. The sidecar key always matches that release's asset name. **This drives D2a.** |
+| **The ISO filename has changed across releases** | Same fetches | `tails-amd64.iso` now; `tails-amd64-6.6.iso` and `tails-amd64-4.22.iso` historically. The sidecar key always matches that release's asset name. Caught by the manifest-membership check, **not** by D2a — see D2a. |
 | The published digest matches the bytes booty caches | `shasum -a 256` on the slice-2 lab's cached ISO | `6dab23b2…d1743` — **byte-identical**. Validated end-to-end against real cached bytes. |
 | Cost of hashing 1.94 GB | `time shasum -a 256` | **3.55 s** (macOS/SSD). Disk-throughput-bound; ~19.4 s at 100 MB/s. Paid once per version download. |
 | Debian's `SHA256SUMS` is the same format | Read `debiandvd.go:481-499` + live `cdimage.debian.org/.../SHA256SUMS` | Identical `<hex>␣␣<name>` shape, no `./`, no `*`. The "one format" premise for D-parser holds. |
-| `pkg/ostype` can import only `pkg/config` | grep of ostype imports; 8 `pkg/cache` files import ostype | Dependency runs cache → ostype. A shared helper cannot live in cache. |
+| `pkg/ostype` can import only `pkg/config` | grep of ostype imports; **9** `pkg/cache` files import ostype | Dependency runs cache → ostype. A shared helper cannot live in cache. |
 | Default signature policy | `pkg/config/config.go:91` | `warn`. |
 | Eviction cannot rotate out a guard row | `pkg/db/cache.go:198-201`, `evict.go:42` | `ListArchivedUnpinned` filters `size > 0`, so a `size=0` rejection row is never an eviction candidate. A hypothesis that eviction defeats §7's guard was tested and **falsified**. |
 
@@ -93,14 +94,45 @@ Falling back to `classNotVerifiable` was rejected as a *silent security downgrad
 
 ### D2a — the registration declares which files the sidecar must cover
 
-**Added in response to Gate 1 B1.** D2 alone is ambiguous: the Tails sidecar lists only the ISO, so
-`vmlinuz`/`initrd.img`/`9990-misc-helpers.sh` are legitimately absent, but the *ISO* being absent
-must be an error. Without an explicit rule, an upstream rename (which §2 confirms has happened
-twice) silently lands the 1.94 GB ISO as `classNotVerifiable` — the precise failure mode D2 exists
-to forbid.
+**Added in response to Gate 1 B1; its justification corrected after the scoped re-review (BL-2).**
 
-So the registration names the covered files. A **declared-covered file missing from the sidecar is a
-D2 error**; any other file's absence is not.
+D2 alone is ambiguous: the Tails sidecar lists only the ISO, so
+`vmlinuz`/`initrd.img`/`9990-misc-helpers.sh` are legitimately absent, but the *ISO* being absent
+must be an error. Without an explicit rule, the ISO silently lands as `classNotVerifiable` — the
+precise failure mode D2 exists to forbid. So the registration names the covered files, and a
+**declared-covered file missing from the sidecar is a D2 error**; any other file's absence is not.
+
+**The rename framing was wrong and is withdrawn.** An earlier revision justified this field with the
+upstream ISO rename §2 documents. A rename does not reach it, in either branch:
+
+- **Manifest tracks the rename** (the normal case) — `netbootxyz.go:250-252` already errors
+  (`allowlisted file %q is not in the manifest entry … upstream may have renamed or dropped it`)
+  *before* any `Artifact` is constructed, and §4.3's own sketch keeps that check ahead of the
+  `checksumCovers` branch. So the allowlist error is what surfaces, never D2a's.
+- **Manifest lags the rename** — `artifactURL` composes a URL for a nonexistent asset, the fetch
+  404s, `landArtifact` returns an error, and the version is retried next tick. Nothing lands.
+
+This also means an earlier revision **deleted a correct statement** when it "corrected" M4. M4's
+observation is about *fetch* ordering (the ~90-byte sidecar GET precedes the file loop — true), not
+about which *error* surfaces. The original text — "if upstream renames the asset, the existing
+allowlist check fires first, so this degrades to a loud, already-designed failure" — was right, and
+is restored in §4.3.
+
+**What D2a actually and uniquely covers is a sidecar-only desync:** the manifest and the release
+asset still say `tails-amd64.iso`, but the sidecar drops that line or keys it differently. Nothing
+else in the pipeline notices, because every other check passes — which is exactly why the silent
+downgrade would occur. §2 lists this under "could not be verified": it has not been observed, and it
+is not observable from outside upstream's build.
+
+**Why the field is not derivable from `large`** (re-review S-c). Today
+`checksumCovers: ["tails-amd64.iso"]` and `large: {"tails-amd64.iso": true}` hold identical content,
+so the field looks redundant. They encode different knowledge and have different change-drivers:
+`large` means "too big for the staged downloader's 5-minute ceiling", `checksumCovers` means
+"upstream promises a digest for this". A tool could publish a sidecar covering small files only
+(no `large` entry at all), or mark a file `large` that upstream never checksums. Deriving one from
+the other would make "every `Large` file must appear in the sidecar" a rule, which is a coincidence
+of the present registration rather than a fact about upstream. The identical content today is not an
+argument to merge them — but it *is* the reason to say so here rather than leave a reader guessing.
 
 ### D3 — hash the completed file on disk, never the stream
 
@@ -141,16 +173,45 @@ The fix is narrow and follows from what `warn` is *for*. `warn` trades strictnes
 it exists so an unfetchable sidecar or an expired key does not brick a boot. For a `Large` artifact
 that trade has no value on either side:
 
-- **Nothing is gained.** A 1.94 GB ISO that fails its digest is truncated or corrupt; it will not
-  mount via `fromiso=` and will not boot. Landing it buys no availability, only a broken boot.
-- **Nothing ambiguous is being punished.** For a `Large` artifact, `classCorruption` at land time can
-  *only* mean a definitive hash mismatch, because D2 already errored out before the download if the
-  sidecar was unfetchable or malformed. The "material unavailable" case that `warn` was written to
-  protect cannot reach this point.
+- **Nothing is gained.** A digest failure on a 1.94 GB ISO is unexplained divergence from what
+  upstream published. It is *usually* truncation or corruption that will not mount via `fromiso=`,
+  though a flipped bit in an unused region would fail the hash and still boot — so the honest
+  argument is not "these bytes cannot boot" but **"unexplained divergence must not be served,"**
+  which for an anonymity distro executed at full hardware privilege is the stronger claim anyway.
+- **Nothing ambiguous is being punished — once D4b is in place.** For a `Large` artifact,
+  `classCorruption` at land time means a definitive hash *mismatch*, because D2 rejects an
+  unfetchable or malformed sidecar before the download and D4b removes the one other route in.
 
 So `landArtifact` rejects a `Large` artifact on `classCorruption` regardless of policy. `warn` and
 `strict` converge for this one case, the version is wiped, and §7's guard rate-limits the retry.
 `policy == "off"` still short-circuits before verification, unchanged (§5.2).
+
+### D4b — a `Large` artifact's hash is computed in `landArtifact`, and an I/O failure is an error, not a verdict
+
+**Added in response to the scoped re-review (BL-1), which found a hole in D4a as first written.**
+
+D4a originally claimed `classCorruption` on a `Large` artifact could *only* mean a mismatch. That was
+false, and the exposure was exclusive to `Large`. `verifyArtifact` hashes the file itself when
+`streamedSHA256 == ""` and classifies a **read failure** as corruption
+(`verify.go:56-61`, "checksum unavailable"). D3 deliberately passes an empty streamed hash for
+`Large`, while `config.DownloadStaged` always returns a digest (`config.go:154`, verified) — so on
+the land path `hashFile` is reached **only** for `Large` artifacts. D4a would therefore have
+converted a transient local read error — a NAS blip, fd exhaustion under `CacheConcurrency`, an
+operator clearing the cache dir mid-pass — into: delete the completed 1.94 GB file (§5.3), `RemoveAll`
+the version directory (`reconcile.go:200`), and arm §7's guard for an hour. Under the *pre-existing*
+code that same error costs nothing, because `hashFile` is never reached.
+
+**Resolution:** the `Large` branch of `landArtifact` computes the digest itself and treats a read
+failure as a transport/IO error — `return false, artifactVerdict{}, err`. That routes to
+`reconcile.go:186`'s `vg.Wait() != nil → continue`, which writes no row, runs no `removeVersionDir`,
+and **leaves the resumable bytes on disk** to resume next tick. The successful digest is then passed
+to `verifyArtifact` as `streamedSHA256`, so `verifyArtifact` needs no change and its own `hashFile`
+branch becomes reachable only from `VerifyVersion` (reverify), where classifying an unreadable final
+file as corruption is existing, unchanged behaviour.
+
+The rule this encodes is worth stating generally: **"I could not evaluate the material" is an
+infrastructure failure and must be retried; "the material does not match" is a verdict.** D2 applies
+it to the sidecar, D4b applies it to the local read.
 
 **A related pre-existing gap is NOT fixed here and is not claimed to be:** the same
 `reconcile.go:163` skip means *any* warn-landed failed version, on any OS, is never retried. That
@@ -202,9 +263,11 @@ register(netbootxyzOS{
     // publishes this sidecar; no other tool's releases do. It is NOT in `files`:
     // it is verification material, never cached and never served.
     checksums: "sha256-checksums.txt",
-    // D2a: files the sidecar MUST list. Upstream has renamed this ISO twice
-    // (tails-amd64-4.22.iso, tails-amd64-6.6.iso), and without this the rename
-    // would silently downgrade the 1.94 GB ISO to not-verifiable.
+    // D2a: files the sidecar MUST list. Guards a sidecar-only desync — manifest
+    // and asset still say tails-amd64.iso while the sidecar drops or rekeys that
+    // line — which nothing else in the pipeline notices, so the 1.94 GB ISO would
+    // silently land not-verifiable. NOT the rename case: an upstream rename is
+    // already caught by the manifest-membership check below.
     checksumCovers: []string{"tails-amd64.iso"},
 })
 ```
@@ -265,8 +328,8 @@ func (t netbootxyzOS) Artifacts(ctx, version, arch string, _ map[string]string) 
             a.SHA256 = d
         } else if slices.Contains(t.checksumCovers, f) {
             // D2a: a file the registration declares the sidecar MUST cover is
-            // missing from it — upstream renamed or dropped it. Fail loud rather
-            // than silently landing 1.94 GB as not-verifiable.
+            // missing from it — a sidecar-only desync. Fail loud rather than
+            // silently landing 1.94 GB as not-verifiable.
             return nil, fmt.Errorf(
                 "ostype: %s: %q is declared checksum-covered but absent from %s", t.name, f, t.checksums)
         }
@@ -285,9 +348,12 @@ func (t netbootxyzOS) Artifacts(ctx, version, arch string, _ map[string]string) 
 artifacts. Its rule — verified iff every verifiable artifact passed *and* at least one was
 verifiable — records `verified=1` for a good Tails version, an improvement on today's `NULL`.
 
-**Ordering note (Gate 1 M4):** the sidecar is fetched *before* the per-file loop, so on an upstream
-rename booty pays the sidecar fetch and *then* errors. An earlier revision claimed the allowlist
-check "fires first"; it does not. Same outcome, and the sidecar is ~90 bytes.
+**Ordering note.** Two different orderings, and an earlier revision conflated them (re-review BL-2).
+*Fetch* order: the sidecar GET precedes the per-file loop, so on an upstream rename booty pays the
+~90-byte fetch and then errors — that was Gate 1 M4's point, and it stands. *Error* order: the
+manifest-membership check still runs before the `checksumCovers` branch, so on a rename the
+**allowlist error is what surfaces**, never D2a's. Both statements are true; only the second says
+which mechanism catches a rename, and it is the allowlist check (D2a).
 
 ### 4.4 No memoization
 
@@ -301,6 +367,11 @@ The memo would have bought that back at the cost of a second cache, a reset-coup
 `ResetNetbootxyzCache`, an unspecified failure-memoization policy, and a test. Deleted. Reuses
 `fetchMetadata` (`pkg/ostype/http.go`) — same client and `discoveryTimeout` as the manifest fetch.
 
+*Precision on the arithmetic (re-review S-f):* "one per pass" is the discovered-target case at
+`retain: 1`. Each **manual version pin** adds one call per pinned version per pass, and each
+`POST /cache/{id}/reverify` adds one — more reachable now that D5 lifts the tool short-circuit. The
+conclusion survives comfortably; the figure is a floor, not an exact count.
+
 ### 4.5 `pkg/checksum`
 
 ```go
@@ -310,8 +381,9 @@ package checksum
 func ParseSums(body []byte) (map[string]string, error)
 ```
 
-`pkg/cache/debiandvd.go`'s `parseSHA256SUMS` is replaced by a `ParseSums(os.ReadFile(path))` call at
-its single call site (`verifyDVDChecksums`, `debiandvd.go:37`).
+`pkg/cache/debiandvd.go`'s `parseSHA256SUMS` is replaced at its single call site
+(`verifyDVDChecksums`, `debiandvd.go:37`) by reading the file and passing the bytes to
+`checksum.ParseSums` — two statements, since `os.ReadFile` returns `([]byte, error)`.
 
 **Correction to an earlier claim (Gate 1 S9):** that revision said the DVD caller keeps its call
 "unchanged". It does not — the call becomes qualified and reads the file itself. And §12's assertion
@@ -350,7 +422,7 @@ artifact.
 The **416** branch moves into `downloadLargeInto` and returns `nil` — bytes are complete; the rename
 is the caller's. Gate 1 confirmed the split leaves DVD behaviour identical: the seam is a func var on
 the same `(ctx, url, destPath) error` signature, the DVD state-machine tests stub it entirely, and
-the four direct `downloadLargeFile` tests still pass through the wrapper.
+the **five** direct `downloadLargeFile` tests still pass through the wrapper.
 
 ### 5.2 One shared tail in `landArtifact`
 
@@ -363,7 +435,17 @@ func landArtifact(ctx, dir, a, policy) (bool, artifactVerdict, error) {
         if a.SigURL != "" { return ...unsupported (D4)... }
         inProgress = final + DownloadSuffix
         if err := downloadLargeInto(ctx, a.URL, inProgress); err != nil { return false, artifactVerdict{}, err }
-        // streamedSHA stays "" → verifyArtifact hashes the finished file (D3)
+        if a.SHA256 != "" {
+            // D3: hash the COMPLETED file — resume-via-Range means the stream
+            // carried only a delta, and the 416 branch streamed nothing at all.
+            // D4b: a read failure here is infrastructure, not a verdict. Returning
+            // err leaves the resumable bytes on disk and retries next tick;
+            // letting verifyArtifact hash it would classify the blip as corruption
+            // and (under D4a) destroy a completed multi-GB download.
+            h, err := hashFile(inProgress)
+            if err != nil { return false, artifactVerdict{}, fmt.Errorf("cache: hash %s: %w", inProgress, err) }
+            streamedSHA = h
+        }
     } else {
         p, sha, err := config.DownloadStaged(ctx, dir, a.URL)
         if err != nil { return false, artifactVerdict{}, err }
@@ -377,10 +459,11 @@ func landArtifact(ctx, dir, a, policy) (bool, artifactVerdict, error) {
     case classPass, classNotVerifiable: return land(v)
     case classForgery:                  return reject(v)
     case classCorruption:
-        // D4a: a Large artifact's corruption verdict can ONLY be a definitive hash
-        // mismatch (D2 rejects unfetchable/malformed sidecars before the download),
-        // and a corrupt multi-GB ISO cannot boot — so `warn` has no availability to
-        // trade and this rejects under every policy.
+        // D4a: for a Large artifact this is a definitive hash MISMATCH — D2 rejects
+        // an unfetchable/malformed sidecar before the download, and D4b routes a
+        // local read failure out as an error rather than a verdict. Unexplained
+        // divergence from what upstream published must not be served, so `warn` has
+        // no availability to trade here and this rejects under every policy.
         if policy == "warn" && !a.Large { return land(v) }
         return reject(v)
     default: return reject(v)
@@ -463,7 +546,7 @@ verdict** on a healthy system. The check must accept either suffix.
 ### 6.3 Stale-tag refusal must not become a 500
 
 `Artifacts()` refuses any version that is not the entry's current tag — the reason the short-circuit
-existed. `pkg/ostype` exports `ErrVersionSuperseded`, wrapped into that refusal; `VerifyVersion` maps
+existed. `pkg/ostype` **gains** an exported `ErrVersionSuperseded` (it does not exist on the branch today), wrapped into that refusal; `VerifyVersion` maps
 `errors.Is` on it to `(nil, "", nil)`, which is what an archived tool returns today. Every other
 `Artifacts` error still propagates.
 
@@ -485,13 +568,23 @@ full land path runs again, so a persistent mismatch becomes a **1.94 GB re-downl
 ### 7.2 The guard
 
 `reconcileTarget` skips any version whose last attempt was **rejected by verification** and whose
-rejection is newer than the retry window, logging the version, its `verify_err`, and the next
-attempt time.
+rejection is newer than the retry window.
 
-**No migration.** `UpsertCacheEntryArchived` (`pkg/db/cache.go:86-102`) is the only writer that
-produces `size=0 AND in_window=0 AND verified=0 AND verify_err<>''` — Gate 1 checked every other
-writer (`UpsertCacheEntry`, `SetCacheVerified`, `SetCacheInWindow`, `SetCachePinned*`, `Scan`) and
-none can. The predicate is **all four columns**, not the two an earlier revision named.
+**Placement is specified, not left to the executor** (re-review S-e): the check goes **before**
+`o.Artifacts` (`reconcile.go:137`) inside the desired-version loop, so a guarded version also skips
+the sidecar GET. Neither placement oscillates, but only this one avoids the fetch.
+
+**No migration.** `UpsertCacheEntryArchived` (`pkg/db/cache.go:86-102`) is the writer that produces
+`size=0 AND in_window=0 AND verified=0 AND verify_err<>''`; every other writer
+(`UpsertCacheEntry`, `SetCacheVerified`, `SetCacheInWindow`, `SetCachePinned*`, `Scan`) was checked
+across both reviews and none produces it on its own — `UpsertCacheEntry` unconditionally sets
+`in_window=1`, and `SetCacheInWindow` is only ever called with `false`. The predicate is **all four
+columns**, not the two an earlier revision named.
+
+*One residual, reported rather than hidden:* `SetCacheVerified` can stamp `verified=0`/`verify_err`
+onto a row already sitting at `size=0, in_window=0`, so "only writer" is strictly too strong. Neither
+it nor `SetCacheInWindow` touches `fetched_at`, so the recency clause bounds the exposure, and the
+worst case is one guarded hour on a version whose bytes are already gone.
 
 **Why all four (Gate 1 B3).** The earlier predicate — `cached=0` plus a failure verdict — misfires on
 a reachable transport failure: a warn-landed failed version (`cached=1`, `size>0`) later loses a file
@@ -512,16 +605,37 @@ for `offset + window` (~7 h in MDT, more elsewhere) and logs a nonsense next-att
 accessor compares in SQL —
 
 ```sql
-SELECT 1 FROM cache_entries ce
+SELECT ce.verify_err FROM cache_entries ce
   JOIN target_versions tv ON tv.id = ce.target_version_id
  WHERE tv.target_id = ? AND tv.version = ?
    AND ce.size = 0 AND ce.in_window = 0 AND ce.verified = 0 AND ce.verify_err <> ''
-   AND ce.fetched_at > datetime('now', ?)   -- e.g. '-60 minutes'
+   AND ce.fetched_at > datetime('now', ?)
 ```
 
-— and returns `(blocked bool, verifyErr string)`. No Go-side time parsing, no timezone exposure.
-`blocked=false` means "not currently guarded", covering both "no row" and "row does not match",
-which removes the `ok bool` ambiguity Gate 1 raised (M8).
+— returning `(blocked bool, verifyErr string)`, where `blocked=false` means "not currently guarded"
+and covers both "no row" and "row does not match", removing the `ok bool` ambiguity Gate 1 raised
+(M8). It selects `ce.verify_err`, **not** `1`: an earlier revision's `SELECT 1` could not supply the
+string its own signature promised (re-review N-1).
+
+**The modifier's format is pinned, because the natural Go spelling silently disables the guard**
+(re-review N-3). `verifyRetryAfter` is a `time.Duration`, and `fmt.Sprintf("-%v", d)` yields
+`-1h0m0s`, which SQLite does not accept. Measured:
+
+```
+sqlite> SELECT quote(datetime('now','-1h0m0s')), datetime('now','-3600 seconds');
+NULL|2026-08-07 15:32:08
+```
+
+`datetime()` returns **NULL**, `ce.fetched_at > NULL` is NULL, the `WHERE` never matches, and the
+guard becomes a **silent no-op** — no error, no log, no test failure except §10.15's. So the
+parameter is formatted as `fmt.Sprintf("-%d seconds", int64(verifyRetryAfter/time.Second))`, and
+§10.15 must assert the in-window skip specifically (a test that only checks "retries after the
+window" passes against a disabled guard).
+
+**The log line reports a relative bound, not an absolute time** (re-review N-2). An earlier revision
+required logging "the next attempt time", which cannot be computed without either the forbidden Go
+parse of `fetched_at` or a second SQL expression — reintroducing exactly the trap B4 raised. The
+guard logs the version, its `verify_err`, and `retryAfter` as a duration ("retry in ≤ 1h0m0s").
 
 ### 7.3 Scope — including what it does NOT cover
 
@@ -537,7 +651,7 @@ which removes the `ok bool` ambiguity Gate 1 raised (M8).
   machine. Tracked as [jacaudi/booty#77](https://github.com/jacaudi/booty/issues/77) rather than
   silently claimed as covered.
 - **Transport failures are excluded** and the §7.2 predicate now genuinely excludes them: a network
-  failure returns at `reconcile.go:186-188` before any row is written, and cannot forge the four-column
+  failure returns at `reconcile.go:186-188` before any `cache_entries` row is written, so it cannot forge the four-column
   signature.
 - **Self-clearing, so no new API surface.** A transient corruption heals on the next attempt after
   the window. A permanent upstream mismatch stays visible via `verify_err`, which the cache API
@@ -573,6 +687,17 @@ to the same origin, with no independent trust anchor.
 resume that appended to the wrong bytes, and a mirror or CDN serving damaged content — under **every**
 policy, including the default `warn`, because a `Large` artifact failing its digest never lands.
 Before D4a this list was aspirational under the default; it is now accurate.
+
+**This change verifies future downloads, not the ISO already on disk (re-review S-a).** The
+settled-skip at `reconcile.go:163` fires on `cached=1 && finalFilesPresent` *before* any verdict is
+computed, so the Tails ISO that landed unverified under #75 keeps `verified=NULL` on the land path
+forever. At `retain: 1`, once a new Tails release appears that version is archived — and per the
+paragraph below, reverify cannot produce a verdict for a superseded tag. So the currently-deployed
+artifact's only verification window is **a manual reverify while it is still upstream's current
+release**; after that it is unverifiable by any path short of evicting it. §1's "instead of caching
+it entirely unverified" and §8's defends-against list describe *subsequent* downloads. This is
+distinct from §9's non-retroactivity bullet, which is about policy tightening, not newly-available
+material.
 
 **Disk rot is narrower than an earlier revision claimed (Gate 1 S3).** Reverify can only produce a
 verdict for a Tails version that is *still upstream's current release*, because `Artifacts` refuses a
@@ -638,6 +763,10 @@ survived three review rounds; that is the failure mode this requirement exists t
    remove the `!a.Large` condition and the `warn` case must start landing, failing this test.
 9. A `Large` artifact with a correct `SHA256` lands and records `verified=1`.
 10. A `Large` artifact declaring `SigURL` still hard-fails (D4).
+10a. **D4b:** make `hashFile` fail on a `Large` artifact (unreadable in-progress file) and assert
+    `landArtifact` returns an **error** — not a corruption verdict — so no row is written, the
+    version dir survives, the in-progress bytes survive, and the guard is not armed. Mutation check:
+    revert to letting `verifyArtifact` hash it and this must fail. This is the re-review's BL-1.
 11. Under `policy == "off"`, a `Large` artifact lands unverified — pinning §5.2's acknowledged
     reachable path so it stays deliberate.
 12. **Resume correctness:** pre-seed a partial in-progress file, serve the remainder from a
@@ -646,10 +775,11 @@ survived three review rounds; that is the failure mode this requirement exists t
     unverified rename).
 14. `VerifyVersion` verifies a tails version; returns *no verdict* (not `artifact absent`) with a
     live in-progress sibling (§6.2); returns no verdict (not an error) on a superseded tag (§6.3).
-15. The retry guard: a rejected version is skipped inside the window and re-attempted after it. The
-    window is shrunk by setting `verifyRetryAfter` directly (§7.4) — no sleeps. A transport failure
-    is **not** guarded, including the B3 sequence (warn-land → file loss → `cached=0` → transport
-    error) for a non-`Large` artifact.
+15. The retry guard: **assert the in-window skip specifically**, not only that a retry eventually
+    happens — a test that checks only the latter passes against a guard disabled by the N-3 NULL
+    bug. The window is shrunk by setting `verifyRetryAfter` directly (§7.4) — no sleeps. Also assert
+    a transport failure is **not** guarded, including the B3 sequence (warn-land → file loss →
+    `cached=0` → transport error) for a non-`Large` artifact.
 16. `scan.go` excludes in-progress files from the size total (§5.5).
 
 **`pkg/checksum`:**
@@ -673,7 +803,7 @@ Each entry checked against the file.
   statement exists and that claim is withdrawn. What it needs is a *new* note that Tails alone among
   the tools carries an upstream checksum. Its retain-1 caveat (lines 98-107) is real and untouched.
 - `docs/CONFIGURATION.md` — the `--signaturePolicy` section (line 404) gains §8.1, **including that
-  `warn` now rejects a `Large` checksum failure** (D4a). Its existing lines 435-437 currently say
+  `warn` now rejects a `Large` checksum failure** (D4a). Its existing lines 434-436 currently say
   such failures land under `warn`; that becomes wrong for `Large` and must be corrected, not just
   appended to. No `verifyRetryAfter` row — §7.4 makes it a package var.
 - `docs/designs/2026-07-29-tool-rescue-os-support-design.md` §8.5 — from "deferred to a later slice"
@@ -681,7 +811,7 @@ Each entry checked against the file.
 - **No release notes (Gate 1 S1).** An earlier revision listed them; there is no CHANGELOG, no
   release automation, and `gh release list` is empty. The behaviour change is communicated in the PR
   body and `CONFIGURATION.md` instead.
-- `docs/schema/API.md` (line 465) / `DATABASE.md` (line 108) — **no change, verified by reading
+- `docs/schema/API.md` (the reverify row at 463, the `verified`/`verifyErr` DTO rows at 480-481) / `DATABASE.md` (line 108) — **no change, verified by reading
   both.** They define the `verified` tri-state generically and never assert that tool artifacts are
   unverifiable, so Tails moving `NULL → 1` changes which rows hold which value, not what the column
   means.
@@ -693,8 +823,9 @@ Each entry checked against the file.
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Upstream stops publishing the sidecar | Medium | D2 fails loud; the cached ISO keeps booting; a warning every pass rather than a silent downgrade. |
-| Upstream renames the ISO asset | Medium | D2a errors explicitly. Confirmed to have happened twice historically, which is why D2a exists. |
-| D4a makes a boot unavailable that `warn` would have allowed | Low | Only for a `Large` artifact whose digest is definitively wrong, which cannot boot anyway. The prior cached version stays on disk and menu-bootable. |
+| Upstream renames the ISO asset | Medium | The **manifest-membership check** errors (`netbootxyz.go:250`), before any artifact is built — not D2a. Confirmed to have happened twice historically. |
+| Sidecar-only desync (sidecar drops or rekeys the ISO line) | Medium | D2a errors explicitly. This, not the rename, is what D2a uniquely catches. |
+| D4a makes a boot unavailable that `warn` would have allowed | Low–Medium | Only for a `Large` artifact whose digest is definitively wrong. Where a prior version is cached it stays on disk and menu-bootable — but on a **first-ever** Tails cache there is no fallback, so the target has no bootable Tails at all where the pre-D4a default would have booted something. Accepted: serving unexplained divergence as an anonymity distro is the worse outcome. |
 | The retry guard masks a real problem | Low | `verify_err` is recorded and API-exposed on every rejection; the guard suppresses only *re-downloads*, never the verdict or the log. |
 | Hashing stalls a reconcile pass | Low | 3.55 s measured (~20 s on a slow spindle), once per version download, inside an errgroup slot already occupied by a multi-GB transfer. |
 | The parser move breaks the DVD path | Low | Single call site; §10.17 adds the direct tests it never had; `go build ./...` catches the import change. |
