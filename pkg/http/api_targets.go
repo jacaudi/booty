@@ -145,8 +145,11 @@ func registerTargets(api huma.API, deps APIDeps) {
 	}, func(ctx context.Context, in *struct {
 		ID   int64 `path:"id"`
 		Body struct {
-			Enabled *bool   `json:"enabled,omitempty"`
-			RetainN *int    `json:"retainN,omitempty"`
+			Enabled *bool `json:"enabled,omitempty"`
+			// minimum:"0" mirrors POST's. Without it a negative RetainN
+			// persists here and panics retentionFor's `out[:n]` on the next
+			// reconcile pass — the response is 200 and the process is dead.
+			RetainN *int    `json:"retainN,omitempty" minimum:"0"`
 			Mode    *string `json:"mode,omitempty" enum:"discovery,manual"`
 		}
 	}) (*struct{ Body TargetDTO }, error) {
@@ -161,6 +164,16 @@ func registerTargets(api huma.API, deps APIDeps) {
 			t.Enabled = *in.Body.Enabled
 		}
 		if in.Body.RetainN != nil {
+			// Same gate POST runs. PATCH is the second write path onto
+			// RetainN; leaving it unvalidated reopens the tool-retain hole
+			// that ValidateToolRetain was single-sourced to close.
+			o, ok := ostype.Lookup(t.OS)
+			if !ok {
+				return nil, huma.Error422UnprocessableEntity("unknown OS " + t.OS)
+			}
+			if err := cache.ValidateToolRetain(o, *in.Body.RetainN); err != nil {
+				return nil, huma.Error422UnprocessableEntity(err.Error())
+			}
 			t.RetainN = *in.Body.RetainN
 		}
 		if in.Body.Mode != nil {

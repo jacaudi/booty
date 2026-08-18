@@ -13,9 +13,17 @@ import (
 // in-flight staged download (T2/T9 write <artifact>.partial while downloading)
 // so isPartialPath can gate the FileServer from ever serving unverified,
 // in-flight bytes — while leaving normal, landed artifacts servable.
+// The ".download" case is the resumable large-file path (isodownload.go),
+// which deliberately does NOT use ".partial" so SweepPartials cannot delete a
+// multi-GB ISO between reconcile ticks. That same choice means a .download
+// file can legitimately sit on disk for hours, inside exactly the cache
+// directory [[baseurl]] points at, so it needs the identical exclusion.
 func TestPartialSuffixExcluded(t *testing.T) {
 	if !isPartialPath("/cache/flatcar/stable/amd64/1/x.img.partial") {
 		t.Error(".partial paths must be recognized for exclusion")
+	}
+	if !isPartialPath("/cache/tails/-/amd64/7.10/tails-amd64.iso.download") {
+		t.Error(".download paths must be recognized for exclusion")
 	}
 	if isPartialPath("/cache/flatcar/stable/amd64/1/x.img") {
 		t.Error("final artifacts must NOT be excluded")
@@ -47,6 +55,9 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "kernel.partial"), partialBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "big.iso.download"), partialBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	handler := http.StripPrefix("/data/", dataFileHandler(dataDir))
 
@@ -58,6 +69,8 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 		{"lowercase .partial blocked", "/data/os/arch/ver/kernel.partial", true},
 		{"percent-encoded dot blocked", "/data/os/arch/ver/kernel%2Epartial", true},
 		{"uppercase .PARTIAL blocked", "/data/os/arch/ver/kernel.PARTIAL", true},
+		{"lowercase .download blocked", "/data/os/arch/ver/big.iso.download", true},
+		{"uppercase .DOWNLOAD blocked", "/data/os/arch/ver/big.iso.DOWNLOAD", true},
 		{"real file still served", "/data/os/arch/ver/kernel", false},
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 )
@@ -66,11 +67,22 @@ func downloadLargeFile(ctx context.Context, url, destPath string) error {
 	default:
 		return fmt.Errorf("cache: download %s: unexpected status %s", url, resp.Status)
 	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	// The staged downloader logs "downloading (staged)"/"staged download
+	// complete" around every other artifact. Without the matching pair here
+	// the multi-GB transfer — the single longest operation booty performs, and
+	// the one on an isoClient with NO timeout — is the only one with zero
+	// observability, so an operator cannot distinguish "slow" from "hung".
+	slog.Info("downloading (resumable)", "url", url, "resumeOffset", offset)
+	n, err := io.Copy(f, resp.Body)
+	if err != nil {
 		return fmt.Errorf("cache: stream %s: %w", url, err)
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(partial, destPath)
+	if err := os.Rename(partial, destPath); err != nil {
+		return err
+	}
+	slog.Info("resumable download complete", "url", url, "bytes", offset+n)
+	return nil
 }

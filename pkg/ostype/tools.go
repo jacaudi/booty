@@ -48,6 +48,53 @@ func init() {
 		endpoints: map[string]string{"amd64": "memtest86plus"},
 		files:     []string{"mt86p_x86_64"},
 	})
+	// Debian-stable of the four Clonezilla endpoints upstream publishes
+	// (debian/ubuntu x stable/testing) — D11. Tools are param-less, so the
+	// choice cannot be a spec key; the Ubuntu and testing variants remain
+	// additive later as separate registrations.
+	register(netbootxyzOS{
+		name:      "clonezilla",
+		endpoints: map[string]string{"amd64": "clonezilla-debian-stable-amd64"},
+		files:     []string{"vmlinuz", "initrd", "filesystem.squashfs"},
+	})
+	// Upstream declares no arch for this endpoint; booty registers it under
+	// amd64 like every other tool. Its manifest `version` is the literal string
+	// "current" forever — the on-disk version is the release tag (D7), which is
+	// exactly the case D7 exists for.
+	register(netbootxyzOS{
+		name:      "rescatux",
+		endpoints: map[string]string{"amd64": "rescatux"},
+		files:     []string{"vmlinuz", "initrd", "filesystem.squashfs"},
+	})
+	// Upstream declares no arch and publishes exactly one file: the RECOVERY
+	// EFI image. It appears only under utilitiesefi, so it is EFI-only.
+	register(netbootxyzOS{
+		name:      "zfsbootmenu",
+		endpoints: map[string]string{"amd64": "zfsbootmenu"},
+		files:     []string{"zfsbootmenu-recovery-x86_64.efi"},
+	})
+	// Upstream key is shredos-x86_64 (its manifest arch is x86_64); booty
+	// registers it under amd64 like every other tool — the endpoints map exists
+	// to absorb exactly this. The 32-bit shredos-i686 endpoint is not offered.
+	register(netbootxyzOS{
+		name:      "shredos",
+		endpoints: map[string]string{"amd64": "shredos-x86_64"},
+		files:     []string{"shredos"},
+	})
+	// The ISO is 1.9 GB and mounted as a third initrd via fromiso=. It is marked
+	// large so it lands through the resumable downloader (D13) — the staged path's
+	// 5-minute whole-request ceiling cannot fetch it on most links.
+	//
+	// 9990-misc-helpers.sh is netboot.xyz's PATCH, not an extra: netbootxyz#1624
+	// was Tails failing to mount the ISO because the loop module was not loaded,
+	// and the modprobe fix ships in this helper. It is version-coupled to the
+	// ISO; both share the release tag, so D7 keeps them in step.
+	register(netbootxyzOS{
+		name:      "tails",
+		endpoints: map[string]string{"amd64": "tails"},
+		files:     []string{"vmlinuz", "initrd.img", "9990-misc-helpers.sh", "tails-amd64.iso"},
+		large:     map[string]bool{"tails-amd64.iso": true},
+	})
 }
 
 // ToolFiles reports each registered tool's file allowlist. Same shape and

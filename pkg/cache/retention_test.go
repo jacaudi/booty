@@ -47,3 +47,24 @@ func TestRetentionForToolKeepsDiscoveredNotLexicalMax(t *testing.T) {
 		t.Errorf("retentionFor = %v, want [10.00-bbbbbbbb]", got)
 	}
 }
+
+// A negative n must never panic. retentionFor's truncation is `out[:n]`, which
+// on a negative n is a slice-bounds panic that takes the whole process down —
+// and it runs on the reconcile goroutine, reachable from any persisted target
+// whose RetainN went negative. Clamping to zero (keep nothing) is the only
+// defensible reading of "retain -5 versions" and matches retain: 0's meaning.
+func TestRetentionForNegativeRetainClampsInsteadOfPanicking(t *testing.T) {
+	cases := []struct{ os, name string }{
+		{"talos", "talos minor-line branch"},
+		{"clonezilla", "tool branch"},
+		{"flatcar", "default compare branch"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := retentionFor(tc.os, []string{"v1.2.3", "v1.1.0"}, -5)
+			if len(got) != 0 {
+				t.Fatalf("retentionFor(%q, …, -5) = %v, want empty", tc.os, got)
+			}
+		})
+	}
+}

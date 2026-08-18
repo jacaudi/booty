@@ -331,6 +331,81 @@ func TestVerifyVersion_AbsentFinalWithPartialIsNull(t *testing.T) {
 	}
 }
 
+// TestLandArtifactLargeUsesResumableDownloader proves the Large artifact is
+// actually routed through downloadLargeFile (pkg/cache/isodownload.go), not
+// merely that the outcome LOOKS the same as the ordinary staged path would
+// produce. A plain single-shot 200 response can't discriminate the two: with
+// no SHA256/SigURL declared, config.DownloadStaged would ALSO land the file at
+// the final name with no .partial left behind and classNotVerifiable — an
+// observably identical result. The discriminator is the Range header:
+// downloadLargeFile resumes from an existing ".download" file with
+// `Range: bytes=<offset>-`; config.DownloadStaged never sends one. So this
+// test pre-seeds a ".download" prefix (as a prior, interrupted attempt would
+// leave behind) and asserts the server actually received a Range request —
+// an assertion only satisfiable by the Large routing firing — plus that the
+// landed file is the full prefix+remainder, proving the resume reassembled
+// it rather than truncating.
+func TestLandArtifactLargeUsesResumableDownloader(t *testing.T) {
+	full := []byte("LARGE-PAYLOAD-CONTENT-FOR-RESUME-TEST")
+	prefix := full[:8]    // what a prior, interrupted attempt already wrote
+	remainder := full[8:] // what the server must supply on resume
+
+	gotRange := make(chan bool, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "" {
+			gotRange <- true
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(remainder)
+			return
+		}
+		gotRange <- false
+		_, _ = w.Write(full)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	// Pre-seed the in-progress file downloadLargeFile resumes from. The
+	// ".download" suffix (not ".partial") is what lets it survive
+	// SweepPartials between reconcile passes.
+	if err := os.WriteFile(filepath.Join(dir, "big.iso.download"), prefix, 0o644); err != nil {
+		t.Fatalf("seed .download: %v", err)
+	}
+
+	a := ostype.Artifact{Filename: "big.iso", URL: srv.URL + "/big.iso", Large: true}
+	landed, v, err := landArtifact(t.Context(), dir, a, "strict")
+	if err != nil {
+		t.Fatalf("landArtifact: %v", err)
+	}
+	if !landed {
+		t.Fatal("large artifact did not land")
+	}
+	if v.class != classNotVerifiable {
+		t.Errorf("class = %v, want classNotVerifiable", v.class)
+	}
+	// It must land at the FINAL name with no .partial left behind: the large
+	// path writes via a ".download" file that survives SweepPartials.
+	if _, err := os.Stat(filepath.Join(dir, "big.iso")); err != nil {
+		t.Errorf("final file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "big.iso.partial")); err == nil {
+		t.Error("a .partial was left behind; the large path must not use .partial")
+	}
+	// Discriminator: only downloadLargeFile ever sends a Range header. If the
+	// Large routing were dropped and landArtifact fell through to
+	// config.DownloadStaged instead, the request would arrive with no Range
+	// header and this assertion would fail.
+	if !<-gotRange {
+		t.Error("server did not receive a Range header; Large artifact was not routed through the resumable downloader")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "big.iso"))
+	if err != nil {
+		t.Fatalf("read landed file: %v", err)
+	}
+	if string(got) != string(full) {
+		t.Errorf("landed content = %q, want %q (resume must reassemble prefix+remainder, not truncate)", got, full)
+	}
+}
+
 // TestVerifyVersionToolIsNotVerifiable pins the short-circuit that keeps
 // reverify from ever reaching Artifacts for a tool: tools carry no
 // verification material at all, and Artifacts refuses any version that is

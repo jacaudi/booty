@@ -12,6 +12,7 @@ import (
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
 
@@ -556,7 +557,7 @@ func TestBootTokensForTool(t *testing.T) {
 		t.Errorf("version/arch tokens wrong: %#v", got)
 	}
 	if got["[[server-ip]]"] == "" {
-		t.Error("[[server-ip]] must be set: uefi-shell.ipxe re-chains with it")
+		t.Error("[[server-ip]] must be set: uefi-shell.ipxe, zfsbootmenu.ipxe and shredos.ipxe all re-chain with it")
 	}
 }
 
@@ -565,7 +566,10 @@ func TestToolScriptFullySubstituted(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set(config.ServerIP, "10.0.0.5")
 
-	for _, name := range []string{"memtest86plus", "systemrescue", "uefi-shell"} {
+	// Range over the registry rather than a literal list: a hardcoded list
+	// silently skips tool #9 instead of failing, which is the opposite of what
+	// this test is for. ostype.ToolFiles() already IS the authoritative set.
+	for name := range ostype.ToolFiles() {
 		out := applyTokens(PXEConfig[name+".ipxe"],
 			bootTokensFor(name, "-", "amd64", "1.0-abc", "10.0.0.5:8080"))
 		if strings.Contains(out, "[[") {

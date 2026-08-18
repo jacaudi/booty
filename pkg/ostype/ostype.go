@@ -21,6 +21,12 @@ type Artifact struct {
 	SHA256   string // hex; FCOS
 	SigURL   string // detached GPG signature sidecar; Flatcar (URL + ".sig")
 	GPGKey   []byte // armored public keyring for SigURL; Flatcar's embedded key
+	// Large marks an artifact too big for config.DownloadStaged's 5-minute
+	// whole-request ceiling. The cache lands these via a resumable, untimed
+	// downloader instead. Only the tool family sets it, and only for genuinely
+	// huge files (Tails' 1.9 GB ISO) — a small file on the untimed path would
+	// let a hung connection stall a reconcile pass indefinitely.
+	Large bool
 }
 
 // Family is plain DATA — every field is a constant. The version/arch/baseurl

@@ -73,10 +73,26 @@ loops until something is available.
 
 Alongside the OS entries, booty can also cache **tools** — netboot.xyz-sourced rescue and
 diagnostic images that take no per-host config: `systemrescue` (SystemRescue, ~1 GB),
-`uefi-shell` (UEFI Shell, EFI-only), and `memtest86plus` (Memtest86+). Whenever at least one
-tool target is cached, the main menu grows a `Tools & rescue...` item — a nested submenu
-alongside (and shaped like) `Archived OSes...`, with its own `Back` item, listing every cached
-tool.
+`uefi-shell` (UEFI Shell, EFI-only), `memtest86plus` (Memtest86+), `clonezilla` (Clonezilla,
+disk imaging/cloning), `rescatux` (Rescatux, boot/GRUB repair and password reset),
+`zfsbootmenu` (ZFSBootMenu, ZFS boot environments, EFI-only), `shredos` (ShredOS, disk
+eraser), and `tails` (Tails). Whenever at least one tool target is cached, the main menu
+grows a `Tools & rescue...` item — a nested submenu alongside (and shaped like)
+`Archived OSes...`, with its own `Back` item, listing every cached tool.
+
+**Operational notes for the five slice-2 tools:**
+
+- **ShredOS is a disk eraser.** It boots into nwipe's *interactive* interface with disks
+  listed and PRNG preselected — it does **not** erase automatically at launch (upstream's
+  README is explicit about this), and booty does not pass `--autonuke`. booty additionally
+  gates the menu entry behind a confirmation that defaults to "go back" on timeout, so an
+  unattended machine cannot wipe anything. Nothing about ShredOS erases a disk without an
+  operator actively choosing to proceed twice — once past booty's gate, once in nwipe itself.
+- **Tails needs 4–8 GB of client RAM** (2 GB is not enough). Some VMs also need an emulated
+  CD-ROM drive, or the live filesystem is not found at boot — this is a client-side quirk,
+  not a booty bug.
+- **Clonezilla and Rescatux** each pull a ~0.5–0.65 GB squashfs (`filesystem.squashfs`) into
+  client RAM at boot, alongside the base initrd.
 
 **A tool's menu label shows its release tag, not a prettier version.** netboot.xyz release
 tags share no common grammar (`13.01-d20a63ac`, `edk2-stable202002-a6917535`), so booty uses
@@ -92,7 +108,10 @@ would mean fetching the upstream manifest from the boot path itself, which booty
 
 Booting UEFI Shell on a BIOS-mode client doesn't fail silently: the script detects the
 firmware, prints "UEFI Shell requires an EFI client; this machine booted in BIOS mode.", and
-re-chains back into `booty.ipxe` after a short pause rather than hanging.
+re-chains back into `booty.ipxe` after a short pause rather than hanging. **ZFSBootMenu is
+also EFI-only** and emits a structurally identical guard message ("ZFSBootMenu requires an
+EFI client; this machine booted in BIOS mode.") on a BIOS-mode client, for the same reason —
+its recovery image is an EFI executable with no BIOS equivalent.
 
 Tool artifacts are never checksum- or signature-verified — netboot.xyz publishes neither — so
 their `verified` state stays unset (NULL) in the Cache view regardless of
@@ -150,6 +169,21 @@ catalog:
   # - os: memtest86plus     # a few MB
   #   arch: amd64
   #   retain: 1
+  # - os: clonezilla       # ~574 MB; disk imaging and cloning
+  #   arch: amd64
+  #   retain: 1
+  # - os: rescatux         # ~778 MB; boot/GRUB repair and password reset
+  #   arch: amd64
+  #   retain: 1
+  # - os: zfsbootmenu      # ~86 MB; ZFS boot environments. EFI clients only
+  #   arch: amd64
+  #   retain: 1
+  # - os: shredos          # ~97 MB; disk eraser (nwipe). Boots to its UI, does not auto-erase
+  #   arch: amd64
+  #   retain: 1
+  # - os: tails            # ~2.05 GB; needs 4-8 GB of client RAM
+  #   arch: amd64
+  #   retain: 1
 ```
 
 booty reconciles to this file on each cache tick — new entries are created and downloaded,
@@ -157,8 +191,9 @@ removed entries are **disabled, never deleted**. A malformed catalog **aborts st
 rather than silently mass-downloading or mass-disabling; that's intentional.
 
 The families booty can cache today are `ignition` (Flatcar / Fedora CoreOS), `talos`,
-`debian`, and `tool` (`systemrescue` / `uefi-shell` / `memtest86plus`). Adding a family beyond
-those is a code change, not a catalog edit. See [schema/CATALOG.md](schema/CATALOG.md) for the
+`debian`, and `tool` (`systemrescue` / `uefi-shell` / `memtest86plus` / `clonezilla` /
+`rescatux` / `zfsbootmenu` / `shredos` / `tails`). Adding a family beyond those is a code
+change, not a catalog edit. See [schema/CATALOG.md](schema/CATALOG.md) for the
 full schema, the per-OS `arch` tokens and `spec` keys, and the Debian `sourceMode: netinst|dvd`
 options.
 
