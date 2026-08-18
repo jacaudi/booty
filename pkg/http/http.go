@@ -113,8 +113,10 @@ func dataFileHandler(dataDir string) http.Handler {
 // rejection is a 400, which would leak the difference).
 func isAllowedDataPath(p string) bool {
 	// root is the last segment of cache.CacheURLPath's "/data/cache/" prefix,
-	// and must stay in step with pkg/cache's cacheRoot (<dataDir>/cache);
-	// pkg/http cannot import pkg/cache for it without an import cycle.
+	// and must stay in step with pkg/cache's cacheRoot (<dataDir>/cache).
+	// pkg/cache does not export that segment on its own, and this package is
+	// not adding an export for a guard; drift fails safe (boots 404, nothing
+	// new is exposed). Single-sourcing it is a follow-up, not a blocker.
 	const root = "/cache"
 	// StripPrefix leaves the path without a leading slash; path.Clean needs the
 	// leading one to resolve "..", collapses the doubled slash when p already
