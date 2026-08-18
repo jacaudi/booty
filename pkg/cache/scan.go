@@ -48,7 +48,12 @@ func Scan(store *db.Store) (ScanResult, error) {
 			var size int64
 			entries, _ := os.ReadDir(dir)
 			for _, e := range entries {
-				if strings.HasSuffix(strings.ToLower(e.Name()), ".partial") {
+				// Both in-flight suffixes: ".partial" (staged downloader) and
+				// DownloadSuffix (resumable). Counting a resumable in-progress
+				// file inflates SumCacheBytes and the --cacheMaxBytes eviction
+				// budget by up to a whole multi-GB ISO.
+				if name := strings.ToLower(e.Name()); strings.HasSuffix(name, ".partial") ||
+					strings.HasSuffix(name, DownloadSuffix) {
 					continue // in-flight download, not a cached artifact
 				}
 				if fi, err := e.Info(); err == nil {

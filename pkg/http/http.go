@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/web"
 	"github.com/spf13/viper"
@@ -86,8 +87,8 @@ func dataFileHandler(dataDir string) http.Handler {
 // path never references them, this guards direct /data/ browsing.
 //
 // Both in-progress suffixes are covered. ".partial" is the staged downloader's
-// (pkg/cache/verify.go); ".download" is the resumable large-file downloader's
-// (pkg/cache/isodownload.go), which uses a different suffix precisely so
+// (pkg/cache/verify.go); cache.DownloadSuffix is the resumable large-file
+// downloader's (pkg/cache/isodownload.go), which uses a different suffix precisely so
 // SweepPartials cannot delete a multi-GB ISO between reconcile ticks. That
 // makes a .download file the LONGER-lived of the two on disk — a stalled
 // multi-GB transfer can sit for hours by design — inside exactly the cache
@@ -99,7 +100,7 @@ func dataFileHandler(dataDir string) http.Handler {
 // bypass a case-sensitive check.
 func isPartialPath(p string) bool {
 	lower := strings.ToLower(p)
-	return strings.HasSuffix(lower, ".partial") || strings.HasSuffix(lower, ".download")
+	return strings.HasSuffix(lower, ".partial") || strings.HasSuffix(lower, cache.DownloadSuffix)
 }
 
 func logRequest(handler http.Handler) http.Handler {
