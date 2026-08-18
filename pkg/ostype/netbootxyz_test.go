@@ -2,6 +2,7 @@ package ostype
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,8 +42,44 @@ endpoints:
     version: '7.10'
 `
 
-func serveFixture(t *testing.T, body string, hits *int32) {
+// liveAssetRisk reports why serveFixture must not be used to drive these
+// registrations, or "" when they are safe. Split out from serveFixture so the
+// guard is testable: serveFixture reports it with t.Fatal, which would fail the
+// very test asserting the guard fires.
+func liveAssetRisk(driven []netbootxyzOS) string {
+	for _, o := range driven {
+		if o.checksums != "" {
+			return fmt.Sprintf(
+				"use serveToolFixture, not serveFixture: %s declares checksums %q, and serveFixture points the asset base at the real github.com, so Artifacts would issue a LIVE network request",
+				o.name, o.checksums)
+		}
+	}
+	return ""
+}
+
+// fixtureFatal is the guard's reporting seam. It exists so
+// TestServeFixtureGuardIsWired can prove serveFixture actually CONSULTS
+// liveAssetRisk: t.Fatal cannot be observed from the test asserting it, and a
+// predicate-only test would pass even with the guard never called — the
+// inert-mechanism failure mode. Nothing else may reassign it.
+var fixtureFatal = func(t *testing.T, msg string) { t.Fatal(msg) }
+
+// serveFixture stands up the endpoints manifest and points the asset base at
+// the REAL github.com, which is what lets TestNetbootxyzOSArtifactURLs pin the
+// production URL shape.
+//
+// driven is the registrations the test will call Artifacts on — nil for tests
+// that only fetch the manifest. It is a REQUIRED parameter, not variadic, on
+// purpose: a sidecar-declaring registration driven through here issues a live
+// network request, and a parameter that can be omitted is a convention rather
+// than a guard. Requiring it makes the next author confront the question at
+// compile time.
+func serveFixture(t *testing.T, body string, hits *int32, driven []netbootxyzOS) {
 	t.Helper()
+	if risk := liveAssetRisk(driven); risk != "" {
+		fixtureFatal(t, risk)
+		return
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if hits != nil {
 			atomic.AddInt32(hits, 1)
@@ -63,8 +100,65 @@ func serveFixture(t *testing.T, body string, hits *int32) {
 	t.Cleanup(ResetNetbootxyzCache)
 }
 
+// serveFixture points the asset base at the REAL github.com, so any test that
+// drives a sidecar-declaring registration through it issues a live network
+// request. Task 4 created that hazard by giving tails a sidecar; this pins the
+// guard that closes it. A live request would 404 fast rather than hang, so the
+// "watch for a non-0.00s test" convention would not reliably catch it —
+// convention is not a guard.
+//
+// The predicate is tested rather than serveFixture itself because the guard
+// calls t.Fatal, which would fail the very test asserting it fires.
+func TestServeFixtureRejectsASidecarDeclaringRegistration(t *testing.T) {
+	o, ok := Lookup("tails")
+	if !ok {
+		t.Fatal("tails not registered")
+	}
+	tails := o.(netbootxyzOS)
+
+	risk := liveAssetRisk([]netbootxyzOS{tails})
+	if risk == "" {
+		t.Fatal("a registration declaring checksums must be rejected by serveFixture")
+	}
+	for _, want := range []string{"serveToolFixture", "tails", "sha256-checksums.txt"} {
+		if !strings.Contains(risk, want) {
+			t.Errorf("the message must name %q so the failure explains itself, got: %s", want, risk)
+		}
+	}
+
+	// The other seven tools publish no sidecar and must stay usable, or this
+	// guard would break twelve existing call sites instead of protecting them.
+	if got := liveAssetRisk([]netbootxyzOS{testSysrescue, testMemtest86Plus}); got != "" {
+		t.Errorf("registrations with no sidecar must be allowed, got: %s", got)
+	}
+	if got := liveAssetRisk(nil); got != "" {
+		t.Errorf("a test driving no registration must be allowed, got: %s", got)
+	}
+}
+
+// TestServeFixtureRejectsASidecarDeclaringRegistration proves the PREDICATE is
+// right; it would still pass if serveFixture never called it. This proves the
+// WIRING, so the guard cannot be left inert.
+func TestServeFixtureGuardIsWired(t *testing.T) {
+	o, _ := Lookup("tails")
+
+	var got string
+	orig := fixtureFatal
+	fixtureFatal = func(_ *testing.T, msg string) { got = msg }
+	t.Cleanup(func() { fixtureFatal = orig })
+
+	serveFixture(t, fixtureDoc, nil, []netbootxyzOS{o.(netbootxyzOS)})
+
+	if got == "" {
+		t.Fatal("serveFixture did not consult liveAssetRisk; the guard is inert")
+	}
+	if !strings.Contains(got, "serveToolFixture") {
+		t.Errorf("guard message = %q, must point at the right helper", got)
+	}
+}
+
 func TestFetchNetbootxyzDocPreservesVersionText(t *testing.T) {
-	serveFixture(t, fixtureDoc, nil)
+	serveFixture(t, fixtureDoc, nil, nil)
 	doc, err := fetchNetbootxyzDoc(context.Background())
 	if err != nil {
 		t.Fatalf("fetchNetbootxyzDoc: %v", err)
@@ -78,7 +172,7 @@ func TestFetchNetbootxyzDocPreservesVersionText(t *testing.T) {
 }
 
 func TestFetchNetbootxyzDocToleratesUnknownKeys(t *testing.T) {
-	serveFixture(t, fixtureDoc+"\n  extra-thing:\n    path: /x/\n    files: []\n    surprise: yes\n", nil)
+	serveFixture(t, fixtureDoc+"\n  extra-thing:\n    path: /x/\n    files: []\n    surprise: yes\n", nil, nil)
 	if _, err := fetchNetbootxyzDoc(context.Background()); err != nil {
 		t.Fatalf("unknown keys must be tolerated, got %v", err)
 	}
@@ -86,7 +180,7 @@ func TestFetchNetbootxyzDocToleratesUnknownKeys(t *testing.T) {
 
 func TestFetchNetbootxyzDocMemoizes(t *testing.T) {
 	var hits int32
-	serveFixture(t, fixtureDoc, &hits)
+	serveFixture(t, fixtureDoc, &hits, nil)
 	for range 3 {
 		if _, err := fetchNetbootxyzDoc(context.Background()); err != nil {
 			t.Fatalf("fetch: %v", err)
@@ -128,7 +222,7 @@ var testSysrescue = netbootxyzOS{
 }
 
 func TestNetbootxyzOSDiscoverReturnsReleaseTag(t *testing.T) {
-	serveFixture(t, fixtureDoc, nil)
+	serveFixture(t, fixtureDoc, nil, []netbootxyzOS{testSysrescue})
 	got, err := testSysrescue.DiscoverVersions(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("DiscoverVersions: %v", err)
@@ -139,7 +233,7 @@ func TestNetbootxyzOSDiscoverReturnsReleaseTag(t *testing.T) {
 }
 
 func TestNetbootxyzOSArtifactURLs(t *testing.T) {
-	serveFixture(t, fixtureDoc, nil)
+	serveFixture(t, fixtureDoc, nil, []netbootxyzOS{testSysrescue})
 	arts, err := testSysrescue.Artifacts(context.Background(), "13.01-d20a63ac", "amd64", nil)
 	if err != nil {
 		t.Fatalf("Artifacts: %v", err)
@@ -163,14 +257,14 @@ func TestNetbootxyzOSArtifactURLs(t *testing.T) {
 }
 
 func TestNetbootxyzOSArtifactsRefusesStaleVersion(t *testing.T) {
-	serveFixture(t, fixtureDoc, nil)
+	serveFixture(t, fixtureDoc, nil, []netbootxyzOS{testSysrescue})
 	if _, err := testSysrescue.Artifacts(context.Background(), "12.00-deadbeef", "amd64", nil); err == nil {
 		t.Fatal("Artifacts accepted a stale version, want error")
 	}
 }
 
 func TestNetbootxyzOSUnknownArch(t *testing.T) {
-	serveFixture(t, fixtureDoc, nil)
+	serveFixture(t, fixtureDoc, nil, []netbootxyzOS{testSysrescue})
 	if _, err := testSysrescue.Artifacts(context.Background(), "13.01-d20a63ac", "arm64", nil); err == nil {
 		t.Fatal("Artifacts accepted an unregistered arch, want error")
 	}
@@ -183,7 +277,7 @@ endpoints:
     path: /asset-mirror/releases/download/..%2f..%2fetc/
     files: [vmlinuz]
     version: evil
-`, nil)
+`, nil, []netbootxyzOS{testSysrescue})
 	if _, err := testSysrescue.DiscoverVersions(context.Background(), nil); err == nil {
 		t.Fatal("DiscoverVersions accepted an unsafe release tag, want error")
 	}
@@ -256,7 +350,7 @@ var testMemtest86Plus = netbootxyzOS{
 // live lab defect: a manifest entry listing files upstream does not actually
 // publish must not make Artifacts return downloadables for them.
 func TestNetbootxyzOSArtifactsAppliesFileAllowlist(t *testing.T) {
-	serveFixture(t, fixtureMemtestWithBogusFiles, nil)
+	serveFixture(t, fixtureMemtestWithBogusFiles, nil, []netbootxyzOS{testMemtest86Plus})
 	arts, err := testMemtest86Plus.Artifacts(context.Background(), "8.00-32a14678", "amd64", nil)
 	if err != nil {
 		t.Fatalf("Artifacts: %v", err)
@@ -279,7 +373,7 @@ endpoints:
     - mt86p_i586
     os: memtest86-plus
     version: '8.00'
-`, nil)
+`, nil, []netbootxyzOS{testMemtest86Plus})
 	_, err := testMemtest86Plus.Artifacts(context.Background(), "8.00-32a14678", "amd64", nil)
 	if err == nil {
 		t.Fatal("Artifacts silently accepted a manifest missing the allowlisted file, want error")
@@ -546,9 +640,17 @@ func TestTailsArtifactsRejectMalformedDigest(t *testing.T) {
 	}
 }
 
-// The rename branch, pinned so nobody re-attributes it to D2a: an upstream
-// rename is caught by the MANIFEST-MEMBERSHIP check, which runs before the
-// checksumCovers branch, so the allowlist error is what surfaces.
+// The rename branch WHERE THE MANIFEST HAS TRACKED THE RENAME, pinned so nobody
+// re-attributes it to D2a. Say which branch: this is only the tracked one —
+// e.Files below lists the NEW name while booty's own registration allowlist
+// still names the old one, so the MANIFEST-MEMBERSHIP check runs first and the
+// allowlist error is what surfaces; checksumCovers is never reached.
+//
+// The OTHER rename branch, where the manifest LAGS (path advanced to the new
+// release, files still naming the old ISO), passes membership and is caught by
+// checksumCovers instead — pinned by
+// TestTailsArtifactsFailLoudWhenSidecarOmitsACoveredFile above, whose fixture
+// has exactly that shape. Neither branch can silently land unverified bytes.
 func TestUpstreamRenameSurfacesTheAllowlistError(t *testing.T) {
 	renamed := `
 endpoints:
@@ -580,12 +682,12 @@ endpoints:
 }
 
 func TestNetbootxyzOSRequiresAllowlist(t *testing.T) {
-	serveFixture(t, fixtureDoc, nil)
 	noFiles := netbootxyzOS{
 		name:      "systemrescue",
 		endpoints: map[string]string{"amd64": "systemrescue-amd64"},
 		// files deliberately unset
 	}
+	serveFixture(t, fixtureDoc, nil, []netbootxyzOS{noFiles})
 	if _, err := noFiles.Artifacts(context.Background(), "13.01-d20a63ac", "amd64", nil); err == nil {
 		t.Fatal("Artifacts accepted an empty allowlist; every tool must declare files (D14)")
 	}

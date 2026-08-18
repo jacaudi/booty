@@ -283,11 +283,12 @@ var sha256HexRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // Artifacts returns one downloadable per file in t.files (see its doc
 // comment); every tool MUST declare its files (D14), there is no "empty means
-// every file in the entry" mode. // Verification material: only a tool declaring `checksums` gets a digest, and
-// only for files that release's sidecar actually lists. Today that is Tails'
-// ISO alone; the other seven tools publish nothing and land not-verifiable
-// under every signature policy (accepted risk). SigURL is never set —
-// GPG verification of a detached signature over a multi-GB ISO is out of scope.
+// every file in the entry" mode. Verification material: only a tool declaring
+// `checksums` gets a digest, and only for files that release's sidecar
+// actually lists. Today that is Tails' ISO alone; the other seven tools publish
+// nothing and land not-verifiable under every signature policy (accepted risk).
+// SigURL is never set — GPG verification of a detached signature over a
+// multi-GB ISO is out of scope.
 //
 // It REFUSES a version that is not the entry's current tag: the manifest holds
 // one path per endpoint, so honouring a stale version is impossible, and
