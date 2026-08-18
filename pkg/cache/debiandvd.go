@@ -11,9 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/diskfs/go-diskfs"
+	"github.com/jeefy/booty/pkg/checksum"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/ostype"
 )
@@ -34,9 +34,18 @@ func verifyDVDChecksums(ctx context.Context, dir string, isoNames []string) erro
 	if err := verifyDetachedGPGLocal(sumsPath, sumsPath+".sign", debianCDKeyring); err != nil {
 		return fmt.Errorf("cache: GPG-verify SHA256SUMS: %w", err)
 	}
-	sums, err := parseSHA256SUMS(sumsPath)
+	// The sums file format is single-sourced in pkg/checksum (D-parser): the
+	// netboot.xyz sidecar and Debian's cdimage SHA256SUMS are the same format,
+	// so they share one parser. os.ReadFile here rather than inside the parser
+	// keeps pkg/checksum a pure, stdlib-only function over bytes that
+	// pkg/ostype can call on an HTTP body.
+	body, err := os.ReadFile(sumsPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("cache: read %s: %w", sumsPath, err)
+	}
+	sums, err := checksum.ParseSums(body)
+	if err != nil {
+		return fmt.Errorf("cache: %s: %w", sumsPath, err)
 	}
 	for _, name := range isoNames {
 		want, ok := sums[name]
@@ -474,26 +483,4 @@ func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version 
 		}
 	}
 	return nil
-}
-
-// parseSHA256SUMS parses a `sha256sum`-format file (binary mode: "hexdigest
-// <space><space>filename") into a map[filename]hexdigest.
-func parseSHA256SUMS(path string) (map[string]string, error) {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("cache: read %s: %w", path, err)
-	}
-	sums := make(map[string]string)
-	for line := range strings.Lines(string(body)) {
-		line = strings.TrimRight(line, "\n")
-		if line == "" {
-			continue
-		}
-		digest, name, ok := strings.Cut(line, "  ")
-		if !ok {
-			return nil, fmt.Errorf("cache: %s: malformed line %q", path, line)
-		}
-		sums[name] = digest
-	}
-	return sums, nil
 }
