@@ -311,7 +311,10 @@ func TestTailsISOIsMarkedLarge(t *testing.T) {
 // green while Tails silently reverts to the 5-minute ceiling — the exact failure
 // D13 exists to prevent.
 func TestTailsArtifactsCarryLarge(t *testing.T) {
-	serveFixture(t, fixtureDoc, nil)
+	// serveFixture points the asset base at the real github.com; now that tails
+	// declares a sidecar, Artifacts would issue a LIVE network request. Use the
+	// local asset host instead.
+	serveTailsSidecar(t, tailsDigest+"  tails-amd64.iso\n")
 	o, _ := Lookup("tails")
 	arts, err := o.Artifacts(context.Background(), "7.10-17629562", "amd64", nil)
 	if err != nil {
@@ -326,6 +329,212 @@ func TestTailsArtifactsCarryLarge(t *testing.T) {
 	}
 	if got["vmlinuz"] {
 		t.Error("vmlinuz must carry Large=false")
+	}
+}
+
+// tailsSidecarBody is the exact shape netbootxyz/asset-mirror publishes: ONE
+// LF-terminated line, <64 hex> + TWO SPACES + filename. No "./", no binary-mode
+// "*", no trailing blank. Verified against five real releases.
+const tailsDigest = "6dab23b2000000000000000000000000000000000000000000000000000d1743"
+
+// serveToolFixture stands up BOTH servers a sidecar test needs: the endpoints
+// manifest and a local ASSET host. serveFixture points the asset base at the
+// real github.com, which makes any test that fetches a sidecar issue a live
+// network request — so sidecar tests must use this helper instead.
+//
+// assetBody is called for every asset request and returns (body, status).
+// Returns the counter of requests whose path ends in "/sha256-checksums.txt".
+func serveToolFixture(t *testing.T, doc string, assetBody func(path string) (string, int)) *atomic.Int32 {
+	t.Helper()
+	sidecarHits := new(atomic.Int32)
+
+	manifest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(doc))
+	}))
+	t.Cleanup(manifest.Close)
+
+	assets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sha256-checksums.txt") {
+			sidecarHits.Add(1)
+		}
+		body, status := assetBody(r.URL.Path)
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(assets.Close)
+
+	viper.Set(config.NetbootxyzEndpointsURL, manifest.URL)
+	viper.Set(config.NetbootxyzAssetBase, assets.URL)
+	t.Cleanup(func() {
+		viper.Set(config.NetbootxyzEndpointsURL, "")
+		viper.Set(config.NetbootxyzAssetBase, "")
+	})
+	ResetNetbootxyzCache()
+	t.Cleanup(ResetNetbootxyzCache)
+	return sidecarHits
+}
+
+// serveTailsSidecar is the common case: a valid sidecar covering the ISO.
+func serveTailsSidecar(t *testing.T, sidecar string) *atomic.Int32 {
+	t.Helper()
+	return serveToolFixture(t, fixtureDoc, func(path string) (string, int) {
+		if strings.HasSuffix(path, "/sha256-checksums.txt") {
+			if sidecar == "" {
+				return "not found", http.StatusNotFound
+			}
+			return sidecar, http.StatusOK
+		}
+		return "BINARY", http.StatusOK
+	})
+}
+
+// D1 — the digest is resolved into the existing Artifact.SHA256 field, and ONLY
+// for the file the sidecar actually lists. The Tails sidecar legitimately lists
+// only the ISO, so vmlinuz/initrd.img/9990-misc-helpers.sh stay not-verifiable.
+func TestTailsArtifactsPopulateISOSHA256Only(t *testing.T) {
+	serveTailsSidecar(t, tailsDigest+"  tails-amd64.iso\n")
+
+	o, ok := Lookup("tails")
+	if !ok {
+		t.Fatal("tails not registered")
+	}
+	arts, err := o.Artifacts(context.Background(), "7.10-17629562", "amd64", nil)
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	got := map[string]string{}
+	for _, a := range arts {
+		got[a.Filename] = a.SHA256
+		if a.SigURL != "" {
+			t.Errorf("%s: GPG verification is out of scope for #76; SigURL must stay empty", a.Filename)
+		}
+	}
+	if got["tails-amd64.iso"] != tailsDigest {
+		t.Errorf("ISO SHA256 = %q, want %q", got["tails-amd64.iso"], tailsDigest)
+	}
+	for _, f := range []string{"vmlinuz", "initrd.img", "9990-misc-helpers.sh"} {
+		if got[f] != "" {
+			t.Errorf("%s: SHA256 = %q, want \"\" (the sidecar lists only the ISO)", f, got[f])
+		}
+	}
+}
+
+// D2 — an unfetchable sidecar fails LOUD. Falling back to not-verifiable is a
+// silent security downgrade. reconcile.go turns this error into "log a warning
+// and skip this version this tick" without touching the row, so fail-loud costs
+// the availability of UPDATES, never of the existing cache.
+func TestTailsArtifactsFailLoudOnSidecar404(t *testing.T) {
+	serveTailsSidecar(t, "") // 404
+
+	o, _ := Lookup("tails")
+	_, err := o.Artifacts(context.Background(), "7.10-17629562", "amd64", nil)
+	if err == nil {
+		t.Fatal("an unfetchable sidecar must be an error, not a silent downgrade to not-verifiable")
+	}
+	// Assert the MECHANISM, not merely non-nil. With sidecar support disabled
+	// entirely, `sums` is nil, the ISO looks uncovered, and D2a returns an error
+	// too — so an err != nil check alone passes in a world where D2's fail-loud
+	// fetch path does not exist at all.
+	if !strings.Contains(err.Error(), "fetch sha256-checksums.txt") {
+		t.Errorf("the error must name the failed FETCH, got: %v", err)
+	}
+}
+
+// D2 — a malformed sidecar fails loud for the same reason.
+func TestTailsArtifactsFailLoudOnMalformedSidecar(t *testing.T) {
+	serveTailsSidecar(t, "this is not a sums line\n")
+
+	o, _ := Lookup("tails")
+	_, err := o.Artifacts(context.Background(), "7.10-17629562", "amd64", nil)
+	if err == nil {
+		t.Fatal("a malformed sidecar must be an error")
+	}
+	// Same reason as the 404 test: D2a would also error here if parsing were
+	// skipped, so only the message separates the two mechanisms.
+	if !strings.Contains(err.Error(), "parse sha256-checksums.txt") {
+		t.Errorf("the error must name the failed PARSE, got: %v", err)
+	}
+}
+
+// D2a — the SIDECAR-ONLY DESYNC. Manifest and release asset still say
+// tails-amd64.iso, but the sidecar drops or re-keys that line. Nothing else in
+// the pipeline notices — the manifest-membership check passes, the URL composes,
+// the download succeeds — so the 1.94 GB ISO would silently land
+// classNotVerifiable, the exact failure D2 exists to forbid.
+//
+// Note the fixture shape: e.Files still lists tails-amd64.iso while the sidecar
+// keys a different name. That is ALSO what a rename the manifest has not yet
+// tracked looks like from here, which is why this branch catches both.
+// TestUpstreamRenameSurfacesTheAllowlistError below pins the other rename
+// branch, where the manifest HAS tracked it and the membership check fires
+// first.
+func TestTailsArtifactsFailLoudWhenSidecarOmitsACoveredFile(t *testing.T) {
+	serveTailsSidecar(t, tailsDigest+"  tails-amd64-6.6.iso\n") // re-keyed, ISO line absent
+
+	o, _ := Lookup("tails")
+	_, err := o.Artifacts(context.Background(), "7.10-17629562", "amd64", nil)
+	if err == nil {
+		t.Fatal("a declared checksum-covered file absent from the sidecar must be an error")
+	}
+	if !strings.Contains(err.Error(), "tails-amd64.iso") {
+		t.Errorf("the error must name the uncovered file, got: %v", err)
+	}
+}
+
+// A tool that declares no sidecar must issue NO sidecar request and behave
+// exactly as it does today — seven of the eight tools are in that state and
+// netboot.xyz publishes nothing for them.
+func TestToolWithoutChecksumsIssuesNoSidecarRequest(t *testing.T) {
+	hits := serveToolFixture(t, fixtureDoc, func(string) (string, int) { return "BINARY", http.StatusOK })
+
+	o, ok := Lookup("systemrescue")
+	if !ok {
+		t.Fatal("systemrescue not registered")
+	}
+	arts, err := o.Artifacts(context.Background(), "13.01-d20a63ac", "amd64", nil)
+	if err != nil {
+		t.Fatalf("Artifacts: %v", err)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("a tool with no checksums declared issued %d sidecar requests, want 0", n)
+	}
+	for _, a := range arts {
+		if a.SHA256 != "" {
+			t.Errorf("%s: SHA256 = %q, want \"\"", a.Filename, a.SHA256)
+		}
+	}
+}
+
+// The rename branch, pinned so nobody re-attributes it to D2a: an upstream
+// rename is caught by the MANIFEST-MEMBERSHIP check, which runs before the
+// checksumCovers branch, so the allowlist error is what surfaces.
+func TestUpstreamRenameSurfacesTheAllowlistError(t *testing.T) {
+	renamed := `
+endpoints:
+  tails:
+    path: /asset-mirror/releases/download/7.10-17629562/
+    files:
+    - vmlinuz
+    - initrd.img
+    - 9990-misc-helpers.sh
+    - tails-amd64-7.10.iso
+    os: tails
+    version: '7.10'
+`
+	serveToolFixture(t, renamed, func(path string) (string, int) {
+		if strings.HasSuffix(path, "/sha256-checksums.txt") {
+			return tailsDigest + "  tails-amd64-7.10.iso\n", http.StatusOK
+		}
+		return "BINARY", http.StatusOK
+	})
+
+	o, _ := Lookup("tails")
+	_, err := o.Artifacts(context.Background(), "7.10-17629562", "amd64", nil)
+	if err == nil {
+		t.Fatal("an upstream rename must fail loudly")
+	}
+	if !strings.Contains(err.Error(), "not in the manifest entry") {
+		t.Errorf("a rename must surface the MANIFEST-MEMBERSHIP error, not D2a's; got: %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jeefy/booty/pkg/checksum"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/spf13/viper"
 	"go.yaml.in/yaml/v4"
@@ -147,6 +148,52 @@ type netbootxyzOS struct {
 	// because the size is not known until the request is already in flight, and
 	// the ceiling is on the whole request. Only Tails needs it today.
 	large map[string]bool
+
+	// checksums names the release asset publishing upstream digests for this
+	// tool's files, or "" when upstream publishes none — which is seven of the
+	// eight tools (verified across both source repos: netbootxyz/asset-mirror
+	// publishes sha256-checksums.txt on 76 of 76 Tails releases and on nothing
+	// else; netbootxyz/debian-squash, which serves clonezilla and rescatux,
+	// publishes no checksums at all).
+	//
+	// It is deliberately NOT in files: it is verification material — fetched,
+	// parsed and discarded, never cached and never served. It is also exempt
+	// from the manifest-membership check in Artifacts, because endpoints.yml
+	// does not list it. That omission is the entire premise of #76, and this is
+	// the one place the design derives an artifact URL from a filename booty
+	// hardcodes rather than one upstream declares. The composed URL is still
+	// host-pinned to assetBase and the fetched bytes are only ever compared
+	// against — never executed, cached, or served.
+	checksums string
+
+	// checksumCovers names the files the sidecar MUST list. A declared-covered
+	// file absent from the sidecar is an error; any OTHER file's absence is not,
+	// because the Tails sidecar legitimately lists only the ISO.
+	//
+	// What this uniquely guards is a SIDECAR-ONLY DESYNC: the manifest and the
+	// release asset still say tails-amd64.iso while the sidecar drops or
+	// re-keys that line. Nothing else in the pipeline notices — every other
+	// check passes — so the 1.94 GB ISO would silently land not-verifiable,
+	// which is the exact silent downgrade fail-loud exists to forbid.
+	//
+	// On an upstream RENAME, which check fires depends on the manifest:
+	//   - manifest tracked the rename -> the manifest-membership check below
+	//     errors first ("allowlisted file %q is not in the manifest entry"),
+	//     and this field is never reached;
+	//   - manifest LAGS the rename -> membership passes, but that release's
+	//     sidecar keys the NEW name, so the old name is uncovered and THIS
+	//     field errors — before any download, rather than the 404 a naive
+	//     reading predicts.
+	// Both fail loud. Do not simplify this comment to "only a desync" or to
+	// "rename protection" — say which branch.
+	//
+	// Not derivable from large, even though the two hold identical content
+	// today: large means "too big for the staged downloader's 5-minute
+	// ceiling", checksumCovers means "upstream promises a digest for this".
+	// Different change-drivers — a tool could publish a sidecar covering only
+	// small files, or mark a file large that upstream never checksums.
+	// Entries must be a subset of files (asserted by a registry test).
+	checksumCovers []string
 }
 
 func (t netbootxyzOS) Name() string             { return t.name }
@@ -216,9 +263,11 @@ func (t netbootxyzOS) DiscoverVersions(ctx context.Context, _ map[string]string)
 
 // Artifacts returns one downloadable per file in t.files (see its doc
 // comment); every tool MUST declare its files (D14), there is no "empty means
-// every file in the entry" mode. No SHA256/SigURL: netboot.xyz publishes
-// neither, so artifacts land not-verifiable under every signature policy
-// (design §8.5, accepted risk).
+// every file in the entry" mode. // Verification material: only a tool declaring `checksums` gets a digest, and
+// only for files that release's sidecar actually lists. Today that is Tails'
+// ISO alone; the other seven tools publish nothing and land not-verifiable
+// under every signature policy (accepted risk). SigURL is never set —
+// GPG verification of a detached signature over a multi-GB ISO is out of scope.
 //
 // It REFUSES a version that is not the entry's current tag: the manifest holds
 // one path per endpoint, so honouring a stale version is impossible, and
@@ -245,6 +294,35 @@ func (t netbootxyzOS) Artifacts(ctx context.Context, version, arch string, _ map
 	names := t.files
 
 	base := viper.GetString(config.NetbootxyzAssetBase)
+
+	// D2: fetch the sidecar ONCE, before the file loop, so a multi-file tool
+	// pays one ~90-byte GET. Unfetchable or malformed is a LOUD failure, never a
+	// silent downgrade to not-verifiable: reconcile.go turns an Artifacts error
+	// into "log a warning and skip this version this tick" without touching the
+	// row, so fail-loud costs the availability of UPDATES, never of the existing
+	// cache.
+	//
+	// Not memoized: tails is amd64-only at retain 1 and targets are
+	// UNIQUE(os, arch, params), so this is roughly one GET per reconcile pass.
+	// A second memo would buy that back at the cost of a reset-coupling to
+	// ResetNetbootxyzCache and an unspecified failure-memoization policy.
+	var sums map[string]string
+	if t.checksums != "" {
+		su, err := artifactURL(base, e.Path, t.checksums)
+		if err != nil {
+			return nil, fmt.Errorf("ostype: %s: %w", t.name, err)
+		}
+		body, ferr := fetchMetadata(ctx, su)
+		if ferr != nil {
+			return nil, fmt.Errorf("ostype: %s: fetch %s: %w", t.name, t.checksums, ferr)
+		}
+		parsed, perr := checksum.ParseSums(body)
+		if perr != nil {
+			return nil, fmt.Errorf("ostype: %s: parse %s: %w", t.name, t.checksums, perr)
+		}
+		sums = parsed
+	}
+
 	out := make([]Artifact, 0, len(names))
 	for _, f := range names {
 		if !slices.Contains(e.Files, f) {
@@ -254,7 +332,19 @@ func (t netbootxyzOS) Artifacts(ctx context.Context, version, arch string, _ map
 		if err != nil {
 			return nil, fmt.Errorf("ostype: %s: %w", t.name, err)
 		}
-		out = append(out, Artifact{Filename: f, URL: u, Large: t.large[f]})
+		a := Artifact{Filename: f, URL: u, Large: t.large[f]}
+		// Lookup is by FILENAME, never "it's the only line". The sidecar has one
+		// line today; keying on the name is what makes a rename fail loudly
+		// instead of attaching the wrong file's digest to the ISO.
+		if d, ok := sums[f]; ok {
+			a.SHA256 = d
+		} else if slices.Contains(t.checksumCovers, f) {
+			return nil, fmt.Errorf(
+				"ostype: %s: %q is declared checksum-covered but absent from %s", t.name, f, t.checksums)
+		}
+		// Any OTHER file absent from the sidecar stays not-verifiable: the Tails
+		// sidecar legitimately lists only the ISO.
+		out = append(out, a)
 	}
 	return out, nil
 }

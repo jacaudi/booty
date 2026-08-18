@@ -94,6 +94,17 @@ func init() {
 		endpoints: map[string]string{"amd64": "tails"},
 		files:     []string{"vmlinuz", "initrd.img", "9990-misc-helpers.sh", "tails-amd64.iso"},
 		large:     map[string]bool{"tails-amd64.iso": true},
+		// Every Tails release in netbootxyz/asset-mirror (76 of 76, checked
+		// 2026-08-02 and independently re-verified over 1295 releases) publishes
+		// this sidecar; no other release in that repo does. endpoints.yml never
+		// lists it, which is why booty hardcodes the name — that omission is the
+		// entire premise of #76.
+		checksums: "sha256-checksums.txt",
+		// D2a: the ISO is the file the sidecar MUST cover. Its sole UNIQUE
+		// coverage is a sidecar-only desync; see the field's doc comment for how
+		// the two upstream-rename branches divide between this and the
+		// manifest-membership check.
+		checksumCovers: []string{"tails-amd64.iso"},
 	})
 }
 
