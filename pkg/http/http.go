@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -66,19 +67,58 @@ func StartHTTP(deps APIDeps) *http.Server {
 	return s
 }
 
-// dataFileHandler serves files under dataDir, blocking any request whose
+// dataFileHandler serves files under dataDir, restricted to the boot-artifact
+// cache subtree (see isAllowedDataPath) and blocking any request whose
 // (decoded) path targets an in-flight staged download (see isPartialPath).
 // Extracted from StartHTTP's /data/ registration so it is independently
 // testable via httptest without standing up the full mux/server.
+//
+// Serving continues to go through http.FileServer so conditional and ranged
+// GETs keep working — iPXE and the multi-GB ISO paths depend on Range.
 func dataFileHandler(dataDir string) http.Handler {
 	dataFS := http.FileServer(http.Dir(dataDir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isPartialPath(r.URL.Path) {
+		if !isAllowedDataPath(r.URL.Path) || isPartialPath(r.URL.Path) {
 			http.NotFound(w, r)
 			return
 		}
 		dataFS.ServeHTTP(w, r)
 	})
+}
+
+// dataCacheSubtree is the single subtree of dataDir that /data/ may serve. It
+// is the last path segment of cache.CacheURLPath's "/data/cache/" prefix, and
+// it must stay in step with pkg/cache's cacheRoot (<dataDir>/cache); pkg/http
+// cannot import pkg/cache for it without an import cycle.
+const dataCacheSubtree = "cache"
+
+// isAllowedDataPath reports whether a /data/-relative request path lies inside
+// the boot-artifact cache subtree. Everything else under dataDir 404s.
+//
+// This is an ALLOWLIST rather than a denylist because dataDir is not an
+// artifact-only directory: config.DatabasePathValue puts booty.db (plus its
+// -wal and -shm siblings) there by default, and deploy/docker-compose.yml
+// mounts one volume for the lot. A denylist served the SQLite database — and
+// with it config_revisions.source_b64, the plaintext per-host boot configs —
+// to any unauthenticated caller, and would have to be extended for every new
+// file anything ever writes to dataDir. The cache tree, by contrast, is the
+// only subtree served content references: every /data/ URL booty emits is
+// built by cache.CacheURLPath, which hardcodes "/data/cache/".
+//
+// Blocking the dataDir root also suppresses FileServer's directory listing of
+// it, which by itself disclosed the database filenames.
+//
+// Traversal is handled the same way pkg/tftp's safeJoin does it — clean first,
+// then require the cleaned result to be the root or under it — so "cache/.."
+// escapes are refused rather than normalized into a served path. The refusal
+// is a plain 404 so it is indistinguishable from a miss (FileServer's own
+// dot-dot rejection is a 400, which would leak the difference).
+func isAllowedDataPath(p string) bool {
+	// StripPrefix leaves the path without a leading slash; path.Clean needs one
+	// to resolve leading "..", and always returns a rooted, slash-separated path.
+	cleaned := path.Clean("/" + strings.TrimPrefix(p, "/"))
+	root := "/" + dataCacheSubtree
+	return cleaned == root || strings.HasPrefix(cleaned, root+"/")
 }
 
 // isPartialPath reports whether a request path targets an in-flight download.
