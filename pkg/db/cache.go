@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrNotFound is returned when a requested row does not exist.
@@ -99,6 +100,59 @@ func (s *Store) UpsertCacheEntryArchived(targetVersionID int64, verifyErr string
 		return fmt.Errorf("db: upsert archived cache_entry tv=%d: %w", targetVersionID, err)
 	}
 	return nil
+}
+
+// VerifyRejectedWithin reports whether (targetID, version) currently carries a
+// VERIFICATION-REJECTION row newer than `within`, and returns that row's
+// verify_err. blocked=false covers both "no row" and "row does not match",
+// which is the whole answer the caller needs — there is no third state.
+//
+// The predicate is ALL FOUR columns (size=0, in_window=0, verified=0,
+// verify_err<>''), which is the only combination UpsertCacheEntryArchived
+// produces. Every other writer was checked: UpsertCacheEntry unconditionally
+// sets in_window=1, SetCacheInWindow is only ever called with false and touches
+// nothing else, and SetCachePinned* touch only pinned. The looser two-column
+// predicate (cached=0 plus a failure verdict) misfires on a reachable sequence:
+// a warn-landed failure that later loses a file on disk drops cached to 0 via
+// versions.go's `cached = excluded.cached` while keeping a STALE verified=0 and
+// verify_err, and a subsequent transport error writes nothing — forging that
+// signature after exactly the kind of failure this guard must never suppress.
+//
+// One residual, reported rather than hidden: SetCacheVerified can stamp
+// verified=0/verify_err onto a row already sitting at size=0/in_window=0, so
+// "only writer" is strictly too strong. Neither it nor SetCacheInWindow touches
+// fetched_at, so the recency clause bounds the exposure to one guarded window on
+// a version whose bytes are already gone.
+//
+// THE COMPARISON HAPPENS IN SQL, NEVER IN GO. cache_entries.fetched_at is a UTC
+// datetime() TEXT string that nothing in this repo parses, and the driver has no
+// time-parsing DSN option; parsing it with time.ParseInLocation(..., time.Local)
+// yields a FUTURE timestamp and wedges the version for hours.
+//
+// The modifier MUST be spelled "-N seconds". SQLite rejects a Go Duration string:
+// datetime('now','-1h0m0s') returns NULL, `fetched_at > NULL` is NULL, the WHERE
+// never matches, and this function silently becomes a no-op with no error, no
+// log, and no failing test except the in-window one. A zero window yields
+// "-0 seconds" — valid, and never matches, so the guard is disabled. A NEGATIVE
+// window yields "--3600 seconds", which SQLite rejects to NULL and therefore
+// also never blocks; both degenerate cases fail safe, by different routes.
+func (s *Store) VerifyRejectedWithin(targetID int64, version string, within time.Duration) (bool, string, error) {
+	modifier := fmt.Sprintf("-%d seconds", int64(within/time.Second))
+	var verifyErr string
+	err := s.db.QueryRow(`
+		SELECT ce.verify_err FROM cache_entries ce
+		  JOIN target_versions tv ON tv.id = ce.target_version_id
+		 WHERE tv.target_id = ? AND tv.version = ?
+		   AND ce.size = 0 AND ce.in_window = 0 AND ce.verified = 0 AND ce.verify_err <> ''
+		   AND ce.fetched_at > datetime('now', ?)`,
+		targetID, version, modifier).Scan(&verifyErr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("db: verify-rejected guard %d/%s: %w", targetID, version, err)
+	}
+	return true, verifyErr, nil
 }
 
 // SetCacheInWindow flips a cache_entries row's in_window (archived when false).
