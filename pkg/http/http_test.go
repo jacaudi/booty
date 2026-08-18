@@ -54,6 +54,15 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A real file, so the prefix-boundary case below 404s because the guard
+	// rejects it and not merely because nothing is there to serve.
+	sibling := filepath.Join(dataDir, "cache.bak")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sibling, "booty.db"), dbBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// Mirrors the production layout cache.CacheURLPath addresses:
 	// <dataDir>/cache/<os>/<schematic>/<arch>/<version>/<artifact>.
 	artifactDir := filepath.Join(dataDir, "cache", "talos", "-", "amd64", "v1.9.0")
@@ -78,7 +87,15 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 		{"operator catalog", "/data/catalog.yaml"},
 		{"dataDir root listing", "/data/"},
 		{"traversal out of the cache tree", "/data/cache/../booty.db"},
-		{"traversal above dataDir", "/data/../../etc/passwd"},
+		// No "/data/../../etc/passwd" case here: http.Dir already contains that
+		// one, so it 404s identically with the guard removed and would be
+		// coverage theatre. This case has teeth because the target it escapes
+		// to (booty.db) IS inside dataDir and IS served without the guard.
+		//
+		// "cache" must match as a whole path segment, not as a string prefix,
+		// or a sibling directory whose name merely starts with it (an operator's
+		// "cache.bak", a future "cache-staging") would be served wholesale.
+		{"sibling directory sharing the prefix", "/data/cache.bak/booty.db"},
 	}
 	for _, tc := range blocked {
 		t.Run(tc.name, func(t *testing.T) {
