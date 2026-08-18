@@ -505,6 +505,47 @@ func TestToolWithoutChecksumsIssuesNoSidecarRequest(t *testing.T) {
 	}
 }
 
+// A digest that is not exactly 64 lowercase hex characters must fail LOUD at
+// discovery time rather than be resolved into Artifact.SHA256.
+//
+// This is about the CONSEQUENCE of a malformed declared digest, not cosmetics.
+// landArtifact compares byte-exactly against lowercase hex.EncodeToString
+// output, and a Large artifact's mismatch is classCorruption — rejected under
+// warn AND strict (D4a). So one uppercase character upstream would delete the
+// completed 1.94 GB file, RemoveAll the version directory, and re-download from
+// zero on the next reconcile tick, forever.
+//
+// It does NOT loosen the comparison: strings.EqualFold was rejected because it
+// would also change FCOS and Flatcar. Comparison stays case-SENSITIVE; this
+// rejects malformed INPUT at the point it enters the pipeline. It lives in
+// pkg/ostype rather than pkg/checksum.ParseSums because that parser is shared
+// with the Debian DVD path, whose behaviour is out of scope here.
+func TestTailsArtifactsRejectMalformedDigest(t *testing.T) {
+	for name, digest := range map[string]string{
+		"uppercase":  strings.ToUpper(tailsDigest),
+		"too short":  tailsDigest[:63],
+		"too long":   tailsDigest + "a",
+		"non hex":    "g" + tailsDigest[1:],
+		"whitespace": " " + tailsDigest[1:],
+	} {
+		t.Run(name, func(t *testing.T) {
+			serveTailsSidecar(t, digest+"  tails-amd64.iso\n")
+
+			o, _ := Lookup("tails")
+			arts, err := o.Artifacts(context.Background(), "7.10-17629562", "amd64", nil)
+			if err == nil {
+				t.Fatalf("a %s digest must be an error, got artifacts %+v", name, arts)
+			}
+			if !strings.Contains(err.Error(), "tails-amd64.iso") {
+				t.Errorf("the error must name the offending file, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), digest) {
+				t.Errorf("the error must quote the bad value %q, got: %v", digest, err)
+			}
+		})
+	}
+}
+
 // The rename branch, pinned so nobody re-attributes it to D2a: an upstream
 // rename is caught by the MANIFEST-MEMBERSHIP check, which runs before the
 // checksumCovers branch, so the allowlist error is what surfaces.

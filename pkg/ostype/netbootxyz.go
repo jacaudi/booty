@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -261,6 +262,25 @@ func (t netbootxyzOS) DiscoverVersions(ctx context.Context, _ map[string]string)
 	return tags, nil
 }
 
+// sha256HexRE pins the shape of a digest a sidecar declares.
+//
+// It exists because of what a malformed one COSTS downstream, not for
+// cosmetics: landArtifact compares the declared value byte-exactly against
+// lowercase hex.EncodeToString output, and a Large artifact's mismatch is
+// classCorruption, which is rejected under warn AND strict (D4a). So a single
+// uppercase character or stray space in an upstream sidecar would delete the
+// completed 1.94 GB file, RemoveAll the version directory, and re-download from
+// zero on the next reconcile tick — forever. Rejecting it here instead turns
+// that into a loud discovery-time error, which reconcile.go downgrades to "skip
+// this version this tick", costing only the availability of UPDATES.
+//
+// This narrows the INPUT; it deliberately does NOT loosen the COMPARISON. A
+// case-insensitive compare was rejected because it would also change FCOS and
+// Flatcar. It also lives here rather than in checksum.ParseSums, which the
+// Debian DVD path shares — validating inside the parser would change that
+// consumer's behaviour.
+var sha256HexRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 // Artifacts returns one downloadable per file in t.files (see its doc
 // comment); every tool MUST declare its files (D14), there is no "empty means
 // every file in the entry" mode. // Verification material: only a tool declaring `checksums` gets a digest, and
@@ -337,6 +357,10 @@ func (t netbootxyzOS) Artifacts(ctx context.Context, version, arch string, _ map
 		// line today; keying on the name is what makes a rename fail loudly
 		// instead of attaching the wrong file's digest to the ISO.
 		if d, ok := sums[f]; ok {
+			if !sha256HexRE.MatchString(d) {
+				return nil, fmt.Errorf(
+					"ostype: %s: %s declares digest %q for %q, which is not 64 lowercase hex characters", t.name, t.checksums, d, f)
+			}
 			a.SHA256 = d
 		} else if slices.Contains(t.checksumCovers, f) {
 			return nil, fmt.Errorf(
