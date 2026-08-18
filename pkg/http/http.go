@@ -86,12 +86,6 @@ func dataFileHandler(dataDir string) http.Handler {
 	})
 }
 
-// dataCacheSubtree is the single subtree of dataDir that /data/ may serve. It
-// is the last path segment of cache.CacheURLPath's "/data/cache/" prefix, and
-// it must stay in step with pkg/cache's cacheRoot (<dataDir>/cache); pkg/http
-// cannot import pkg/cache for it without an import cycle.
-const dataCacheSubtree = "cache"
-
 // isAllowedDataPath reports whether a /data/-relative request path lies inside
 // the boot-artifact cache subtree. Everything else under dataDir 404s.
 //
@@ -106,19 +100,27 @@ const dataCacheSubtree = "cache"
 // built by cache.CacheURLPath, which hardcodes "/data/cache/".
 //
 // Blocking the dataDir root also suppresses FileServer's directory listing of
-// it, which by itself disclosed the database filenames.
+// it, which by itself disclosed the database filenames. The cache root is
+// likewise excluded — strictly UNDER it is allowed, not the directory itself —
+// because no emitted URL names it (they all reach a file under
+// <os>/<schematic>/<arch>/<version>/), so its listing would enumerate every
+// cached OS and version for nothing.
 //
 // Traversal is handled the same way pkg/tftp's safeJoin does it — clean first,
-// then require the cleaned result to be the root or under it — so "cache/.."
-// escapes are refused rather than normalized into a served path. The refusal
-// is a plain 404 so it is indistinguishable from a miss (FileServer's own
-// dot-dot rejection is a 400, which would leak the difference).
+// then require the cleaned result to be under the root — so "cache/.." escapes
+// are refused rather than normalized into a served path. The refusal is a
+// plain 404 so it is indistinguishable from a miss (FileServer's own dot-dot
+// rejection is a 400, which would leak the difference).
 func isAllowedDataPath(p string) bool {
-	// StripPrefix leaves the path without a leading slash; path.Clean needs one
-	// to resolve leading "..", and always returns a rooted, slash-separated path.
-	cleaned := path.Clean("/" + strings.TrimPrefix(p, "/"))
-	root := "/" + dataCacheSubtree
-	return cleaned == root || strings.HasPrefix(cleaned, root+"/")
+	// root is the last segment of cache.CacheURLPath's "/data/cache/" prefix,
+	// and must stay in step with pkg/cache's cacheRoot (<dataDir>/cache);
+	// pkg/http cannot import pkg/cache for it without an import cycle.
+	const root = "/cache"
+	// StripPrefix leaves the path without a leading slash; path.Clean needs the
+	// leading one to resolve "..", collapses the doubled slash when p already
+	// had it, and always returns a rooted, slash-separated result.
+	cleaned := path.Clean("/" + p)
+	return strings.HasPrefix(cleaned, root+"/")
 }
 
 // isPartialPath reports whether a request path targets an in-flight download.

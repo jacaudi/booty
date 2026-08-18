@@ -86,6 +86,13 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 		{"sqlite shared-memory index", "/data/booty.db-shm"},
 		{"operator catalog", "/data/catalog.yaml"},
 		{"dataDir root listing", "/data/"},
+		// The cache root itself is not an artifact path — every URL booty emits
+		// names a file under <os>/<schematic>/<arch>/<version>/ — so it is
+		// outside the allowlist too, and its listing (which enumerates every
+		// cached OS and version) is not published. Both spellings, since
+		// path.Clean folds the trailing slash away.
+		{"cache root listing", "/data/cache/"},
+		{"cache root, no trailing slash", "/data/cache"},
 		{"traversal out of the cache tree", "/data/cache/../booty.db"},
 		// No "/data/../../etc/passwd" case here: http.Dir already contains that
 		// one, so it 404s identically with the guard removed and would be
