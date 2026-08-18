@@ -107,10 +107,13 @@ func (s *Store) UpsertCacheEntryArchived(targetVersionID int64, verifyErr string
 // verify_err. blocked=false covers both "no row" and "row does not match",
 // which is the whole answer the caller needs — there is no third state.
 //
-// The predicate is ALL FOUR columns (size=0, in_window=0, verified=0,
-// verify_err<>''), which is the only combination UpsertCacheEntryArchived
-// produces. Every other writer was checked: UpsertCacheEntry unconditionally
-// sets in_window=1, SetCacheInWindow is only ever called with false and touches
+// The predicate is ALL FOUR columns, which is the only combination
+// UpsertCacheEntryArchived produces:
+//
+//	size = 0 AND in_window = 0 AND verified = 0 AND verify_err <> ''
+//
+// Every other writer was checked: UpsertCacheEntry unconditionally sets
+// in_window=1, SetCacheInWindow is only ever called with false and touches
 // nothing else, and SetCachePinned* touch only pinned. The looser two-column
 // predicate (cached=0 plus a failure verdict) misfires on a reachable sequence:
 // a warn-landed failure that later loses a file on disk drops cached to 0 via
@@ -129,13 +132,17 @@ func (s *Store) UpsertCacheEntryArchived(targetVersionID int64, verifyErr string
 // time-parsing DSN option; parsing it with time.ParseInLocation(..., time.Local)
 // yields a FUTURE timestamp and wedges the version for hours.
 //
-// The modifier MUST be spelled "-N seconds". SQLite rejects a Go Duration string:
-// datetime('now','-1h0m0s') returns NULL, `fetched_at > NULL` is NULL, the WHERE
-// never matches, and this function silently becomes a no-op with no error, no
-// log, and no failing test except the in-window one. A zero window yields
-// "-0 seconds" — valid, and never matches, so the guard is disabled. A NEGATIVE
-// window yields "--3600 seconds", which SQLite rejects to NULL and therefore
-// also never blocks; both degenerate cases fail safe, by different routes.
+// The modifier MUST be spelled "-N seconds". SQLite rejects a Go Duration
+// string:
+//
+//	datetime('now','-1h0m0s') returns NULL
+//
+// so `fetched_at > NULL` is NULL, the WHERE never matches, and this function
+// silently becomes a no-op with no error, no log, and no failing test except
+// the in-window one. A zero window yields "-0 seconds" — valid, and never
+// matches, so the guard is disabled. A NEGATIVE window yields "--3600 seconds",
+// which SQLite rejects to NULL and therefore also never blocks; both
+// degenerate cases fail safe, by different routes.
 func (s *Store) VerifyRejectedWithin(targetID int64, version string, within time.Duration) (bool, string, error) {
 	modifier := fmt.Sprintf("-%d seconds", int64(within/time.Second))
 	var verifyErr string
