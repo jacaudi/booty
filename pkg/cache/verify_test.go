@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -462,4 +464,276 @@ func TestVerifyVersionToolIsNotVerifiable(t *testing.T) {
 	if verifyErr != "" {
 		t.Errorf("verifyErr = %q, want empty", verifyErr)
 	}
+}
+
+// largeServer serves body, honouring Range so a pre-seeded in-progress file
+// resumes rather than restarting. Returns the URL for "big.iso".
+func largeServer(t *testing.T, body []byte) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "big.iso", time.Unix(0, 0), bytes.NewReader(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL + "/big.iso"
+}
+
+// D4a — THE LOAD-BEARING TEST. A Large artifact whose digest does not match
+// must be REJECTED under `warn` as well as `strict`.
+//
+// Without this, the default policy lands a corruption verdict, and
+// reconcile.go's settled-skip (cached=1 + all final files present, which
+// deliberately does NOT consult `verified`) then skips that version FOREVER —
+// so a truncated 1.94 GB anonymity distro lands, is served to netboot clients,
+// and is never re-downloaded, not even after switching to `strict`, because
+// policy tightening is non-retroactive. `warn` has no availability to trade
+// here: D2 rejects an unfetchable or malformed sidecar before the download, and
+// D4b routes a local read failure out as an error rather than a verdict, so
+// classCorruption on a Large artifact means a definitive MISMATCH.
+func TestLandArtifactLargeChecksumFailureRejectedUnderWarnAndStrict(t *testing.T) {
+	body := []byte("REAL-ISO-BYTES-THAT-WILL-NOT-MATCH")
+	url := largeServer(t, body)
+
+	for _, policy := range []string{"warn", "strict"} {
+		t.Run(policy, func(t *testing.T) {
+			dir := t.TempDir()
+			a := ostype.Artifact{
+				Filename: "big.iso",
+				URL:      url,
+				Large:    true,
+				SHA256:   hexSHA([]byte("completely-different-bytes")),
+			}
+			landed, v, err := landArtifact(t.Context(), dir, a, policy)
+			if err != nil {
+				t.Fatalf("a digest MISMATCH is a verdict, not a transport error: %v", err)
+			}
+			if landed {
+				t.Fatalf("policy=%s: a Large artifact failing its checksum must NOT land", policy)
+			}
+			if v.class != classCorruption {
+				t.Errorf("policy=%s: class = %d, want classCorruption", policy, v.class)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "big.iso")); !os.IsNotExist(err) {
+				t.Errorf("policy=%s: bytes are sitting at the FINAL path where /data/ would serve them", policy)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "big.iso"+DownloadSuffix)); !os.IsNotExist(err) {
+				t.Errorf("policy=%s: the rejected in-progress file must be removed — resuming a file "+
+					"known to hash wrong appends good bytes to bad ones forever", policy)
+			}
+		})
+	}
+}
+
+// The happy path: a Large artifact whose digest matches lands, and the verdict
+// aggregates to verified=1 (an improvement on today's permanent NULL for tools).
+func TestLandArtifactLargeCorrectChecksumLandsVerified(t *testing.T) {
+	body := []byte("REAL-ISO-BYTES")
+	url := largeServer(t, body)
+
+	dir := t.TempDir()
+	a := ostype.Artifact{Filename: "big.iso", URL: url, Large: true, SHA256: hexSHA(body)}
+
+	landed, v, err := landArtifact(t.Context(), dir, a, "strict")
+	if err != nil {
+		t.Fatalf("landArtifact: %v", err)
+	}
+	if !landed || v.class != classPass {
+		t.Fatalf("landed=%v class=%d, want landed=true classPass", landed, v.class)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "big.iso"))
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("final file wrong (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "big.iso"+DownloadSuffix)); !os.IsNotExist(err) {
+		t.Error("the in-progress file must be gone after a successful land")
+	}
+	verified, verifyErr := aggregateVerdicts([]artifactVerdict{v})
+	if verified == nil || !*verified {
+		t.Fatalf("version verdict = %v (err %q), want verified=true", verified, verifyErr)
+	}
+}
+
+// D4 — the fail-closed guard is NARROWED to SigURL, never deleted. SigURL's
+// existing path expects a signature over a CHECKSUM FILE against a known
+// embedded keyring, not a detached signature over a multi-GB ISO whose key
+// booty does not ship. Declaring one must still hard-fail.
+func TestLandArtifactLargeWithSigURLStillHardFails(t *testing.T) {
+	dir := t.TempDir()
+	a := ostype.Artifact{
+		Filename: "big.iso",
+		URL:      "https://ex/big.iso",
+		Large:    true,
+		SigURL:   "https://ex/big.iso.sig",
+	}
+	_, _, err := landArtifact(t.Context(), dir, a, "strict")
+	if err == nil {
+		t.Fatal("a Large artifact declaring SigURL must hard-fail; detached-sig verification is unsupported there")
+	}
+	if !strings.Contains(err.Error(), "detached-signature") {
+		t.Errorf("error must name the unsupported mechanism, got: %v", err)
+	}
+}
+
+// D4b — "I could not evaluate the material" is INFRASTRUCTURE, not a verdict.
+//
+// verifyArtifact classifies its own hashFile read failure as classCorruption,
+// and hashFile is reachable on the land path ONLY for Large artifacts (the
+// staged path always carries a streamed digest). Under D4a that would convert a
+// transient local read error — a NAS blip, fd exhaustion under CacheConcurrency,
+// an operator clearing the cache dir mid-pass — into: delete the completed
+// 1.94 GB file, RemoveAll the version directory, and arm the retry guard for an
+// hour. So landArtifact hashes the Large file ITSELF and returns the read
+// failure as an error, which routes to reconcile.go's `vg.Wait() != nil ->
+// continue`: no row written, no version dir removed, and the resumable bytes
+// left on disk to resume next tick.
+func TestLandArtifactLargeHashReadFailureIsAnErrorNotAVerdict(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses the mode bits this test relies on")
+	}
+	body := []byte("COMPLETE-ISO-BYTES-ALREADY-ON-DISK")
+
+	// 416: a prior attempt already wrote every byte, so this attempt streams
+	// nothing and the in-progress file is exactly what we seeded. That lets the
+	// test control the file's mode without racing the downloader.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	inProgress := filepath.Join(dir, "big.iso"+DownloadSuffix)
+	// 0o200 = write-only: downloadLargeInto's O_WRONLY|O_APPEND open succeeds,
+	// hashFile's read-only open does not.
+	if err := os.WriteFile(inProgress, body, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(inProgress, 0o644) })
+
+	a := ostype.Artifact{Filename: "big.iso", URL: srv.URL + "/big.iso", Large: true, SHA256: hexSHA(body)}
+	landed, v, err := landArtifact(t.Context(), dir, a, "warn")
+
+	if err == nil {
+		t.Fatalf("an unreadable in-progress file is INFRASTRUCTURE and must return an error; got landed=%v class=%d", landed, v.class)
+	}
+	// Naming the mechanism is what makes this test fail in the RED phase. The
+	// pre-existing hard-fail guard ALSO returns an error, leaves the file
+	// untouched and lands nothing — so every other assertion here is satisfied
+	// by the code this task replaces. Only the message discriminates.
+	if !strings.Contains(err.Error(), "cache: hash") {
+		t.Fatalf("the error must come from landArtifact's own hashFile call, got: %v", err)
+	}
+	if landed {
+		t.Error("nothing may land when the digest could not be evaluated")
+	}
+	if _, serr := os.Stat(inProgress); serr != nil {
+		t.Error("the resumable bytes must SURVIVE a read failure so the next tick resumes rather than re-downloading 1.94 GB")
+	}
+	if _, serr := os.Stat(filepath.Join(dir, "big.iso")); !os.IsNotExist(serr) {
+		t.Error("unevaluated bytes must not reach the final path")
+	}
+}
+
+// §5.2 pins an ACKNOWLEDGED reachable path rather than claiming it away:
+// policy "off" short-circuits before verification, exactly as it does for
+// staged artifacts. "off" means off. This test exists so that stays deliberate
+// instead of becoming an accident.
+func TestLandArtifactLargeUnderPolicyOffLandsUnverified(t *testing.T) {
+	body := []byte("UNVERIFIED-BUT-OFF")
+	url := largeServer(t, body)
+
+	dir := t.TempDir()
+	a := ostype.Artifact{Filename: "big.iso", URL: url, Large: true, SHA256: hexSHA([]byte("wrong"))}
+
+	landed, v, err := landArtifact(t.Context(), dir, a, "off")
+	if err != nil {
+		t.Fatalf("landArtifact: %v", err)
+	}
+	if !landed || v.class != classNotVerifiable {
+		t.Fatalf("landed=%v class=%d, want landed=true classNotVerifiable under policy=off", landed, v.class)
+	}
+}
+
+// D3 — hash the COMPLETED file, never the stream. downloadLargeInto resumes via
+// Range, so a resumed transfer's stream carries only the DELTA. Hashing the
+// stream would compute the digest of the remainder and reject a perfectly good
+// ISO. Pre-seeding a prefix and declaring the digest of the WHOLE payload is
+// the only assertion that separates the two.
+// The Range assertion is load-bearing, not decoration. Without it the test
+// passes in a world where the resume never happens at all: if the in-progress
+// path were wrong, the server would serve the FULL body from offset 0, the
+// digest would still match hexSHA(full), and the file would still land. Only
+// "the server actually received a Range header" separates a real resume from a
+// silent restart-from-scratch.
+func TestLandArtifactLargeHashesWholeFileNotTheResumeDelta(t *testing.T) {
+	full := []byte("PREFIX-BYTES-AND-THEN-THE-REMAINDER-OF-THE-ISO")
+	prefix := full[:12]
+
+	gotRange := make(chan string, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRange <- r.Header.Get("Range")
+		http.ServeContent(w, r, "big.iso", time.Unix(0, 0), bytes.NewReader(full))
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "big.iso"+DownloadSuffix), prefix, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := ostype.Artifact{Filename: "big.iso", URL: srv.URL + "/big.iso", Large: true, SHA256: hexSHA(full)}
+	landed, v, err := landArtifact(t.Context(), dir, a, "strict")
+	if err != nil {
+		t.Fatalf("landArtifact: %v", err)
+	}
+	if !landed || v.class != classPass {
+		t.Fatalf("landed=%v class=%d — the digest must cover the WHOLE file, not the resume delta", landed, v.class)
+	}
+	if rng := <-gotRange; rng != "bytes=12-" {
+		t.Fatalf("server saw Range %q, want \"bytes=12-\" — the pre-seeded prefix was not resumed from, "+
+			"so this test would pass even against a restart-from-zero", rng)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "big.iso"))
+	if err != nil || !bytes.Equal(got, full) {
+		t.Fatalf("landed content must be prefix+remainder (err=%v)", err)
+	}
+}
+
+// The 416 branch streams NOTHING at all, so a stream-derived digest would be the
+// hash of the empty string. Both arms: correct digest lands, wrong digest is
+// rejected rather than renamed unverified.
+func TestLandArtifactLarge416VerifiesBeforeLanding(t *testing.T) {
+	body := []byte("FULL-ISO-FROM-A-PRIOR-ATTEMPT")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Run("correct digest lands", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "big.iso"+DownloadSuffix), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		a := ostype.Artifact{Filename: "big.iso", URL: srv.URL + "/big.iso", Large: true, SHA256: hexSHA(body)}
+		landed, v, err := landArtifact(t.Context(), dir, a, "strict")
+		if err != nil || !landed || v.class != classPass {
+			t.Fatalf("landed=%v class=%d err=%v, want landed=true classPass", landed, v.class, err)
+		}
+	})
+
+	t.Run("wrong digest is rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "big.iso"+DownloadSuffix), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		a := ostype.Artifact{Filename: "big.iso", URL: srv.URL + "/big.iso", Large: true, SHA256: hexSHA([]byte("nope"))}
+		landed, v, err := landArtifact(t.Context(), dir, a, "warn")
+		if err != nil {
+			t.Fatalf("a mismatch is a verdict, not an error: %v", err)
+		}
+		if landed || v.class != classCorruption {
+			t.Fatalf("landed=%v class=%d — the 416 path must verify BEFORE renaming", landed, v.class)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "big.iso")); !os.IsNotExist(err) {
+			t.Error("the 416 path renamed an unverified file into the final path")
+		}
+	})
 }
