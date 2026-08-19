@@ -81,7 +81,7 @@ func fetchNetbootxyzDoc(ctx context.Context) (map[string]netbootxyzEntry, error)
 // ResetNetbootxyzCache clears the memoized endpoint manifest. There are two
 // production call sites: pkg/cache/reconciler.go (reconcileAll's pass entry,
 // once per pass — NOT reconcileTarget, which runs once per target) and the
-// reverify handler in pkg/http/api_cache.go (the next paragraph covers why).
+// reverify handler in pkg/http/api_cache.go.
 //
 // The RECONCILER's placement intentionally diverges from ResetStreamsCache,
 // which still resets per-target: #73 found that a per-target netboot.xyz reset
