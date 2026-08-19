@@ -11,15 +11,22 @@ keep cache and registration across restarts.
 ├── hardware.json.migrated        # legacy host DB, imported into booty.db at first start
 ├── version.txt                   # Flatcar: current cached version marker
 ├── <channel>.json                # CoreOS: streams metadata (e.g. stable.json)
-├── config/
+├── config/                       # NEVER served over HTTP — rendered server-side
 │   ├── ignition.yaml             # Butane template for Flatcar/CoreOS (IGNITION_FILE)
 │   ├── machineconfig.yaml        # Talos machine-config template (--talosConfigFile)
 │   └── preseed.cfg               # Debian preseed template (--preseedFile)
+├── public/                       # SERVED at /data/public/ — operator assets the
+│   └── *.sh                      #   booted node fetches (see examples/config/ignition.yaml)
 ├── undionly.kpxe                 # proxyDHCP pass-1 BIOS iPXE binary (if proxyDHCP enabled)
 ├── ipxe.efi                      # proxyDHCP pass-1 UEFI iPXE binary
 ├── ipxe-arm64.efi               # proxyDHCP pass-1 ARM64 iPXE binary
 └── cache/                        # downloaded boot artifacts (see below)
 ```
+
+> **HTTP reachability.** `/data/` serves **only** `cache/` and `public/`, and only files strictly
+> below them — never `<dataDir>` itself, the database, `catalog.yaml`, `config/`, a subtree root, or
+> any directory listing. Everything else returns `404`. Put anything a booted node must fetch in
+> `public/`; anything booty renders server-side stays in `config/`.
 
 > **As of P1b:** `version.txt` / `<channel>.json` are no longer read for version state — the newest
 > cached version is derived from the `cache/` directory for every OS (not just Talos).
@@ -134,7 +141,9 @@ verification verdict decides its fate:
 `.partial` files are never part of the boot/menu/TFTP path (which references only exact artifact
 filenames), are **swept at the start of every reconcile pass** (a crash mid-download self-heals),
 are **excluded from `POST /cache/scan` size sums**, and are **404'd by the `/data/` file server**
-(case-insensitive) so a direct browse can't fetch an in-flight file.
+(case-insensitive, and after path cleaning so an encoded-dot suffix cannot smuggle one past the
+check) so a direct browse can't fetch an in-flight file. Directory listings are disabled under
+`/data/`, so their names are not discoverable by browsing either.
 
 **Failure-visibility on disk.** A version rejected by verification leaves **no bytes on disk** (its
 directory is removed) but keeps a `cache_entries` row with `size=0`, `in_window=0`, `verified=0`,

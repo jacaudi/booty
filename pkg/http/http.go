@@ -3,12 +3,15 @@ package http
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 	"time"
 
+	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/web"
 	"github.com/spf13/viper"
@@ -66,19 +69,91 @@ func StartHTTP(deps APIDeps) *http.Server {
 	return s
 }
 
-// dataFileHandler serves files under dataDir, blocking any request whose
-// (decoded) path targets an in-flight staged download (see isPartialPath).
-// Extracted from StartHTTP's /data/ registration so it is independently
-// testable via httptest without standing up the full mux/server.
+// dataFileHandler serves files under dataDir, restricted to the subtrees in
+// dataSubtrees (see isAllowedDataPath) and blocking any request whose path
+// targets an in-flight staged download (see isPartialPath).
+//
+// Serving goes through http.FileServer so conditional and ranged GETs keep
+// working — iPXE and the multi-GB ISO paths depend on Range — but over a
+// listing-free FS, so a directory is indistinguishable from a miss.
 func dataFileHandler(dataDir string) http.Handler {
-	dataFS := http.FileServer(http.Dir(dataDir))
+	dataFS := http.FileServer(noListingDir{http.Dir(dataDir)})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isPartialPath(r.URL.Path) {
+		// Both predicates must judge the SAME path http.FileServer will open,
+		// which is path.Clean(r.URL.Path) (net/http/fs.go:995). Testing the raw
+		// path let a trailing "/%2e" name an in-flight file while defeating the
+		// suffix check — ServeMux cleans the literal "/." spelling away before
+		// dispatch, but not the encoded one.
+		cleaned := path.Clean("/" + r.URL.Path)
+		if !isAllowedDataPath(cleaned) || isPartialPath(cleaned) {
 			http.NotFound(w, r)
 			return
 		}
 		dataFS.ServeHTTP(w, r)
 	})
+}
+
+// dataSubtrees are the only subtrees of dataDir that /data/ serves: the boot
+// artifact cache, and "public" for operator assets the BOOTED NODE fetches over
+// HTTP (the shell scripts examples/config/ignition.yaml points at). "public"
+// exists so must-serve assets stop sharing <dataDir>/config/ with the
+// ignition/machineconfig/preseed templates booty renders server-side, which
+// must never be published.
+//
+// Serving dataDir wholesale published booty.db — config.DatabasePathValue
+// defaults it there and deploy/docker-compose.yml mounts one volume for the lot
+// — including config_revisions.source_b64, the plaintext per-host boot configs.
+// An allowlist is the only form that does not need extending for every new file
+// something writes to dataDir.
+var dataSubtrees = []string{"/" + cache.DirName, "/public"}
+
+// isAllowedDataPath reports whether a /data/-relative request path lies inside
+// one of dataSubtrees. Everything else under dataDir 404s.
+//
+// Matching is strictly BELOW each subtree, so the subtree roots are not
+// addressable either. Cleaning first, then prefix-matching, is the same idiom
+// as pkg/tftp's safeJoin (tftp.go:75-80) — and it inherits the same caveat
+// safeJoin documents: no EvalSymlinks, so a symlink planted inside an allowed
+// subtree whose target lies outside it is followed. Nothing booty writes
+// creates one (the cache downloaders write regular files only) and the operator
+// owns dataDir, so this is the same accepted limitation, not a new one. Closing
+// it structurally means os.OpenRoot, which pins an fd to the directory inode
+// for process lifetime; that is a bigger change than this guard warrants.
+func isAllowedDataPath(p string) bool {
+	// path.Clean needs a leading slash to resolve ".." (StripPrefix leaves none)
+	// and collapses a doubled one when p already had it.
+	cleaned := path.Clean("/" + p)
+	for _, root := range dataSubtrees {
+		if strings.HasPrefix(cleaned, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// noListingDir is http.Dir with directory opens refused, so http.FileServer
+// renders no index and cannot answer differently for a directory than for a
+// miss. The listing under a cached version directory named the in-flight
+// .partial/.download files by hand-browsable path, which is the discovery half
+// of fetching one; the 301-on-directory behaviour was also an existence oracle
+// for paths the allowlist otherwise hides.
+type noListingDir struct{ http.Dir }
+
+func (d noListingDir) Open(name string) (http.File, error) {
+	f, err := d.Dir.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if info.IsDir() {
+		f.Close()
+		return nil, fs.ErrNotExist
+	}
+	return f, nil
 }
 
 // isPartialPath reports whether a request path targets an in-flight download.
