@@ -119,8 +119,10 @@ they are caught by *different* checks, so "D2a is the rename guard" is not the r
 This also means an earlier revision **deleted a correct statement** when it "corrected" M4. M4's
 observation is about *fetch* ordering (the ~90-byte sidecar GET precedes the file loop — true), not
 about which *error* surfaces. The original text — "if upstream renames the asset, the existing
-allowlist check fires first, so this degrades to a loud, already-designed failure" — was right, and
-is restored in §4.3.
+allowlist check fires first, so this degrades to a loud, already-designed failure" — was right **for
+the branch where the manifest tracks the rename**, which is the normal case, and is restored in §4.3
+with that scope made explicit. In the lagging branch the loud failure is D2a's instead; the
+"degrades to a loud, already-designed failure" half holds either way.
 
 **What D2a actually and uniquely covers is a sidecar-only desync:** the manifest and the release
 asset still say `tails-amd64.iso`, but the sidecar drops that line or keys it differently. Nothing
