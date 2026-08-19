@@ -22,7 +22,7 @@ Served on `--httpPort` (default `8080`).
 | `GET` | `/booty.json` | All registered hosts and all in-memory unknown hosts. | `{"hosts":{…},"unknownHosts":{…}}` |
 | `POST` | `/register` | Register/update a MAC → host mapping. Body: a Host JSON object (see [DATABASE.md](DATABASE.md)). | `OK` / `500` |
 | `POST` | `/unregister` | Remove a MAC mapping (idempotent). Body: a Host JSON object (MAC required). | `OK` / `500` |
-| `GET` | `/data/<path>` | Static file server over `--dataDir` (cache artifacts, templates, iPXE binaries). | file / `404` |
+| `GET` | `/data/<path>` | Static file server over **`<dataDir>/cache/` and `<dataDir>/public/` only** — boot artifacts and operator-published assets. Everything else under `--dataDir` (the database, `config/` templates, `catalog.yaml`), every directory listing, and in-flight `.partial`/`.download` files return `404`. | file / `404` |
 | `GET` | `/ui/<path>` | The embedded web UI. | asset / `404` |
 
 **Register example:**

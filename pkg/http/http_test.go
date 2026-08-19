@@ -111,6 +111,29 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sibling, "booty.db"), dbBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// <dataDir>/config/ holds the TEMPLATES booty renders server-side
+	// (config.go:81,82,98 default IgnitionFile/TalosConfigFile/PreseedFile
+	// there). They are inputs, never served, and may carry secrets.
+	configDir := filepath.Join(dataDir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ignition.yaml", "machineconfig.yaml", "preseed.cfg"} {
+		if err := os.WriteFile(filepath.Join(configDir, name), dbBytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// <dataDir>/public/ holds operator assets the BOOTED NODE fetches over
+	// HTTP — the ignition example's cni.sh/join.sh and friends. Serving these
+	// is a shipped, documented boot path, so it is allowlisted alongside cache.
+	publicDir := filepath.Join(dataDir, "public")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptBytes := []byte("#!/bin/sh\necho cni\n")
+	if err := os.WriteFile(filepath.Join(publicDir, "cni.sh"), scriptBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// Mirrors the production layout cache.CacheURLPath addresses:
 	// <dataDir>/cache/<os>/<schematic>/<arch>/<version>/<artifact>.
 	artifactDir := filepath.Join(dataDir, "cache", "talos", "-", "amd64", "v1.9.0")
@@ -138,6 +161,11 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 		{"cache root, no trailing slash", "/data/cache"},
 		{"traversal out of the cache tree", "/data/cache/../booty.db"},
 		{"sibling directory sharing the prefix", "/data/cache.bak/booty.db"},
+		{"ignition template", "/data/config/ignition.yaml"},
+		{"talos machineconfig template", "/data/config/machineconfig.yaml"},
+		{"debian preseed template", "/data/config/preseed.cfg"},
+		{"config directory listing", "/data/config/"},
+		{"traversal from public into config", "/data/public/../config/ignition.yaml"},
 	}
 	for _, tc := range blocked {
 		t.Run(tc.name, func(t *testing.T) {
@@ -152,6 +180,19 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 			}
 		})
 	}
+
+	// The booted node fetches these over HTTP (examples/config/ignition.yaml,
+	// examples/k8s.yaml). Blocking them breaks a documented, shipped boot path.
+	t.Run("public operator asset served", func(t *testing.T) {
+		const scriptURL = "/data/public/cni.sh"
+		code, body, _ := getData(mux, scriptURL)
+		if code != http.StatusOK {
+			t.Fatalf("%s: got %d, want 200 (body %q)", scriptURL, code, body)
+		}
+		if !bytes.Equal(body, scriptBytes) {
+			t.Fatalf("%s: body = %q, want %q", scriptURL, body, scriptBytes)
+		}
+	})
 
 	t.Run("cache artifact still served", func(t *testing.T) {
 		code, body, _ := getData(mux, kernelURL)
@@ -176,6 +217,58 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 		}
 		if !bytes.Equal(body, kernelBytes[:4]) {
 			t.Fatalf("ranged %s: body = %q, want %q", kernelURL, body, kernelBytes[:4])
+		}
+	})
+}
+
+// TestDataFileHandler_NoDirectoryListing covers directories the allowlist
+// ALLOWS — inside cache/ — where suppression is noListingDir's job alone.
+//
+// The listing of a cached version directory names the in-flight .partial and
+// .download files sitting in it, which is the discovery half of fetching one.
+// The directory-vs-miss distinction (301 vs 404) was also an existence oracle.
+// Both spellings must look like a plain miss.
+func TestDataFileHandler_NoDirectoryListing(t *testing.T) {
+	dataDir := t.TempDir()
+	verDir := filepath.Join(dataDir, "cache", "talos", "-", "amd64", "v1.9.0")
+	if err := os.MkdirAll(verDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(verDir, "kernel-amd64"), []byte("K"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(verDir, "big.iso.download"), []byte("X"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mux := dataMux(dataDir)
+
+	for _, target := range []string{
+		"/data/cache/talos/-/amd64/v1.9.0/",
+		"/data/cache/talos/-/amd64/v1.9.0",
+		"/data/cache/talos/",
+		"/data/cache/talos",
+	} {
+		t.Run(target, func(t *testing.T) {
+			code, bodies := getDataFollow(t, mux, target)
+			if code != http.StatusNotFound {
+				t.Fatalf("%s: final status %d, want 404 (bodies %q)", target, code, bodies)
+			}
+			for _, body := range bodies {
+				if bytes.Contains(body, []byte("big.iso.download")) {
+					t.Fatalf("%s: listing disclosed an in-flight filename", target)
+				}
+				if bytes.Contains(body, []byte("kernel-amd64")) {
+					t.Fatalf("%s: listing disclosed cache contents", target)
+				}
+			}
+		})
+	}
+
+	// The guard must not have cost us the artifacts themselves.
+	t.Run("file in that directory still served", func(t *testing.T) {
+		const u = "/data/cache/talos/-/amd64/v1.9.0/kernel-amd64"
+		if code, body, _ := getData(mux, u); code != http.StatusOK || string(body) != "K" {
+			t.Fatalf("%s: got %d %q, want 200 %q", u, code, body, "K")
 		}
 	})
 }

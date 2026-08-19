@@ -52,7 +52,7 @@ func TestIgnitionUnboundHostByteIdenticalServerIPPort(t *testing.T) {
 	s := servingStore(t)
 	viper.Set(config.IgnitionFile, "config/ignition.yaml")
 	writeFile(t, "config/ignition.yaml",
-		"variant: fcos\nversion: 1.5.0\nstorage:\n  files:\n    - path: /etc/x\n      contents:\n        source: http://{{ .ServerIP }}/data/config/x.sh\n")
+		"variant: fcos\nversion: 1.5.0\nstorage:\n  files:\n    - path: /etc/x\n      contents:\n        source: http://{{ .ServerIP }}/data/public/x.sh\n")
 	const mac = "aa:bb:cc:dd:ee:30"
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar", Approved: true}); err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestIgnitionUnboundHostByteIdenticalServerIPPort(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("ignition = %d: %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "http://10.0.0.1:8080/data/config/x.sh") {
+	if !strings.Contains(rr.Body.String(), "http://10.0.0.1:8080/data/public/x.sh") {
 		t.Fatalf("unbound ignition must keep host:port URL, got: %s", rr.Body.String())
 	}
 }

@@ -16,9 +16,16 @@ import (
 	"github.com/spf13/viper"
 )
 
+// DirName is the single source of the cache subtree name. It is an external
+// contract, not an implementation detail: it names the on-disk root
+// (<dataDir>/cache), the client-facing URL prefix (/data/cache/), and the
+// subtree pkg/http's /data/ allowlist admits. All three must agree or boots
+// 404, so no caller may spell it literally.
+const DirName = "cache"
+
 // cacheRoot returns <dataDir>/cache.
 func cacheRoot() string {
-	return filepath.Join(viper.GetString(config.DataDir), "cache")
+	return filepath.Join(viper.GetString(config.DataDir), DirName)
 }
 
 // cacheSegments is the ONE source of truth for the cache layout ordering:
@@ -39,7 +46,7 @@ func cacheDir(osName, schematic, arch, version string) string {
 // directory (pkg/http), so disk layout and client-facing paths can never
 // diverge.
 func CacheURLPath(osName, schematic, arch, version string) string {
-	return "/data/cache/" + path.Join(cacheSegments(osName, schematic, arch, version)...)
+	return "/data/" + DirName + "/" + path.Join(cacheSegments(osName, schematic, arch, version)...)
 }
 
 // CacheURLBase returns the client-facing base URL for the same directory:

@@ -95,12 +95,21 @@ options, or booty's `--proxyDHCPEnabled`.
 1. **Create a data directory** with your config template(s):
 
    ```bash
-   mkdir -p data/config
+   mkdir -p data/config data/public
    # Butane template for Flatcar / CoreOS hosts (an example ships in the repo):
    cp examples/config/ignition.yaml data/config/ignition.yaml
    # For Talos hosts, provide your own machine-config template at:
    #   data/config/machineconfig.yaml
+
+   # Anything the BOOTED NODE fetches over HTTP goes in data/public/, e.g. the
+   # scripts the example ignition template pulls down:
+   #   data/public/{cni,systemd,kube-tools,join,version-check}.sh
    ```
+
+   > **`config/` is never served over HTTP; `public/` is served to anyone who can
+   > reach the port.** booty renders the `config/` templates server-side, so they
+   > may hold secrets. Only `data/public/` and the artifact cache are reachable
+   > under `/data/`. Put node-fetched assets in `public/`, nothing else.
 
 2. **Run booty:**
 
