@@ -108,7 +108,7 @@ func init() {
 		&args.signaturePolicy,
 		"signaturePolicy",
 		"warn",
-		"Signature policy: strict (reject unverified), warn (block tampering, allow+log other verify failures, but refuse a checksum failure on a resumable multi-GB artifact), off (no verification); see docs/CONFIGURATION.md",
+		"Signature policy: strict (reject any failed verification), warn (block tampering, allow+log other verify failures, but refuse a checksum failure on a resumable multi-GB artifact), off (no verification); see docs/CONFIGURATION.md",
 	)
 
 	flags.StringVar(

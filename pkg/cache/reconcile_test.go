@@ -950,8 +950,13 @@ func TestReconcileTarget_VerificationRejectionRateLimitsRedownload(t *testing.T)
 		t.Error("guarded version created its cache dir; nothing should have run")
 	}
 
-	// Phase 2 — the same state, window shrunk to zero: the guard releases and the
-	// version is retried. Shrinking the package var beats sleeping an hour.
+	// Phase 2 — the same state with the window set to zero, which DISABLES the
+	// guard (the SQL bound becomes "-0 seconds", which no row is newer than)
+	// rather than simulating an hour of elapsed time. That is the property under
+	// test here: reconcileTarget consults verifyRetryAfter on every pass, so a
+	// zero window lets the version through. Time-based release of an aged
+	// rejection is proven separately, in pkg/db's
+	// TestVerifyRejectedWithinReleasesAnAgedRejection.
 	prev := verifyRetryAfter
 	verifyRetryAfter = 0
 	t.Cleanup(func() { verifyRetryAfter = prev })
@@ -960,10 +965,10 @@ func TestReconcileTarget_VerificationRejectionRateLimitsRedownload(t *testing.T)
 		t.Fatalf("reconcileTarget (released): %v", err)
 	}
 	if n := sidecarHits.Load(); n == 0 {
-		t.Fatal("after the window elapsed the version must be retried; the guard never self-clears")
+		t.Fatal("with the window at zero the guard must not block; the version must be retried")
 	}
 	if n := assetHits.Load(); n == 0 {
-		t.Fatal("after the window elapsed the artifacts must be re-downloaded")
+		t.Fatal("with the window at zero the artifacts must be re-downloaded")
 	}
 	// The retry succeeds against a good sidecar, so the version lands verified.
 	rows, err := store.ListCacheEntries(db.CacheFilter{})

@@ -334,13 +334,13 @@ func TestVerifyVersion_AbsentFinalWithPartialIsNull(t *testing.T) {
 }
 
 // TestLandArtifactLargeUsesResumableDownloader proves the Large artifact is
-// actually routed through downloadLargeFile (pkg/cache/isodownload.go), not
+// actually routed through downloadLargeInto (pkg/cache/isodownload.go), not
 // merely that the outcome LOOKS the same as the ordinary staged path would
 // produce. A plain single-shot 200 response can't discriminate the two: with
 // no SHA256/SigURL declared, config.DownloadStaged would ALSO land the file at
 // the final name with no .partial left behind and classNotVerifiable — an
 // observably identical result. The discriminator is the Range header:
-// downloadLargeFile resumes from an existing ".download" file with
+// downloadLargeInto resumes from an existing ".download" file with
 // `Range: bytes=<offset>-`; config.DownloadStaged never sends one. So this
 // test pre-seeds a ".download" prefix (as a prior, interrupted attempt would
 // leave behind) and asserts the server actually received a Range request —
@@ -366,7 +366,7 @@ func TestLandArtifactLargeUsesResumableDownloader(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	dir := t.TempDir()
-	// Pre-seed the in-progress file downloadLargeFile resumes from. The
+	// Pre-seed the in-progress file downloadLargeInto resumes from. The
 	// ".download" suffix (not ".partial") is what lets it survive
 	// SweepPartials between reconcile passes.
 	if err := os.WriteFile(filepath.Join(dir, "big.iso.download"), prefix, 0o644); err != nil {
@@ -392,7 +392,7 @@ func TestLandArtifactLargeUsesResumableDownloader(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "big.iso.partial")); err == nil {
 		t.Error("a .partial was left behind; the large path must not use .partial")
 	}
-	// Discriminator: only downloadLargeFile ever sends a Range header. If the
+	// Discriminator: only downloadLargeInto ever sends a Range header. If the
 	// Large routing were dropped and landArtifact fell through to
 	// config.DownloadStaged instead, the request would arrive with no Range
 	// header and this assertion would fail.

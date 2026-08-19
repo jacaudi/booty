@@ -161,9 +161,12 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		// Transport failures are never guarded: they return before any
 		// cache_entries row is written, so they cannot forge the four-column
 		// signature VerifyRejectedWithin matches on.
-		blocked, guardErr, gerr := store.VerifyRejectedWithin(t.ID, version, verifyRetryAfter)
+		blocked, guardReason, gerr := store.VerifyRejectedWithin(t.ID, version, verifyRetryAfter)
 		if gerr != nil {
-			return fmt.Errorf("cache: verify-retry guard %d/%s: %w", t.ID, version, gerr)
+			// No ids here: db.VerifyRejectedWithin already wraps as
+			// "db: verify-rejected guard %d/%s", so repeating them would print
+			// the same target/version pair twice in one operator-facing line.
+			return fmt.Errorf("cache: verify-retry guard: %w", gerr)
 		}
 		if blocked {
 			// A RELATIVE bound, not an absolute next-attempt time: computing the
@@ -174,7 +177,7 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 			// recorded and API-exposed.
 			slog.Warn("cache: version rejected by verification; not retrying yet",
 				"os", t.OS, "arch", t.Arch, "version", version,
-				"verifyErr", guardErr, "retryAfter", verifyRetryAfter)
+				"verifyErr", guardReason, "retryAfter", verifyRetryAfter)
 			continue
 		}
 

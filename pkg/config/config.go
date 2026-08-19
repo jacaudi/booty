@@ -188,8 +188,12 @@ func ValidatePathSegment(v string) error {
 
 // ValidateSignaturePolicy rejects an unknown --signaturePolicy value at startup
 // (fail-fast; booty has no AutomaticEnv/config file, so the flag is the source).
-// strict = refuse any verification failure; warn = refuse forgeries, land
-// corruption + log; off = never verify.
+// strict = refuse any FAILED verification; warn = refuse forgeries and land
+// corruption + log, EXCEPT on a resumable (Large) artifact, whose checksum
+// failure is refused under warn too (D4a); off = never verify. An artifact
+// declaring no material is not-verifiable and lands under every policy,
+// strict included. Full matrix: docs/CONFIGURATION.md, "Signature
+// verification".
 func ValidateSignaturePolicy() error {
 	switch v := viper.GetString(SignaturePolicy); v {
 	case "strict", "warn", "off":

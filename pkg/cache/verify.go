@@ -25,8 +25,15 @@ import (
 // (warn lands it) so the policy (§5, D15) can treat them differently.
 type verifyClass int
 
+// classUnset occupies the zero value on purpose, so an artifactVerdict{} that
+// was never assigned a class cannot be read as "verified OK". It is not a
+// verdict any producer returns: landArtifact's switch routes it to the
+// reject default, and aggregateVerdicts counts it as neither verifiable nor
+// passing. Defensive only — reconcile.go's `vg.Wait() != nil -> continue`
+// still guarantees no partially-filled verdict slice reaches aggregation.
 const (
-	classPass          verifyClass = iota // verified OK
+	classUnset         verifyClass = iota // zero value — never a real verdict
+	classPass                             // verified OK
 	classNotVerifiable                    // no mechanism declared (empty fields)
 	classCorruption                       // sha256 mismatch / bad-or-unfetchable sidecar / unknown-or-expired key
 	classForgery                          // GPG signature does not validate — tamper
@@ -123,9 +130,7 @@ func landArtifact(ctx context.Context, dir string, a ostype.Artifact, policy str
 		// `policy != "off"` is part of the CONDITION, not a later short-circuit:
 		// hashing first and discarding the result would spend the design's
 		// measured 3.55 s (~20 s on a slow spindle) on a 1.94 GB file in the one
-		// configuration that explicitly asked for no verification — and would
-		// turn an unreadable in-progress file into a hard error under `off`,
-		// where the pre-change code lands it fine.
+		// configuration that explicitly asked for no verification.
 		if a.SHA256 != "" && policy != "off" {
 			// D3: hash the COMPLETED file. downloadLargeInto resumes via Range, so
 			// a resumed transfer's stream carries only the DELTA, and the 416
