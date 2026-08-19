@@ -45,7 +45,7 @@ the cached ISO. Every claim in this table survived that second pass.
 | No other release in that repo publishes one | Same sweep, inverted | Exactly 76 releases in the repo carry the sidecar; all are Tails. |
 | The other two tool sources publish none | Independent sweep of `netbootxyz/debian-squash` (1267 releases), which serves `clonezilla-debian-stable-amd64` and `rescatux` | Only `filesystem.squashfs*`, `initrd`, `vmlinuz`. No checksums. |
 | Sidecar format | `curl` + `sed -n l` on `7.10-17629562`, `7.9.1-17629562`, `7.3.1-00388326`, `6.6-cfd50f75`, `4.22-28906ec3` | One LF-terminated line, `<64 hex>` + **two spaces** + `<filename>`. No `./`, no binary-mode `*`, no trailing blank. 82 bytes for `tails-amd64.iso`. |
-| **The ISO filename has changed across releases** | Same fetches | `tails-amd64.iso` now; `tails-amd64-6.6.iso` and `tails-amd64-4.22.iso` historically. The sidecar key always matches that release's asset name. Caught by the manifest-membership check, **not** by D2a — see D2a. |
+| **The ISO filename has changed across releases** | Same fetches | `tails-amd64.iso` now; `tails-amd64-6.6.iso` and `tails-amd64-4.22.iso` historically. The sidecar key always matches that release's asset name. Caught by the manifest-membership check when the manifest has tracked the rename, and by **D2a** when the manifest lags it — see D2a. |
 | The published digest matches the bytes booty caches | `shasum -a 256` on the slice-2 lab's cached ISO | `6dab23b2…d1743` — **byte-identical**. Validated end-to-end against real cached bytes. |
 | Cost of hashing 1.94 GB | `time shasum -a 256` | **3.55 s** (macOS/SSD). Disk-throughput-bound; ~19.4 s at 100 MB/s. Paid once per version download. |
 | Debian's `SHA256SUMS` is the same format | Read `debiandvd.go:481-499` + live `cdimage.debian.org/.../SHA256SUMS` | Identical `<hex>␣␣<name>` shape, no `./`, no `*`. The "one format" premise for D-parser holds. |
@@ -103,14 +103,18 @@ precise failure mode D2 exists to forbid. So the registration names the covered 
 **declared-covered file missing from the sidecar is a D2 error**; any other file's absence is not.
 
 **The rename framing was wrong and is withdrawn.** An earlier revision justified this field with the
-upstream ISO rename §2 documents. A rename does not reach it, in either branch:
+upstream ISO rename §2 documents. Neither rename branch can silently land unverified bytes — but
+they are caught by *different* checks, so "D2a is the rename guard" is not the right statement:
 
 - **Manifest tracks the rename** (the normal case) — `netbootxyz.go:250-252` already errors
   (`allowlisted file %q is not in the manifest entry … upstream may have renamed or dropped it`)
   *before* any `Artifact` is constructed, and §4.3's own sketch keeps that check ahead of the
   `checksumCovers` branch. So the allowlist error is what surfaces, never D2a's.
-- **Manifest lags the rename** — `artifactURL` composes a URL for a nonexistent asset, the fetch
-  404s, `landArtifact` returns an error, and the version is retried next tick. Nothing lands.
+- **Manifest lags the rename** — the entry's `path` has advanced to the new release while its
+  `files` list still names the old ISO. Membership passes, but the sidecar fetched from the new
+  `path` keys the NEW name, so the old name is uncovered and **D2a errors** — inside `Artifacts`,
+  before any download, rather than the 404 this bullet previously predicted. So D2a covers this
+  rename branch too; what it *uniquely* covers is still the sidecar-only desync below.
 
 This also means an earlier revision **deleted a correct statement** when it "corrected" M4. M4's
 observation is about *fetch* ordering (the ~90-byte sidecar GET precedes the file loop — true), not
@@ -263,11 +267,10 @@ register(netbootxyzOS{
     // publishes this sidecar; no other tool's releases do. It is NOT in `files`:
     // it is verification material, never cached and never served.
     checksums: "sha256-checksums.txt",
-    // D2a: files the sidecar MUST list. Guards a sidecar-only desync — manifest
-    // and asset still say tails-amd64.iso while the sidecar drops or rekeys that
-    // line — which nothing else in the pipeline notices, so the 1.94 GB ISO would
-    // silently land not-verifiable. NOT the rename case: an upstream rename is
-    // already caught by the manifest-membership check below.
+    // D2a: the ISO is the file the sidecar MUST cover. Its sole UNIQUE
+    // coverage is a sidecar-only desync; see the field's doc comment for how
+    // the two upstream-rename branches divide between this and the
+    // manifest-membership check.
     checksumCovers: []string{"tails-amd64.iso"},
 })
 ```
@@ -351,9 +354,12 @@ verifiable — records `verified=1` for a good Tails version, an improvement on 
 **Ordering note.** Two different orderings, and an earlier revision conflated them (re-review BL-2).
 *Fetch* order: the sidecar GET precedes the per-file loop, so on an upstream rename booty pays the
 ~90-byte fetch and then errors — that was Gate 1 M4's point, and it stands. *Error* order: the
-manifest-membership check still runs before the `checksumCovers` branch, so on a rename the
-**allowlist error is what surfaces**, never D2a's. Both statements are true; only the second says
-which mechanism catches a rename, and it is the allowlist check (D2a).
+manifest-membership check runs before the `checksumCovers` branch, so **when the manifest has
+tracked the rename** — upstream's `e.Files` lists the new name while booty's own `files` allowlist
+still names the old one — the allowlist error is what surfaces and D2a is never reached. **When the
+manifest lags the rename** — `path` advanced, `files` unchanged — membership passes and D2a is what
+errors. Which mechanism catches a rename therefore depends on the branch; neither lets unverified
+bytes land, and both fire inside `Artifacts` before any download.
 
 ### 4.4 No memoization
 
@@ -390,7 +396,7 @@ func ParseSums(body []byte) (map[string]string, error)
 that "existing DVD tests cover it" was half true: `parseSHA256SUMS` has **no direct unit test**; it
 is covered only transitively via `verifyDVDChecksums` (`debiandvd_test.go:174/181/214`), and the
 `ensureDebianDVD` state-machine tests stub it out entirely through `swapDVDSeams`. The move
-therefore ships with direct unit tests for `ParseSums` (§10.13).
+therefore ships with direct unit tests for `ParseSums` (§10.17).
 
 ---
 
@@ -751,7 +757,8 @@ survived three review rounds; that is the failure mode this requirement exists t
 2. Sidecar 404 → `Artifacts` errors (D2).
 3. Sidecar malformed → `Artifacts` errors (D2).
 4. **Sidecar valid but missing a `checksumCovers` entry → `Artifacts` errors (D2a).** This is the
-   upstream-rename case §2 shows has happened twice; it must not silently downgrade.
+   a sidecar-only desync, or a rename the manifest has not yet tracked (§3, D2a); it must not
+   silently downgrade.
 5. Every registration's `checksumCovers` ⊆ `files`.
 6. A tool with no `checksums` issues no sidecar request and behaves exactly as today.
 7. The registry membership test needs no change (no OS added) — confirm.
@@ -823,8 +830,9 @@ Each entry checked against the file.
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Upstream stops publishing the sidecar | Medium | D2 fails loud; the cached ISO keeps booting; a warning every pass rather than a silent downgrade. |
-| Upstream renames the ISO asset | Medium | The **manifest-membership check** errors (`netbootxyz.go:250`), before any artifact is built — not D2a. Confirmed to have happened twice historically. |
-| Sidecar-only desync (sidecar drops or rekeys the ISO line) | Medium | D2a errors explicitly. This, not the rename, is what D2a uniquely catches. |
+| Upstream renames the ISO asset, manifest tracks it | Medium | The **manifest-membership check** errors (`netbootxyz.go:250`), before any artifact is built — D2a is never reached. Confirmed to have happened twice historically. |
+| Upstream renames the ISO asset, manifest lags it | Medium | Membership passes; the sidecar from the new `path` keys the new name, so **D2a** errors — still inside `Artifacts`, before any download. |
+| Sidecar-only desync (sidecar drops or rekeys the ISO line) | Medium | D2a errors explicitly. This is what D2a *uniquely* catches — nothing else in the pipeline notices. |
 | D4a makes a boot unavailable that `warn` would have allowed | Low–Medium | Only for a `Large` artifact whose digest is definitively wrong. Where a prior version is cached it stays on disk and menu-bootable — but on a **first-ever** Tails cache there is no fallback, so the target has no bootable Tails at all where the pre-D4a default would have booted something. Accepted: serving unexplained divergence as an anonymity distro is the worse outcome. |
 | The retry guard masks a real problem | Low | `verify_err` is recorded and API-exposed on every rejection; the guard suppresses only *re-downloads*, never the verdict or the log. |
 | Hashing stalls a reconcile pass | Low | 3.55 s measured (~20 s on a slow spindle), once per version download, inside an errgroup slot already occupied by a multi-GB transfer. |
