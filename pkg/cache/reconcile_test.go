@@ -855,3 +855,123 @@ func TestReconcileTarget_DebianDVDDivergesFromGenericNetinstPath(t *testing.T) {
 		t.Fatalf("netinst-mode target must proceed into the generic path (manual pin upserted); got %+v", rows)
 	}
 }
+
+// TestReconcileTarget_VerificationRejectionRateLimitsRedownload is the guard's
+// end-to-end proof, using Tails specifically because it is the only target
+// whose Artifacts issues an upstream fetch of its own — which makes
+// sidecarHits==0 a real assertion about the guard's PLACEMENT (before
+// o.Artifacts), not just about the download.
+//
+// Phase 1 asserts the IN-WINDOW SKIP specifically. A test that only checks
+// "it retries eventually" passes against a guard disabled by the NULL-modifier
+// bug, which is why the skip is the load-bearing arm.
+func TestReconcileTarget_VerificationRejectionRateLimitsRedownload(t *testing.T) {
+	const tag = "7.10-17629562"
+	iso := []byte("GOOD-ISO-BYTES")
+	sidecar := hexSHA(iso) + "  tails-amd64.iso\n"
+
+	sidecarHits, assetHits := new(atomic.Int32), new(atomic.Int32)
+	assets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sha256-checksums.txt") {
+			sidecarHits.Add(1)
+			_, _ = w.Write([]byte(sidecar))
+			return
+		}
+		assetHits.Add(1)
+		if strings.HasSuffix(r.URL.Path, "/tails-amd64.iso") {
+			_, _ = w.Write(iso)
+			return
+		}
+		_, _ = w.Write([]byte("BINARY"))
+	}))
+	t.Cleanup(assets.Close)
+
+	manifest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("endpoints:\n" +
+			"  tails:\n" +
+			"    path: /asset-mirror/releases/download/" + tag + "/\n" +
+			"    files:\n" +
+			"    - vmlinuz\n" +
+			"    - initrd.img\n" +
+			"    - 9990-misc-helpers.sh\n" +
+			"    - tails-amd64.iso\n" +
+			"    os: tails\n" +
+			"    version: '7.10'\n"))
+	}))
+	t.Cleanup(manifest.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	root := t.TempDir()
+	viper.Set(config.DataDir, root)
+	viper.Set(config.NetbootxyzEndpointsURL, manifest.URL)
+	viper.Set(config.NetbootxyzAssetBase, assets.URL)
+	viper.Set(config.SignaturePolicy, "warn")
+	ostype.ResetNetbootxyzCache()
+	t.Cleanup(ostype.ResetNetbootxyzCache)
+
+	store := newReconcileStore(t)
+	tid, err := store.CreateTarget(db.Target{
+		OS: "tails", Arch: "amd64", Params: "{}", Enabled: true, RetainN: 1,
+		Mode: "discovery", Source: "catalog",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	// Seed the state a prior tick's rejection leaves behind: the version row plus
+	// UpsertCacheEntryArchived's four-column failure-visibility row.
+	if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: tag, Source: "discovered"}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	tvID, err := store.TargetVersionID(tid, tag)
+	if err != nil {
+		t.Fatalf("TargetVersionID: %v", err)
+	}
+	if err := store.UpsertCacheEntryArchived(tvID, "tails-amd64.iso: checksum mismatch"); err != nil {
+		t.Fatalf("UpsertCacheEntryArchived: %v", err)
+	}
+
+	target, err := store.GetTarget(tid)
+	if err != nil {
+		t.Fatalf("GetTarget: %v", err)
+	}
+
+	// Phase 1 — inside the default 1h window: nothing is fetched at all.
+	if err := reconcileTarget(t.Context(), store, 2, *target); err != nil {
+		t.Fatalf("reconcileTarget (guarded): %v", err)
+	}
+	if n := assetHits.Load(); n != 0 {
+		t.Errorf("guarded version downloaded %d artifacts; a rejected version must not re-pull 1.94 GB every tick", n)
+	}
+	if n := sidecarHits.Load(); n != 0 {
+		t.Errorf("guarded version issued %d sidecar fetches; the guard must sit BEFORE o.Artifacts", n)
+	}
+	if _, err := os.Stat(cacheDir("tails", "-", "amd64", tag)); !os.IsNotExist(err) {
+		t.Error("guarded version created its cache dir; nothing should have run")
+	}
+
+	// Phase 2 — the same state, window shrunk to zero: the guard releases and the
+	// version is retried. Shrinking the package var beats sleeping an hour.
+	prev := verifyRetryAfter
+	verifyRetryAfter = 0
+	t.Cleanup(func() { verifyRetryAfter = prev })
+
+	if err := reconcileTarget(t.Context(), store, 2, *target); err != nil {
+		t.Fatalf("reconcileTarget (released): %v", err)
+	}
+	if n := sidecarHits.Load(); n == 0 {
+		t.Fatal("after the window elapsed the version must be retried; the guard never self-clears")
+	}
+	if n := assetHits.Load(); n == 0 {
+		t.Fatal("after the window elapsed the artifacts must be re-downloaded")
+	}
+	// The retry succeeds against a good sidecar, so the version lands verified.
+	rows, err := store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
+	}
+	if rows[0].Verified == nil || !*rows[0].Verified {
+		t.Fatalf("the retried Tails version must record verified=1, got %v (verifyErr %q)",
+			rows[0].Verified, rows[0].VerifyErr)
+	}
+}

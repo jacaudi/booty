@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
@@ -13,6 +14,19 @@ import (
 	"github.com/spf13/viper"
 	"golang.org/x/sync/errgroup"
 )
+
+// verifyRetryAfter bounds how often a version REJECTED BY VERIFICATION is
+// re-downloaded. Without it, D4a turns a persistent checksum mismatch into a
+// 1.94 GB re-pull every --cacheInterval forever: rejection runs
+// removeVersionDir, which RemoveAlls the directory including the in-progress
+// file, so the next tick starts from zero.
+//
+// A package var, not a viper key: the consumer and its tests are both
+// `package cache`, so the repo's "network dependencies must be viper-backed"
+// rule — which is about a dependency read from ANOTHER package — does not
+// apply, and ostype's discoveryTimeout is the cheaper local precedent. Promote
+// it to a flag when an operator actually needs to tune it, not before.
+var verifyRetryAfter = time.Hour
 
 // reconcileTarget brings ONE target's cache into its desired state. It is called
 // only from the reconcile coordinator goroutine, so every DB write here is
@@ -133,6 +147,37 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		if slices.Contains(manual, version) {
 			source = "manual"
 		}
+		// D6: a version rejected by verification is not retried until
+		// verifyRetryAfter elapses. Placed BEFORE o.Artifacts so a guarded
+		// version also skips the upstream metadata fetch (for Tails, the
+		// per-release sidecar GET) — both placements converge, only this one
+		// avoids the fetch.
+		//
+		// Version-level and OS-agnostic on purpose: every OS reaching this loop
+		// gets the same rate limit. It does NOT cover Debian DVD targets, which
+		// return above this loop — that hazard is pre-existing and tracked
+		// separately (#77), not fixed here.
+		//
+		// Transport failures are never guarded: they return before any
+		// cache_entries row is written, so they cannot forge the four-column
+		// signature VerifyRejectedWithin matches on.
+		blocked, guardErr, gerr := store.VerifyRejectedWithin(t.ID, version, verifyRetryAfter)
+		if gerr != nil {
+			return fmt.Errorf("cache: verify-retry guard %d/%s: %w", t.ID, version, gerr)
+		}
+		if blocked {
+			// A RELATIVE bound, not an absolute next-attempt time: computing the
+			// latter needs either a Go-side parse of the UTC fetched_at TEXT
+			// column (which yields a future timestamp — see
+			// db.VerifyRejectedWithin) or a second SQL expression. The guard
+			// suppresses only the RE-DOWNLOAD; the verdict and verify_err stay
+			// recorded and API-exposed.
+			slog.Warn("cache: version rejected by verification; not retrying yet",
+				"os", t.OS, "arch", t.Arch, "version", version,
+				"verifyErr", guardErr, "retryAfter", verifyRetryAfter)
+			continue
+		}
+
 		dir := cacheDir(cacheName, segment, t.Arch, version)
 		arts, aerr := o.Artifacts(ctx, version, t.Arch, params)
 		if aerr != nil {
