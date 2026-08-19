@@ -410,7 +410,7 @@ embedded keyring; Talos/Debian: no mechanism yet), and the **policy** is one glo
 | Value | Behavior |
 |-------|----------|
 | `strict` | Any verifiable artifact that **fails** verification does not land — the whole version is refused and the prior cached version keeps serving. Refuses **both** failure classes (below). |
-| `warn` *(default)* | A GPG **signature mismatch** (forgery signal) is refused, exactly as under `strict`. A **checksum / non-forgery** failure lands anyway, logs a `WARN`, and records `verified=0`. |
+| `warn` *(default)* | A GPG **signature mismatch** (forgery signal) is refused, exactly as under `strict`. A **checksum / non-forgery** failure lands anyway, logs a `WARN`, and records `verified=0` — **except on a resumable (multi-GB) artifact, which is refused**; see below. |
 | `off` | No verification runs; artifacts land unchecked and `verified` stays `NULL`. |
 
 Verification is **admission-time only** and applies to the newest discovered version; a passing
@@ -433,9 +433,15 @@ are treated differently:
   does not boot), identically to `strict`.
 - **Corruption / non-forgery failure** — a SHA-256 mismatch, a short/unparseable sidecar, or an
   unknown/expired signing key. Under `warn` these **land** (logged, `verified=0`) — the availability
-  trade-off `warn` exists for; under `strict` they are **refused**.
+  trade-off `warn` exists for; under `strict` they are **refused**. **Exception: a resumable
+  (multi-GB) artifact — today only the Tails ISO — is REFUSED under every policy except `off`.**
+  `warn` has no availability to trade there: landing a corrupt multi-GB image records `verified=0`
+  while the reconciler's settled-version skip (which deliberately ignores `verified`) then never
+  re-downloads it, so the corruption would be permanent and would survive a later switch to
+  `strict`. Unexplained divergence from what upstream published is not served.
 
-So `strict` refuses every failure class; `warn` refuses only forgeries; `off` verifies nothing.
+So `strict` refuses every failure class; `warn` refuses forgeries, plus checksum failures on
+resumable (multi-GB) artifacts; `off` verifies nothing.
 
 **`warn` is advisory against a capable network attacker — use `strict` in production.** Because a
 Flatcar artifact and its `.sig` are fetched from the **same channel**, an attacker who can tamper the
@@ -451,6 +457,34 @@ present) versions in place and does not re-verify them. The recourse is
 `POST /api/v1/cache/{id}/reverify`, which re-checks the version under the current policy and re-records
 `verified=0` so the operator can **see** it; removal is then a manual decision (`DELETE` is `403`
 until auth lands in P10).
+
+### Tails is now checksum-verified (#76)
+
+netboot.xyz's asset mirror publishes a `sha256-checksums.txt` beside each Tails release. booty
+fetches it, resolves the ISO's digest, and verifies the completed download before the file is moved
+into the cache — so an unverified 1.94 GB image never occupies the path `/data/` serves.
+
+- **Under `strict`**, a Tails ISO whose digest does not match is refused, as any verification failure
+  is. This is new: tool artifacts previously had no mechanism and landed under every policy.
+- **Under the default `warn`**, it is *also* refused — see the exception above. So this change is
+  visible in default deployments, not only strict ones.
+- **Under `off`**, nothing is verified and the ISO lands unchecked, unchanged.
+- If the sidecar is unfetchable or malformed, booty logs a warning and skips that version for the
+  tick rather than silently caching it unverified. The existing cache keeps serving and booting; only
+  *updates* pause.
+- A version rejected by verification is not re-downloaded until a retry window (currently one hour)
+  elapses, so a persistently divergent upstream cannot re-pull a multi-GB image every cache interval.
+  The verdict and its error stay visible in the Cache view and via
+  `POST /api/v1/cache/{id}/reverify` throughout.
+
+**This is integrity, not provenance.** The checksum file ships on the same GitHub release as the ISO,
+over the same TLS to the same origin, with no independent trust anchor. It defends against corruption
+in transit, a truncated transfer, a resume that appended to the wrong bytes, and a damaged mirror or
+CDN. It does **not** defend against a compromised release, a compromised netboot.xyz account, or an
+attacker with write access to the mirror — any of whom replaces the ISO and its checksum together.
+GPG verification of Tails' own signing key is not implemented.
+
+The other seven tools publish no checksums at all and remain not-verifiable under every policy.
 
 ### Flatcar signing-key rotation runbook
 

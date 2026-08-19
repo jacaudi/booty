@@ -113,9 +113,11 @@ also EFI-only** and emits a structurally identical guard message ("ZFSBootMenu r
 EFI client; this machine booted in BIOS mode.") on a BIOS-mode client, for the same reason —
 its recovery image is an EFI executable with no BIOS equivalent.
 
-Tool artifacts are never checksum- or signature-verified — netboot.xyz publishes neither — so
-their `verified` state stays unset (NULL) in the Cache view regardless of
-`--signaturePolicy`. Tools are opt-in: none are cached by default, see
+Most tool artifacts are never checksum- or signature-verified — netboot.xyz publishes no
+verification material for them — so their `verified` state stays unset (NULL) in the Cache view
+regardless of `--signaturePolicy`. **Tails is the exception:** its release publishes a
+`sha256-checksums.txt` that booty verifies the ISO against, so a Tails row shows a real
+verified/failed state like any other OS. Tools are opt-in: none are cached by default, see
 [Add a target](#1-add-a-target-catalogyaml) below.
 
 ---

@@ -95,6 +95,12 @@ a specific point-release discovery and codename, not an arbitrary path
 segment. A value must be path-safe because it becomes a cache-directory and
 URL segment (`ValidatePathParam`); an unsafe value is rejected.
 
+**Tails alone carries an upstream checksum.** netboot.xyz's asset mirror publishes a
+`sha256-checksums.txt` beside every Tails release, so booty verifies `tails-amd64.iso` against it
+before caching (see [CONFIGURATION.md](../CONFIGURATION.md) → Signature verification). The other
+seven tools publish no checksums or signatures, so their artifacts land not-verifiable under every
+`--signaturePolicy` — an accepted risk of sourcing them from netboot.xyz.
+
 **Tool `retain` must be `1`.** `systemrescue`, `uefi-shell`, `memtest86plus`,
 `clonezilla`, `rescatux`, `zfsbootmenu`, `shredos`, and `tails`
 are netboot.xyz-sourced tools with no version grammar — their release tags
