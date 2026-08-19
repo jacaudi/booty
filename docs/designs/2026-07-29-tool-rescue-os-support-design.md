@@ -517,6 +517,13 @@ Large artifact that declares a checksum, because the resumable path has no verif
 all. Setting `SHA256` on it today would break caching rather than verify it. The follow-up must
 first give `downloadLargeFile` a verification path.
 
+**Now built by #76:** that follow-up shipped, so the hard-fail described above is **past behaviour,
+not current**. `downloadLargeFile` was split into `downloadLargeInto` (download, no rename) plus a
+DVD-only wrapper; `landArtifact` hashes the completed in-progress file and verifies it *before* the
+rename; and the `Large` guard was narrowed to `SigURL` alone. A `Large` artifact declaring a
+checksum is now verified rather than refused — see
+`docs/designs/2026-08-02-tails-sha256-verification-design.md` D4/D4a/D4b.
+
 Recorded explicitly because the risk profile differs from the existing cases: these are third-party
 binaries executed with full hardware privilege on bare metal, and a rescue tool is exactly the
 artifact an attacker would want to poison.

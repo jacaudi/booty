@@ -163,7 +163,7 @@ if a.Large && a.SigURL != "" {
 Still fail-closed. The sha256 half is removed *because the path now exists* — the only honest reason
 to remove a fail-closed guard.
 
-### D4a — a `Large` artifact that fails its checksum never lands, under any policy
+### D4a — a `Large` artifact that fails its checksum never lands, under every policy except `off`
 
 **Added in response to Gate 1 B2, and the most consequential change in this revision.**
 
@@ -448,7 +448,7 @@ func landArtifact(ctx, dir, a, policy) (bool, artifactVerdict, error) {
         if a.SigURL != "" { return ...unsupported (D4)... }
         inProgress = final + DownloadSuffix
         if err := downloadLargeInto(ctx, a.URL, inProgress); err != nil { return false, artifactVerdict{}, err }
-        if a.SHA256 != "" {
+        if a.SHA256 != "" && policy != "off" {
             // D3: hash the COMPLETED file — resume-via-Range means the stream
             // carried only a delta, and the 416 branch streamed nothing at all.
             // D4b: a read failure here is infrastructure, not a verdict. Returning
@@ -483,6 +483,16 @@ func landArtifact(ctx, dir, a, policy) (bool, artifactVerdict, error) {
     }
 }
 ```
+
+**The `&& policy != "off"` above is a divergence from this sketch as first written, and it is not
+behaviour-neutral (final-review S4).** The shipped `verify.go:134` carries that conjunct; this sketch
+read `if a.SHA256 != "" {`. The difference bites in exactly one configuration: under `off`, with a
+**completed but unreadable** in-progress file, the original sketch reaches `hashFile`, returns the
+error, and lands nothing — while the shipped code skips the hash entirely and lands the unreadable
+file as cached with `verified=NULL`. The shipped form is the intended one on both counts: `off` means
+off (§5.2 item 1), and hashing 1.94 GB only to discard the result would spend the measured 3.55 s
+(~20 s on a slow spindle) in the one configuration that explicitly asked for no verification. Sketch
+corrected to match the code, with the divergence recorded rather than smoothed over.
 
 **What this buys, stated precisely (Gate 1 S5).** One disposition path instead of two: the `Large`
 branch chooses only *how bytes arrive* and *which suffix marks them*. It is **not** a package-wide
@@ -669,6 +679,21 @@ guard logs the version, its `verify_err`, and `retryAfter` as a duration ("retry
 - **Self-clearing, so no new API surface.** A transient corruption heals on the next attempt after
   the window. A permanent upstream mismatch stays visible via `verify_err`, which the cache API
   already exposes.
+- **A co-occurring transport error ERASES a definitive rejection, and disarms this guard
+  (final-review S1 — documented here, not fixed).** The bullet above reads no-row-on-transport-error
+  as purely protective. That reading is correct in isolation and incomplete: `reconcile.go`'s
+  `vg.Wait() != nil → continue` discards **every** verdict for the version, not just the erroring
+  artifact's. So if the Tails ISO fails its checksum — `reject()`, `landed=false`, and **no error** —
+  while *any sibling artifact in the same version* returns a transport error, the rejection is thrown
+  away with it: no `cache_entries` row is written, `UpsertCacheEntryArchived` never runs, the
+  four-column signature never appears, and **`VerifyRejectedWithin` cannot arm**. The next tick
+  re-downloads 1.94 GB from zero, and keeps doing so every `--cacheInterval` for as long as both
+  conditions hold. This is reachable for this OS family rather than theoretical:
+  `pkg/ostype/netbootxyz.go:144-149` records that netboot.xyz's `endpoints.yml` lists 7 files for
+  memtest86plus while its own asset mirror serves only 3, so a manifest-listed file that 404s is an
+  *observed* upstream state. Not fixed in the review fix wave that found it: closing it means
+  recording a rejection even when a sibling errored, which redefines what `landed=false` together
+  with `err != nil` means for version-level atomicity — a design decision, not a comment fix.
 
 ### 7.4 Configuration
 
@@ -829,6 +854,23 @@ Each entry checked against the file.
   both.** They define the `verified` tri-state generically and never assert that tool artifacts are
   unverifiable, so Tails moving `NULL → 1` changes which rows hold which value, not what the column
   means.
+
+**The enumeration above proved incomplete (final-review S3).** It is preserved as written, because
+the lesson is the point: a surface list checked file-by-file at design time still missed five files
+and got a sixth verdict wrong.
+
+- `docs/schema/API.md` — the "no change, verified by reading both" verdict was **wrong for API.md**.
+  The branch did change it (+1/−1), tightening the `reverify` row to state that for an OS whose
+  artifact list is fetched upstream a transient failure returns **500**, while a superseded version
+  returns a clean no-verdict (§6.3). `DATABASE.md` held, unchanged.
+- Changed by the branch and absent from the list entirely: `docs/schema/STORAGE.md` (the `.partial`
+  section, which said *every* download stages via `.partial`), `docs/BOOT-MENU.md` (tools are never
+  verified), `README.md` (the integrity bullet), `deploy/docker-compose.yml` (the
+  `--signaturePolicy` sample comment), and `cmd/main.go`'s `--signaturePolicy` help string.
+- The `cmd/main.go` miss is the instructive one: it is a `.go` file, so it sat outside the `docs/`
+  glob used to sweep for stale policy wording, and a false `warn` description survived five
+  documentation fixes there. `pkg/config/config.go`'s `ValidateSignaturePolicy` comment — the actual
+  single authority for what the three values mean — survived six.
 
 ---
 

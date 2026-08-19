@@ -460,11 +460,22 @@ present) versions in place and does not re-verify them. The recourse is
 `verified=0` so the operator can **see** it; removal is then a manual decision (`DELETE` is `403`
 until auth lands in P10).
 
+**A rejected version is rate-limited before it is re-downloaded.** When verification refuses a
+version, booty does not re-download it until a retry window (currently one hour, not tunable)
+elapses — so a persistently divergent upstream cannot re-pull its artifacts every
+`--cacheInterval`. The guard is **version-level and OS-agnostic**: it covers Flatcar, Fedora CoreOS,
+Debian netinst, Talos and the netboot.xyz tools alike, not only Tails. Only the re-download is
+suppressed; the verdict and its `verify_err` stay recorded and API-exposed throughout, and a
+transient failure heals on the first attempt after the window. Debian **DVD** targets are the one
+exception — they are dispatched before this loop and the guard never runs for them, a pre-existing
+gap tracked as [jacaudi/booty#77](https://github.com/jacaudi/booty/issues/77).
+
 ### Tails is now checksum-verified (#76)
 
 netboot.xyz's asset mirror publishes a `sha256-checksums.txt` beside each Tails release. booty
 fetches it, resolves the ISO's digest, and verifies the completed download before the file is moved
-into the cache — so an unverified 1.94 GB image never occupies the path `/data/` serves.
+into the cache — so an unverified 1.94 GB image never occupies the path `/data/` serves (under
+`strict` and `warn`; under `off` nothing is verified at all, as the third bullet below says).
 
 - **Under `strict`**, a Tails ISO whose digest does not match is refused, as any verification failure
   is. This is new: tool artifacts previously had no mechanism and landed under every policy.
