@@ -93,20 +93,19 @@ func dataFileHandler(dataDir string) http.Handler {
 	})
 }
 
-// publicDirName is the dataDir subtree for operator assets the BOOTED NODE
-// fetches over HTTP — the shell scripts examples/config/ignition.yaml points
-// at. It exists so must-serve assets and must-not-serve templates stop sharing
-// <dataDir>/config/, which also holds the ignition/machineconfig/preseed
-// templates booty renders server-side and must never publish.
-const publicDirName = "public"
-
-// dataSubtrees are the only subtrees of dataDir that /data/ serves. Serving
-// dataDir wholesale published booty.db (config.DatabasePathValue defaults it
-// there, and deploy/docker-compose.yml mounts one volume for the lot) — schema,
-// hosts, and config_revisions.source_b64, the plaintext per-host boot configs.
+// dataSubtrees are the only subtrees of dataDir that /data/ serves: the boot
+// artifact cache, and "public" for operator assets the BOOTED NODE fetches over
+// HTTP (the shell scripts examples/config/ignition.yaml points at). "public"
+// exists so must-serve assets stop sharing <dataDir>/config/ with the
+// ignition/machineconfig/preseed templates booty renders server-side, which
+// must never be published.
+//
+// Serving dataDir wholesale published booty.db — config.DatabasePathValue
+// defaults it there and deploy/docker-compose.yml mounts one volume for the lot
+// — including config_revisions.source_b64, the plaintext per-host boot configs.
 // An allowlist is the only form that does not need extending for every new file
 // something writes to dataDir.
-var dataSubtrees = []string{"/" + cache.DirName, "/" + publicDirName}
+var dataSubtrees = []string{"/" + cache.DirName, "/public"}
 
 // isAllowedDataPath reports whether a /data/-relative request path lies inside
 // one of dataSubtrees. Everything else under dataDir 404s.
