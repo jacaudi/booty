@@ -470,6 +470,9 @@ func TestVerifyVersionToolWithoutMaterialIsNoVerdict(t *testing.T) {
 	if verified != nil {
 		t.Fatalf("a tool with no verification material must record NULL, got %v (%q)", *verified, verifyErr)
 	}
+	if verifyErr != "" {
+		t.Errorf("verifyErr = %q, want empty: no verdict must carry no failure message", verifyErr)
+	}
 }
 
 // tailsReverifyFixture stands up a manifest + asset host for tails and returns

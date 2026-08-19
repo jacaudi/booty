@@ -159,13 +159,29 @@ func registerCache(api huma.API, deps APIDeps) {
 		// reader of that memo, so a stale manifest would mean comparing a cached
 		// file against a different release's digests. This is NOT the #73
 		// regression: that was a per-TARGET reset inside reconcileTarget, not a
-		// rare manual endpoint.
+		// rare manual endpoint. The netboot.xyz reset does carry a mid-pass cost
+		// — see ResetNetbootxyzCache's doc comment, which states it rather than
+		// repeating it here.
 		ostype.ResetStreamsCache()
 		ostype.ResetNetbootxyzCache()
 		verified, verifyErr, verr := cache.VerifyVersion(ctx, deps.Store, n)
 		if verr != nil {
 			return nil, huma.Error500InternalServerError("verify", verr)
 		}
+		// Recording is UNCONDITIONAL, which touches the verification-rejection
+		// retry guard (db.VerifyRejectedWithin) two ways. Stated here because
+		// this is where it happens; both are deliberate, neither is fixed here.
+		//
+		// 1. A nil verdict — a superseded tool tag, or a tool declaring no
+		//    material — writes verified=NULL and an empty verify_err, so the
+		//    guard's four-column predicate stops matching and the guard is
+		//    RELEASED early. Defensible: an operator explicitly asked.
+		// 2. A row already REJECTED for a checksum mismatch has had its
+		//    directory removed (D4a) and sits at size 0, so reverify finds the
+		//    artifact absent and overwrites the operator-meaningful "checksum
+		//    mismatch" with "artifact absent". The predicate still matches
+		//    (verify_err stays non-empty) and fetched_at is untouched, so the
+		//    guard stays armed — with a degraded reason.
 		if err := deps.Store.SetCacheVerified(row.TargetVersionID, verified, verifyErr); err != nil {
 			return nil, huma.Error500InternalServerError("record verdict", err)
 		}
