@@ -405,7 +405,9 @@ Debian host, and the host's `GET /preseed` serves the translated preseed.
 
 booty verifies the integrity of the boot artifacts it downloads before serving them. The mechanism
 is **per-OS** (Fedora CoreOS: SHA-256 from the streams JSON; Flatcar: detached GPG `.sig` against an
-embedded keyring; Talos/Debian: no mechanism yet), and the **policy** is one global flag:
+embedded keyring; Tails: SHA-256 from its netboot.xyz release's `sha256-checksums.txt`, see
+[below](#tails-is-now-checksum-verified-76); Talos/Debian and the other seven netboot.xyz tools: no
+mechanism yet), and the **policy** is one global flag:
 
 | Value | Behavior |
 |-------|----------|

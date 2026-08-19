@@ -259,6 +259,11 @@ package. A ~15-line `pkg/checksum` has the same import-graph cost and an honest 
 
 ### 4.1 Registration
 
+The `checksumCovers` comment below is reproduced from what **shipped**
+(`pkg/ostype/tools.go:103-107`), not from this document's original draft: the authoring-time text
+asserted "NOT the rename case", which §3's corrected D2a withdraws. Updated rather than annotated
+because the superseded wording is the very framing D2a forbids.
+
 ```go
 register(netbootxyzOS{
     name:      "tails",
@@ -758,7 +763,7 @@ survived three review rounds; that is the failure mode this requirement exists t
    left not-verifiable. Redirect via `viper.Set(config.NetbootxyzAssetBase, …)`.
 2. Sidecar 404 → `Artifacts` errors (D2).
 3. Sidecar malformed → `Artifacts` errors (D2).
-4. **Sidecar valid but missing a `checksumCovers` entry → `Artifacts` errors (D2a).** This is the
+4. **Sidecar valid but missing a `checksumCovers` entry → `Artifacts` errors (D2a).** This is
    a sidecar-only desync, or a rename the manifest has not yet tracked (§3, D2a); it must not
    silently downgrade.
 5. Every registration's `checksumCovers` ⊆ `files`.
