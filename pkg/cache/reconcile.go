@@ -163,9 +163,8 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		// signature VerifyRejectedWithin matches on.
 		blocked, guardReason, gerr := store.VerifyRejectedWithin(t.ID, version, verifyRetryAfter)
 		if gerr != nil {
-			// No ids here: db.VerifyRejectedWithin already wraps as
-			// "db: verify-rejected guard %d/%s", so repeating them would print
-			// the same target/version pair twice in one operator-facing line.
+			// No ids: db.VerifyRejectedWithin already wraps as
+			// "db: verify-rejected guard %d/%s", so repeating them double-prints.
 			return fmt.Errorf("cache: verify-retry guard: %w", gerr)
 		}
 		if blocked {
