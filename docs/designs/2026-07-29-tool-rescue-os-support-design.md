@@ -47,7 +47,9 @@ become ordinary cache targets and therefore ordinary menu entries.
   exists and must not misbehave — see §6.4.)
 - Mirroring netboot.xyz's full endpoint catalogue. Eight curated tools, chosen 2026-07-01.
 - Building booty-specific tool images, or customizing the upstream ones.
-- Signature/checksum verification of tool artifacts — see §8.5, no mechanism exists upstream.
+- Signature/checksum verification of tool artifacts — see §8.5. No mechanism exists *in the
+  manifest*; Tails' release does publish a sha256 sidecar, wired up by
+  [#76](https://github.com/jacaudi/booty/issues/76).
 
 ## 3. Decisions
 
@@ -97,7 +99,8 @@ which is precisely why `streamsCache` has one.
   at `https://github.com/netbootxyz<path><file>`. Each tool registration carries a `files []string`
   allowlist (D10); `Artifacts` requests only those and **fails loudly** if an allowlisted name is
   absent from the manifest entry. An empty allowlist means every manifest file. No `SHA256`/`SigURL`
-  — none are published (§8.5).
+  — none are published *in the manifest* (§8.5). #76 later sources Tails' digest from its
+  release sidecar.
 - `RequiredParams` — empty. Tools have no path-discriminating params.
 - `ValidateVersion` — path-safe charset (§8.2).
 - `CompareVersions` — string compare (§8.4 documents the consequences).
@@ -433,6 +436,10 @@ and have both delegate. Verified: the existing charset accepts all eight tool ta
   `retained` empty with `pruneDiscovered=false`; cached tools stay bootable and un-archived.
 - **`reverify` on the API goroutine.** `VerifyVersion` → `o.Artifacts` (`verify.go:304-318`) means
   a `reverify` on a tool row would 500 during a netboot.xyz outage. Return not-verifiable instead.
+  **Revised by #76:** the blanket tool short-circuit is gone, because a Tails row now has a digest
+  worth re-checking. Only a version superseded upstream (`ostype.ErrVersionSuperseded`) returns a
+  clean no-verdict; a transient upstream failure does surface as a **500**, which is how Fedora
+  CoreOS has always behaved and is new for tools.
 - **Sequential targets mean a hung fetch stalls the rest of the pass.** Pin an explicit timeout on
   the `endpoints.yml` fetch.
 - **Host assertion applies to the constructed URL only, never the redirect target.**
@@ -480,6 +487,8 @@ empty and artifacts land as `classNotVerifiable`, which is accepted under **ever
 `strict` (`verify.go:107-116`). `--signaturePolicy strict` genuinely does not help — there is no
 mechanism *in the manifest* to be strict about. Same posture as Talos and Debian netboot artifacts
 today; the trust anchor is HTTPS plus GitHub's release-asset hosting.
+**Superseded for Tails by #76:** its ISO now carries a digest, so it is verified under every policy
+except `off` — and a failure is refused under `warn` as well as `strict`.
 
 **Narrowed at Gate 1 — the broader claim was false.** An earlier revision (and §2's non-goals) said
 "no mechanism exists upstream". That is true of the manifest but **not of every release**: the Tails
@@ -494,9 +503,12 @@ anonymity distro is the sharpest instance, yet it is the one with a checksum ava
 `Artifact.SHA256` already exists and `landArtifact` already consumes it, so wiring it is not
 speculative machinery. **Accepting the risk remains the decision** (checked: one release; whether
 every Tails release publishes these is unverified), but it is now an informed acceptance rather than
-a claim that nothing is available. Deferred to a **later slice**, not a blocker — slice 2 closed
-without wiring it, so "a slice-2 follow-up" would now read as work that was silently dropped.
-Tracked as [jacaudi/booty#76](https://github.com/jacaudi/booty/issues/76).
+a claim that nothing is available. **Resolved by
+[jacaudi/booty#76](https://github.com/jacaudi/booty/issues/76)** — see
+`docs/designs/2026-08-02-tails-sha256-verification-design.md`. The Tails ISO is now verified against
+its release's `sha256-checksums.txt`; giving the resumable (`Large`) downloader a verification path
+was the structural blocker, and that is what #76 built. The other seven tools publish nothing and
+remain not-verifiable.
 
 **One claim above is wrong and #76 records the correction.** "`Artifact.SHA256` already exists and
 `landArtifact` already consumes it, so wiring it is not speculative machinery" holds for *staged*
@@ -746,6 +758,10 @@ BIOS booting outright, and the failure would present as iPXE's `-ENOBUFS`, not a
   and no reconcile pass will notice — there are no checksums to compare against (§8.5). Record this
   as a known limitation; the mitigation if it ever bites is an operator-triggered re-fetch, which
   `POST /api/v1/cache/{id}/reverify` does not currently provide for tools (it short-circuits, §8.3).
+
+  **Narrowed by #76 for Tails:** a digest now exists to compare against, and reverify no longer
+  short-circuits the tool family — so an operator-triggered reverify detects mutated bytes at a fixed
+  tag. The limitation stands unchanged for the other seven tools.
 
 **What cannot be copied from upstream: the caching.** netboot.xyz sets
 `live_endpoint: https://github.com/netbootxyz` (`defaults/main.yml:182`) — its clients stream every
