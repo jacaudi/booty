@@ -408,22 +408,35 @@ func TestLandArtifactLargeUsesResumableDownloader(t *testing.T) {
 	}
 }
 
-// TestVerifyVersionToolIsNotVerifiable pins the short-circuit that keeps
-// reverify from ever reaching Artifacts for a tool: tools carry no
-// verification material at all, and Artifacts refuses any version that is
-// not upstream's current tag — so calling it on an archived tool version
-// would surface as a permanent 500 on POST /api/v1/cache/{id}/reverify
-// instead of the "no verdict" this test requires.
-//
-// Adaptation note: the task brief's literal test called
-// store.UpsertCacheEntry(db.CacheEntry{TargetVersionID: vid}), but the real
-// pkg/db API (pkg/db/cache.go:47) is
-// UpsertCacheEntry(targetVersionID, size int64) error — there is no
-// db.CacheEntry input type. Adapted to the real signature below.
-func TestVerifyVersionToolIsNotVerifiable(t *testing.T) {
+// TestVerifyVersionToolWithoutMaterialIsNoVerdict: a tool that declares no
+// checksums has nothing to check, so reverify aggregates zero verifiable
+// artifacts and records NULL. Before D5 this was delivered by a family
+// short-circuit; now it falls out of aggregateVerdicts, which is the more
+// honest mechanism — but it must still hold.
+func TestVerifyVersionToolWithoutMaterialIsNoVerdict(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 	viper.Set(config.DataDir, t.TempDir())
+
+	const tag = "8.00-32a14678"
+	assets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("BINARY"))
+	}))
+	t.Cleanup(assets.Close)
+	manifest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("endpoints:\n" +
+			"  memtest86plus:\n" +
+			"    path: /asset-mirror/releases/download/" + tag + "/\n" +
+			"    files:\n" +
+			"    - mt86p_x86_64\n" +
+			"    os: memtest86-plus\n" +
+			"    version: '8.00'\n"))
+	}))
+	t.Cleanup(manifest.Close)
+	viper.Set(config.NetbootxyzEndpointsURL, manifest.URL)
+	viper.Set(config.NetbootxyzAssetBase, assets.URL)
+	ostype.ResetNetbootxyzCache()
+	t.Cleanup(ostype.ResetNetbootxyzCache)
 
 	store := newReconcileStore(t)
 	tid, err := store.CreateTarget(db.Target{
@@ -433,36 +446,232 @@ func TestVerifyVersionToolIsNotVerifiable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTarget: %v", err)
 	}
-	// An ARCHIVED tag — deliberately NOT whatever upstream currently publishes.
-	const staleTag = "7.00-deadbeef"
 	if err := store.UpsertTargetVersion(db.TargetVersion{
-		TargetID: tid, Version: staleTag, Source: "discovered",
+		TargetID: tid, Version: tag, Source: "discovered", Cached: true,
 	}); err != nil {
 		t.Fatalf("UpsertTargetVersion: %v", err)
 	}
-	vid, err := store.TargetVersionID(tid, staleTag)
+	tvID, err := store.TargetVersionID(tid, tag)
 	if err != nil {
 		t.Fatalf("TargetVersionID: %v", err)
 	}
-	if err := store.UpsertCacheEntry(vid, 0); err != nil {
+	if err := store.UpsertCacheEntry(tvID, 10); err != nil {
 		t.Fatalf("UpsertCacheEntry: %v", err)
 	}
 	rows, err := store.ListCacheEntries(db.CacheFilter{})
 	if err != nil || len(rows) != 1 {
-		t.Fatalf("ListCacheEntries: %v (%d rows)", err, len(rows))
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
 	}
 
-	// Must NOT error, and must NOT reach Artifacts (which would refuse the stale
-	// tag and surface as a permanent 500 on reverify).
 	verified, verifyErr, err := VerifyVersion(t.Context(), store, rows[0].ID)
 	if err != nil {
-		t.Fatalf("VerifyVersion on a tool = %v, want nil error", err)
+		t.Fatalf("VerifyVersion: %v", err)
 	}
 	if verified != nil {
-		t.Errorf("verified = %v, want nil (no verdict)", verified)
+		t.Fatalf("a tool with no verification material must record NULL, got %v (%q)", *verified, verifyErr)
 	}
-	if verifyErr != "" {
-		t.Errorf("verifyErr = %q, want empty", verifyErr)
+}
+
+// tailsReverifyFixture stands up a manifest + asset host for tails and returns
+// the release tag they publish.
+func tailsReverifyFixture(t *testing.T, isoBody []byte) string {
+	t.Helper()
+	const tag = "7.10-17629562"
+	sidecar := hexSHA(isoBody) + "  tails-amd64.iso\n"
+
+	assets := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sha256-checksums.txt") {
+			_, _ = w.Write([]byte(sidecar))
+			return
+		}
+		_, _ = w.Write([]byte("BINARY"))
+	}))
+	t.Cleanup(assets.Close)
+
+	manifest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("endpoints:\n" +
+			"  tails:\n" +
+			"    path: /asset-mirror/releases/download/" + tag + "/\n" +
+			"    files:\n" +
+			"    - vmlinuz\n" +
+			"    - initrd.img\n" +
+			"    - 9990-misc-helpers.sh\n" +
+			"    - tails-amd64.iso\n" +
+			"    os: tails\n" +
+			"    version: '7.10'\n"))
+	}))
+	t.Cleanup(manifest.Close)
+
+	viper.Set(config.NetbootxyzEndpointsURL, manifest.URL)
+	viper.Set(config.NetbootxyzAssetBase, assets.URL)
+	ostype.ResetNetbootxyzCache()
+	t.Cleanup(ostype.ResetNetbootxyzCache)
+	return tag
+}
+
+// seedTailsVersion creates a tails target + version + cache_entries row and
+// returns (cache_entries.id, version dir).
+func seedTailsVersion(t *testing.T, store *db.Store, tag string) (int64, string) {
+	t.Helper()
+	tid, err := store.CreateTarget(db.Target{
+		OS: "tails", Arch: "amd64", Params: "{}", Enabled: true, RetainN: 1,
+		Mode: "discovery", Source: "catalog",
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	if err := store.UpsertTargetVersion(db.TargetVersion{
+		TargetID: tid, Version: tag, Source: "discovered", Cached: true,
+	}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	tvID, err := store.TargetVersionID(tid, tag)
+	if err != nil {
+		t.Fatalf("TargetVersionID: %v", err)
+	}
+	if err := store.UpsertCacheEntry(tvID, 100); err != nil {
+		t.Fatalf("UpsertCacheEntry: %v", err)
+	}
+	rows, err := store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
+	}
+	return rows[0].ID, cacheDir("tails", "-", "amd64", tag)
+}
+
+// D5 — reverify now reaches Artifacts for a tool that declares material, so a
+// Tails version on disk gets a real verdict instead of a permanent NULL.
+func TestVerifyVersionTailsProducesAVerdict(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+
+	iso := []byte("GOOD-ISO-BYTES")
+	tag := tailsReverifyFixture(t, iso)
+	store := newReconcileStore(t)
+	id, dir := seedTailsVersion(t, store, tag)
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string][]byte{
+		"vmlinuz": []byte("k"), "initrd.img": []byte("i"),
+		"9990-misc-helpers.sh": []byte("h"), "tails-amd64.iso": iso,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	verified, verifyErr, err := VerifyVersion(t.Context(), store, id)
+	if err != nil {
+		t.Fatalf("VerifyVersion: %v", err)
+	}
+	if verified == nil || !*verified {
+		t.Fatalf("a good Tails version must reverify to verified=true, got %v (err %q)", verified, verifyErr)
+	}
+
+	// And a corrupted ISO must FAIL rather than pass or return no verdict.
+	if err := os.WriteFile(filepath.Join(dir, "tails-amd64.iso"), []byte("CORRUPTED"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	verified, verifyErr, err = VerifyVersion(t.Context(), store, id)
+	if err != nil {
+		t.Fatalf("VerifyVersion (corrupted): %v", err)
+	}
+	if verified == nil || *verified {
+		t.Fatalf("a corrupted ISO must reverify to verified=false, got %v", verified)
+	}
+	if verifyErr == "" {
+		t.Error("a failure verdict must carry a non-empty verify_err")
+	}
+}
+
+// §6.2 — a Large artifact's in-flight sibling is DownloadSuffix, never
+// ".partial". Checking only ".partial" returns "artifact absent" ->
+// classCorruption: a FALSE FAILURE VERDICT on a perfectly healthy system that
+// is simply mid-resume.
+func TestVerifyVersionTailsInFlightResumeIsNoVerdict(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+
+	iso := []byte("GOOD-ISO-BYTES")
+	tag := tailsReverifyFixture(t, iso)
+	store := newReconcileStore(t)
+	id, dir := seedTailsVersion(t, store, tag)
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"vmlinuz", "initrd.img", "9990-misc-helpers.sh"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The ISO's FINAL file is absent and a resumable in-progress sibling exists.
+	if err := os.WriteFile(filepath.Join(dir, "tails-amd64.iso"+DownloadSuffix), iso[:4], 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	verified, verifyErr, err := VerifyVersion(t.Context(), store, id)
+	if err != nil {
+		t.Fatalf("VerifyVersion: %v", err)
+	}
+	if verified != nil {
+		t.Fatalf("a live resume must yield NO VERDICT, got verified=%v verifyErr=%q", *verified, verifyErr)
+	}
+}
+
+// §6.3 — Artifacts refuses any version that is not the entry's current tag.
+// That refusal must map to "no verdict" (what an archived tool returned before
+// D5 lifted the short-circuit), not to a permanent HTTP 500 on reverify.
+func TestVerifyVersionSupersededToolTagIsNoVerdictNotAnError(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+
+	tailsReverifyFixture(t, []byte("GOOD-ISO-BYTES"))
+	store := newReconcileStore(t)
+	// Seed an ARCHIVED tag — deliberately NOT what the manifest publishes.
+	id, _ := seedTailsVersion(t, store, "6.6-cfd50f75")
+
+	verified, verifyErr, err := VerifyVersion(t.Context(), store, id)
+	if err != nil {
+		t.Fatalf("a superseded tag must be NO VERDICT, not an error (reverify would 500): %v", err)
+	}
+	if verified != nil {
+		t.Fatalf("superseded tag must yield no verdict, got verified=%v verifyErr=%q", *verified, verifyErr)
+	}
+}
+
+// §6.3 maps ErrVersionSuperseded — and ONLY that — to "no verdict". Every other
+// Artifacts error still propagates, so a transient sidecar or manifest failure
+// surfaces as a reverify 500 rather than a reassuring NULL. That is new for
+// tools and consistent with how FCOS already behaves.
+func TestVerifyVersionArtifactsErrorPropagates(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+
+	// A manifest server that always 500s: entryFor fails before any tag compare,
+	// so the error is emphatically NOT ErrVersionSuperseded.
+	manifest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(manifest.Close)
+	viper.Set(config.NetbootxyzEndpointsURL, manifest.URL)
+	viper.Set(config.NetbootxyzAssetBase, "http://127.0.0.1:1")
+	ostype.ResetNetbootxyzCache()
+	t.Cleanup(ostype.ResetNetbootxyzCache)
+
+	store := newReconcileStore(t)
+	id, _ := seedTailsVersion(t, store, "7.10-17629562")
+
+	_, _, err := VerifyVersion(t.Context(), store, id)
+	if err == nil {
+		t.Fatal("a manifest failure is NOT a superseded tag and must propagate; " +
+			"swallowing it would report a clean no-verdict for a version nobody could check")
 	}
 }
 

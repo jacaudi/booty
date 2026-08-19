@@ -374,8 +374,9 @@ func aggregateVerdicts(vs []artifactVerdict) (*bool, string) {
 // files — the reverify-facing half of the D16 single-source (the land-path uses
 // verifyArtifact + aggregateVerdicts on .partial files). It NEVER writes the DB
 // or moves files; the caller owns disposition. A verifiable artifact whose final
-// file is absent is a failure ("artifact absent") UNLESS a sibling .partial
-// exists (a re-download is in flight) — then the whole version records NULL
+// file is absent is a failure ("artifact absent") UNLESS a sibling in-progress
+// file exists — ".partial" for staged downloads, DownloadSuffix for resumable
+// ones (a re-download is in flight) — then the whole version records NULL
 // (re-review #8). id must exist (caller checks first / handles the error).
 func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, string, error) {
 	row, err := store.GetCacheEntry(id)
@@ -390,17 +391,21 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 	if err != nil {
 		return nil, "", fmt.Errorf("cache: verify params: %w", err)
 	}
-	// Tools carry no verification material at all (netboot.xyz publishes neither
-	// checksums nor signatures), so there is nothing to fetch and nothing to
-	// check. Short-circuit BEFORE Artifacts: it refuses any version that is not
-	// upstream's current tag, which would make reverify on an archived tool a
-	// permanent 500 rather than a verdict.
-	if o.Family().Name == "tool" {
-		return nil, "", nil
-	}
 	dir := cacheDir(canonicalToCacheName(row.OS), paramSegment(params), row.Arch, row.Version)
 	arts, err := o.Artifacts(ctx, row.Version, row.Arch, params)
 	if err != nil {
+		// A superseded tag has no upstream artifact list to check against, so
+		// there is no verdict to compute — the same (nil, "", nil) an archived
+		// tool returned before the family short-circuit was lifted. Without this
+		// mapping, reverifying any archived tool version would be a permanent
+		// HTTP 500 instead of a clean no-verdict.
+		//
+		// Every other Artifacts error still propagates: a transient sidecar blip
+		// now surfaces as a reverify 500, which is how FCOS already behaves but
+		// is new for tools.
+		if errors.Is(err, ostype.ErrVersionSuperseded) {
+			return nil, "", nil
+		}
 		return nil, "", fmt.Errorf("cache: verify artifacts: %w", err)
 	}
 
@@ -415,8 +420,15 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 			return nil, "", perr
 		}
 		if _, serr := os.Stat(final); serr != nil {
-			if _, perr := os.Stat(final + ".partial"); perr == nil {
-				return nil, "", nil // re-download in flight → no verdict
+			// A re-download in flight leaves a sibling in-progress file. The
+			// staged downloader writes ".partial"; the resumable (Large)
+			// downloader writes DownloadSuffix and NEVER a ".partial". Checking
+			// only ".partial" returns "artifact absent" -> classCorruption: a
+			// FALSE FAILURE VERDICT on a healthy system mid-resume.
+			for _, suffix := range []string{".partial", DownloadSuffix} {
+				if _, perr := os.Stat(final + suffix); perr == nil {
+					return nil, "", nil // re-download in flight → no verdict
+				}
 			}
 			verdicts = append(verdicts, artifactVerdict{class: classCorruption, err: fmt.Errorf("%s: artifact absent", a.Filename)})
 			continue

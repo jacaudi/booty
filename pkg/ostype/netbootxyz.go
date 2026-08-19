@@ -2,6 +2,7 @@ package ostype
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -86,11 +87,20 @@ func fetchNetbootxyzDoc(ctx context.Context) (map[string]netbootxyzEntry, error)
 // "restore parity" by moving this call back into reconcileTarget — that is
 // exactly the regression #73 fixed.
 //
-// The reverify path (pkg/http/api_cache.go) deliberately does NOT reset this
-// memo, unlike ResetStreamsCache which it does reset there: VerifyVersion
-// short-circuits the tool family before it ever calls Artifacts, the only
-// reader of this memo, so a tool reverify never observes stale data. Do not
-// "helpfully" restore a reset call there.
+// The reverify path (pkg/http/api_cache.go) DOES reset this memo, symmetric
+// with ResetStreamsCache. That changed when reverify stopped short-circuiting
+// the tool family: VerifyVersion now calls Artifacts — the only reader of this
+// memo — for a tool that declares verification material, so a reverify against
+// a stale manifest would compare against the wrong release's digests.
+//
+// Cost, stated rather than discovered later: there is no data race (the memo is
+// mutex-guarded and the published map is read-only), but the reset runs on the
+// API goroutine while reconcileAll may be mid-pass on the coordinator
+// goroutine. A reverify landing mid-pass forces a re-fetch, so a later target in
+// the SAME pass can observe a newer manifest than an earlier one —
+// DiscoverVersions returns tag T1, the subsequent Artifacts(version=T1) refuses
+// with ErrVersionSuperseded, and reconcileTarget logs and skips that version for
+// one tick. Self-healing and low severity.
 func ResetNetbootxyzCache() {
 	netbootxyzCache.Lock()
 	netbootxyzCache.endpoints = nil
@@ -281,6 +291,15 @@ func (t netbootxyzOS) DiscoverVersions(ctx context.Context, _ map[string]string)
 // consumer's behaviour.
 var sha256HexRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// ErrVersionSuperseded reports that the requested version is no longer the tag
+// upstream publishes for this endpoint. The netboot.xyz manifest holds one path
+// per endpoint, so honouring a stale version is impossible — but this is a
+// normal, expected state for an ARCHIVED version, not a fault. Callers that
+// merely want a verdict (pkg/cache's VerifyVersion, behind the reverify
+// endpoint) map it to "no verdict"; every other Artifacts error still
+// propagates.
+var ErrVersionSuperseded = errors.New("ostype: requested version is superseded upstream")
+
 // Artifacts returns one downloadable per file in t.files (see its doc
 // comment); every tool MUST declare its files (D14), there is no "empty means
 // every file in the entry" mode. Verification material: only a tool declaring
@@ -303,7 +322,8 @@ func (t netbootxyzOS) Artifacts(ctx context.Context, version, arch string, _ map
 		return nil, err
 	}
 	if version != tag {
-		return nil, fmt.Errorf("ostype: %s/%s: requested version %q but upstream now publishes %q; refusing to mix releases", t.name, arch, version, tag)
+		return nil, fmt.Errorf("ostype: %s/%s: requested version %q but upstream now publishes %q; refusing to mix releases: %w",
+			t.name, arch, version, tag, ErrVersionSuperseded)
 	}
 	// D14: every tool declares its files. There is no "empty means everything"
 	// mode — netboot.xyz manifests list files their releases do not publish

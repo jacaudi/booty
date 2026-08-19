@@ -152,11 +152,16 @@ func registerCache(api huma.API, deps APIDeps) {
 			return nil, huma.Error500InternalServerError("get entry", err)
 		}
 		// An explicit operator ask always verifies (ignores --signaturePolicy off).
-		// Reset the FCOS streams memo so reverify sees a fresh doc (D17). The
-		// netboot.xyz memo is deliberately NOT reset here: VerifyVersion
-		// short-circuits the tool family before it ever calls Artifacts (the
-		// only reader of that memo), so a tool reverify never observes it.
+		// Reset BOTH discovery memos so reverify compares against fresh upstream
+		// material: the FCOS streams doc (D17) and the netboot.xyz endpoints
+		// manifest. The netboot.xyz reset is required now that VerifyVersion no
+		// longer short-circuits the tool family — it calls Artifacts, the only
+		// reader of that memo, so a stale manifest would mean comparing a cached
+		// file against a different release's digests. This is NOT the #73
+		// regression: that was a per-TARGET reset inside reconcileTarget, not a
+		// rare manual endpoint.
 		ostype.ResetStreamsCache()
+		ostype.ResetNetbootxyzCache()
 		verified, verifyErr, verr := cache.VerifyVersion(ctx, deps.Store, n)
 		if verr != nil {
 			return nil, huma.Error500InternalServerError("verify", verr)
