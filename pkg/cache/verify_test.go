@@ -199,6 +199,31 @@ func TestVerifyArtifact_UnparseableKeyIsCorruption(t *testing.T) {
 	}
 }
 
+// TestArtifactVerdictZeroValueIsNotAPass pins WHY classUnset exists, not merely
+// that it does. reconcile.go pre-allocates `verdicts := make([]artifactVerdict,
+// len(arts))` alongside `landedFlags := make([]bool, len(arts))` — two parallel
+// slices whose zero values default in OPPOSITE safety directions. A zero-valued
+// bool reads as "rejected", which is safe; before classUnset a zero-valued
+// artifactVerdict read as classPass, i.e. "verified OK", which is not.
+//
+// No partially-filled slice reaches aggregateVerdicts today, because
+// `vg.Wait() != nil` abandons the whole version first. But D4b makes an error
+// return from landArtifact a NORMAL path for Large artifacts, so that
+// short-circuit now carries weight it did not carry before, and the zero value
+// should fail closed on its own rather than by depending on it.
+//
+// This test goes red if someone folds classUnset away and puts classPass back
+// at iota 0.
+func TestArtifactVerdictZeroValueIsNotAPass(t *testing.T) {
+	var zero artifactVerdict
+	if zero.class == classPass {
+		t.Fatal("artifactVerdict{} must not read as classPass: an unassigned verdict would count as verified OK")
+	}
+	if zero.class != classUnset {
+		t.Fatalf("artifactVerdict{}.class = %d, want classUnset (%d): classUnset must hold the zero value", zero.class, classUnset)
+	}
+}
+
 func TestAggregateVerdicts(t *testing.T) {
 	// none verifiable → NULL
 	if verified, _ := aggregateVerdicts([]artifactVerdict{{class: classNotVerifiable}, {class: classNotVerifiable}}); verified != nil {
