@@ -79,22 +79,48 @@ func TestPartialSuffixExcluded(t *testing.T) {
 	}
 }
 
-// TestDataFileHandler_ServesOnlyCacheSubtree pins the /data/ allowlist: the
-// cache tree is the ONLY subtree of dataDir any served content references
-// (every /data/ URL booty emits is built by cache.CacheURLPath, which hardcodes
-// "/data/cache/"), so everything else under dataDir must 404.
+// TestIsAllowedDataPathCleansItsInput pins isAllowedDataPath's defence in
+// depth. Its only caller already cleans, so nothing end-to-end notices if the
+// predicate stops cleaning too — mutation-testing found exactly that hole.
 //
-// This matters because dataDir is not an artifact-only directory: it is also
-// where config.DatabasePathValue puts booty.db, and deploy/docker-compose.yml
-// mounts one volume for both. Serving dataDir wholesale therefore published the
-// SQLite database — schema, hosts, and config_revisions.source_b64 (per-host
-// boot configs, plaintext) — to anyone who could reach the HTTP port.
+// The clean stays, because B2 was caused by two predicates and the file server
+// disagreeing about what "the path" was: a predicate that silently trusts its
+// caller to have normalised is the same footgun re-armed for the next caller.
+// This test is what makes the clean load-bearing rather than decorative.
+func TestIsAllowedDataPathCleansItsInput(t *testing.T) {
+	escapes := []string{
+		"cache/../booty.db",
+		"/cache/../booty.db",
+		"public/../config/ignition.yaml",
+		"cache/talos/../../booty.db",
+	}
+	for _, p := range escapes {
+		if isAllowedDataPath(p) {
+			t.Errorf("isAllowedDataPath(%q) = true, want false: an unnormalised path that escapes the subtree must be refused", p)
+		}
+	}
+	for _, p := range []string{"cache/talos/kernel", "/public/cni.sh"} {
+		if !isAllowedDataPath(p) {
+			t.Errorf("isAllowedDataPath(%q) = false, want true", p)
+		}
+	}
+}
+
+// TestDataFileHandler_ServesOnlyAllowedSubtrees pins the /data/ allowlist:
+// cache/ (boot artifacts, addressed by cache.CacheURLPath) and public/
+// (operator assets the booted node fetches) are served; everything else under
+// dataDir 404s.
+//
+// dataDir is not an artifact-only directory — config.DatabasePathValue puts
+// booty.db there and deploy/docker-compose.yml mounts one volume for the lot —
+// so serving it wholesale published the SQLite database, including
+// config_revisions.source_b64, the plaintext per-host boot configs.
 //
 // The -wal case is not redundant with the .db case: on a freshly started
 // instance booty.db is a near-empty ~4KB stub and the live rows are in the
-// write-ahead log, so a guard (or a test) that considered only "booty.db"
-// would miss the actual exposure.
-func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
+// write-ahead log, so a guard (or a test) considering only "booty.db" would
+// miss the actual exposure.
+func TestDataFileHandler_ServesOnlyAllowedSubtrees(t *testing.T) {
 	dataDir := t.TempDir()
 	dbBytes := []byte("SQLite format 3\x00SECRET-DB-BYTES")
 	for _, name := range []string{"booty.db", "booty.db-wal", "booty.db-shm", "catalog.yaml"} {
