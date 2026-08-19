@@ -10,6 +10,54 @@ import (
 	"testing"
 )
 
+// dataMux mounts the /data/ handler exactly as StartHTTP does (http.go:40):
+// on a real ServeMux, behind StripPrefix. Testing the StripPrefix handler
+// alone misrepresents production — ServeMux is not passive on this route. It
+// path-cleans before dispatch, which is the only reason a literal "…/." spelling
+// never reaches the handler, and it answers escaping paths with a 307 rather
+// than the handler's 404.
+func dataMux(dataDir string) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(dataDir)))
+	return mux
+}
+
+// getData issues target against the mux and returns status, body and Location.
+func getData(mux *http.ServeMux, target string) (int, []byte, string) {
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	res := rec.Result()
+	body, _ := io.ReadAll(res.Body)
+	return res.StatusCode, body, res.Header.Get("Location")
+}
+
+// getDataFollow follows ServeMux's path-cleaning redirects to the status a real
+// client would end on, returning that status and every body seen along the way.
+//
+// Refusals are NOT uniformly 404 in production: ServeMux path-cleans before
+// dispatch, so an escaping path is answered with a 307 whose Location names the
+// cleaned target, and only the followed request reaches the handler. The
+// invariant worth asserting is therefore not the first status code but that no
+// chain ever terminates in served bytes.
+func getDataFollow(t *testing.T, mux *http.ServeMux, target string) (int, [][]byte) {
+	t.Helper()
+	var bodies [][]byte
+	for hop := 0; hop < 5; hop++ {
+		code, body, loc := getData(mux, target)
+		bodies = append(bodies, body)
+		if code != http.StatusMovedPermanently && code != http.StatusTemporaryRedirect {
+			return code, bodies
+		}
+		if loc == "" {
+			t.Fatalf("%s: redirect %d with no Location", target, code)
+		}
+		target = loc
+	}
+	t.Fatalf("%s: redirect loop", target)
+	return 0, bodies
+}
+
 // TestPartialSuffixExcluded asserts the /data/ predicate recognizes an
 // in-flight staged download (T2/T9 write <artifact>.partial while downloading)
 // so isPartialPath can gate the FileServer from ever serving unverified,
@@ -74,7 +122,7 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler := http.StripPrefix("/data/", dataFileHandler(dataDir))
+	mux := dataMux(dataDir)
 	const kernelURL = "/data/cache/talos/-/amd64/v1.9.0/kernel-amd64"
 
 	blocked := []struct {
@@ -86,50 +134,29 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 		{"sqlite shared-memory index", "/data/booty.db-shm"},
 		{"operator catalog", "/data/catalog.yaml"},
 		{"dataDir root listing", "/data/"},
-		// The cache root itself is not an artifact path — every URL booty emits
-		// names a file under <os>/<schematic>/<arch>/<version>/ — so it is
-		// outside the allowlist too, and its listing (which enumerates every
-		// cached OS and version) is not published. Both spellings, since
-		// path.Clean folds the trailing slash away.
 		{"cache root listing", "/data/cache/"},
 		{"cache root, no trailing slash", "/data/cache"},
 		{"traversal out of the cache tree", "/data/cache/../booty.db"},
-		// No "/data/../../etc/passwd" case here: http.Dir already contains that
-		// one, so it 404s identically with the guard removed and would be
-		// coverage theatre. This case has teeth because the target it escapes
-		// to (booty.db) IS inside dataDir and IS served without the guard.
-		//
-		// "cache" must match as a whole path segment, not as a string prefix,
-		// or a sibling directory whose name merely starts with it (an operator's
-		// "cache.bak", a future "cache-staging") would be served wholesale.
 		{"sibling directory sharing the prefix", "/data/cache.bak/booty.db"},
 	}
 	for _, tc := range blocked {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			body, _ := io.ReadAll(rec.Result().Body)
-
-			// 404 specifically, not merely "not 200": a traversal refusal must
-			// be indistinguishable from a plain miss, and FileServer's own
-			// dot-dot rejection is a 400 that would leak the difference.
-			if rec.Code != http.StatusNotFound {
-				t.Fatalf("%s: got %d, want 404 (body %q)", tc.path, rec.Code, body)
+			code, bodies := getDataFollow(t, mux, tc.path)
+			if code != http.StatusNotFound {
+				t.Fatalf("%s: final status %d, want 404 (bodies %q)", tc.path, code, bodies)
 			}
-			if bytes.Contains(body, dbBytes) {
-				t.Fatalf("%s: served dataDir bytes outside the cache subtree", tc.path)
+			for _, body := range bodies {
+				if bytes.Contains(body, dbBytes) {
+					t.Fatalf("%s: served dataDir bytes outside an allowed subtree", tc.path)
+				}
 			}
 		})
 	}
 
 	t.Run("cache artifact still served", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, kernelURL, nil)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		body, _ := io.ReadAll(rec.Result().Body)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s: got %d, want 200 (body %q)", kernelURL, rec.Code, body)
+		code, body, _ := getData(mux, kernelURL)
+		if code != http.StatusOK {
+			t.Fatalf("%s: got %d, want 200 (body %q)", kernelURL, code, body)
 		}
 		if !bytes.Equal(body, kernelBytes) {
 			t.Fatalf("%s: body = %q, want %q", kernelURL, body, kernelBytes)
@@ -142,7 +169,7 @@ func TestDataFileHandler_ServesOnlyCacheSubtree(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, kernelURL, nil)
 		req.Header.Set("Range", "bytes=0-3")
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
+		mux.ServeHTTP(rec, req)
 		body, _ := io.ReadAll(rec.Result().Body)
 		if rec.Code != http.StatusPartialContent {
 			t.Fatalf("ranged %s: got %d, want 206 (body %q)", kernelURL, rec.Code, body)
@@ -187,7 +214,7 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handler := http.StripPrefix("/data/", dataFileHandler(dataDir))
+	mux := dataMux(dataDir)
 
 	cases := []struct {
 		name        string
@@ -199,18 +226,26 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 		{"uppercase .PARTIAL blocked", "/data/cache/os/arch/ver/kernel.PARTIAL", true},
 		{"lowercase .download blocked", "/data/cache/os/arch/ver/big.iso.download", true},
 		{"uppercase .DOWNLOAD blocked", "/data/cache/os/arch/ver/big.iso.DOWNLOAD", true},
+		// The predicate and the file FileServer opens must agree on the path.
+		// FileServer serves path.Clean(r.URL.Path) (net/http/fs.go:995), so a
+		// trailing "/%2e" names the same file while defeating a raw suffix test.
+		// ServeMux path-cleans the literal "/." spelling away before dispatch,
+		// but not the encoded one: cleanPath runs on the escaped path, where
+		// "%2e" is not a dot. The .download case is the exploitable one — it is
+		// the long-lived multi-GB ISO that SweepPartials deliberately spares.
+		{"in-flight via encoded-dot suffix", "/data/cache/os/arch/ver/big.iso.download/%2e", true},
+		{"in-flight via uppercase encoded-dot", "/data/cache/os/arch/ver/big.iso.download/%2E", true},
+		{"partial via encoded-dot suffix", "/data/cache/os/arch/ver/kernel.partial/%2e", true},
+		{"in-flight via encoded dot-dot rejoin", "/data/cache/os/arch/ver/x/%2e%2e/big.iso.download", true},
 		{"real file still served", "/data/cache/os/arch/ver/kernel", false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
-			body, _ := io.ReadAll(rec.Result().Body)
+			code, body, _ := getData(mux, tc.path)
 
 			if tc.wantBlocked {
-				if rec.Code == http.StatusOK {
+				if code == http.StatusOK {
 					t.Fatalf("%s: expected the request to be blocked, got 200 with body %q", tc.path, body)
 				}
 				if string(body) == string(partialBytes) {
@@ -218,8 +253,8 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 				}
 				return
 			}
-			if rec.Code != http.StatusOK {
-				t.Fatalf("%s: expected 200, got %d (body %q)", tc.path, rec.Code, body)
+			if code != http.StatusOK {
+				t.Fatalf("%s: expected 200, got %d (body %q)", tc.path, code, body)
 			}
 			if string(body) != string(realBytes) {
 				t.Fatalf("%s: body mismatch: got %q want %q", tc.path, body, realBytes)

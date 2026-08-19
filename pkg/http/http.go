@@ -78,7 +78,13 @@ func StartHTTP(deps APIDeps) *http.Server {
 func dataFileHandler(dataDir string) http.Handler {
 	dataFS := http.FileServer(http.Dir(dataDir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isAllowedDataPath(r.URL.Path) || isPartialPath(r.URL.Path) {
+		// Both predicates must judge the SAME path http.FileServer will open,
+		// which is path.Clean(r.URL.Path) (net/http/fs.go:995). Testing the raw
+		// path let a trailing "/%2e" name an in-flight file while defeating the
+		// suffix check — ServeMux cleans the literal "/." spelling away before
+		// dispatch, but not the encoded one.
+		cleaned := path.Clean("/" + r.URL.Path)
+		if !isAllowedDataPath(cleaned) || isPartialPath(cleaned) {
 			http.NotFound(w, r)
 			return
 		}
