@@ -121,11 +121,12 @@ cache/talos/376567988ad3…b4ba/amd64/v1.10.1/
 
 ### Staged downloads (`.partial`) — P3b
 
-Every artifact download (all OSes) is **staged** before it becomes a cached file. The body streams
-to `<artifact>.partial` in the version directory (SHA-256 computed while streaming), then the
-verification verdict decides its fate:
+Every artifact download is **staged** before it becomes a cached file — via `.partial` for all OSes
+except the resumable case in the exception below. The body streams to `<artifact>.partial` in the
+version directory (SHA-256 computed while streaming), then the verification verdict decides its fate:
 
-- **Land:** on a pass (or a `warn` corruption failure that lands), the `.partial` is `os.Rename`d
+- **Land:** on a pass (or a `warn` corruption failure that lands — which a resumable artifact is
+  excluded from, see [CONFIGURATION.md](../CONFIGURATION.md)), the `.partial` is `os.Rename`d
   onto the final `<artifact>` name. The rename is atomic because source and destination share the
   same filesystem — a boot never sees a half-written file at the final name.
 - **Reject:** on a refused failure, the `.partial` is removed and the whole version directory is
@@ -135,6 +136,19 @@ verification verdict decides its fate:
 filenames), are **swept at the start of every reconcile pass** (a crash mid-download self-heals),
 are **excluded from `POST /cache/scan` size sums**, and are **404'd by the `/data/` file server**
 (case-insensitive) so a direct browse can't fetch an in-flight file.
+
+**Exception — resumable (`Large`) downloads use `.download`.** An artifact too big for the staged
+downloader's 5-minute whole-request ceiling (today only the Tails ISO) streams to
+`<artifact>.download` instead, resuming from the file's existing size via an HTTP `Range` header
+across reconcile passes. Three consequences follow from that, all deliberate:
+
+- It is **not swept** between passes — sweeping it would destroy a resumable multi-GB transfer — so
+  it is the longer-lived of the two in-flight files on disk.
+- Its SHA-256 is computed **after** the transfer completes, by reading the finished file, not while
+  streaming: a resumed transfer's stream carries only the delta, and a `416` response streams
+  nothing at all.
+- Like `.partial`, it is excluded from `POST /cache/scan` size sums and 404'd by the `/data/` file
+  server (case-insensitively).
 
 **Failure-visibility on disk.** A version rejected by verification leaves **no bytes on disk** (its
 directory is removed) but keeps a `cache_entries` row with `size=0`, `in_window=0`, `verified=0`,
