@@ -25,8 +25,15 @@ import (
 // (warn lands it) so the policy (§5, D15) can treat them differently.
 type verifyClass int
 
+// classUnset occupies the zero value on purpose, so an artifactVerdict{} that
+// was never assigned a class cannot be read as "verified OK". It is not a
+// verdict any producer returns: landArtifact's switch routes it to the
+// reject default, and aggregateVerdicts counts it as neither verifiable nor
+// passing. Defensive only — reconcile.go's `vg.Wait() != nil -> continue`
+// still guarantees no partially-filled verdict slice reaches aggregation.
 const (
-	classPass          verifyClass = iota // verified OK
+	classUnset         verifyClass = iota // zero value — never a real verdict
+	classPass                             // verified OK
 	classNotVerifiable                    // no mechanism declared (empty fields)
 	classCorruption                       // sha256 mismatch / bad-or-unfetchable sidecar / unknown-or-expired key
 	classForgery                          // GPG signature does not validate — tamper
@@ -73,14 +80,27 @@ func verifyArtifact(ctx context.Context, filePath, streamedSHA256 string, a osty
 	return artifactVerdict{class: classPass}
 }
 
-// landArtifact stages one artifact to <dir>/<file>.partial, verifies it per
+// landArtifact fetches one artifact into an in-progress file, verifies it per
 // policy + failure class (D15), then renames it into place (land) or deletes it
 // (reject). Returns whether bytes now sit at the final path and the verdict for
 // version-level aggregation + recording. err != nil is a transport/IO failure
-// (nothing landed; retry next tick). Under `off`, verification does not run and
-// the verdict is not-verifiable (verified stays NULL). This is the download-side
-// twin of VerifyVersion: it shares verifyArtifact + aggregateVerdicts, using the
-// hash DownloadStaged computed while streaming (no second read on the hot path).
+// (nothing landed; retry next tick).
+//
+// The a.Large branch chooses only HOW BYTES ARRIVE and WHICH SUFFIX marks them
+// — a resumable, untimed download into <file>DownloadSuffix instead of
+// config.DownloadStaged's timed <file>.partial. Everything after that is ONE
+// shared tail, so there is a single disposition path rather than two.
+//
+// Two paths still reach a rename without a digest check, stated rather than
+// claimed away: `policy == "off"` short-circuits before verification exactly as
+// it does for staged artifacts, and downloadLargeFile still exists in this
+// package for the Debian DVD seam (see its doc comment — do not route landing
+// back onto it).
+//
+// Under `off`, verification does not run and the verdict is not-verifiable
+// (verified stays NULL). This is the download-side twin of VerifyVersion: both
+// classify through the single shared verifyArtifact. (The caller, not this
+// function, folds the per-artifact verdicts together via aggregateVerdicts.)
 func landArtifact(ctx context.Context, dir string, a ostype.Artifact, policy string) (bool, artifactVerdict, error) {
 	// DownloadStaged only os.Creates the .partial; it does not create the
 	// version dir. The retired ensureArtifact used to MkdirAll before every
@@ -88,60 +108,97 @@ func landArtifact(ctx context.Context, dir string, a ostype.Artifact, policy str
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return false, artifactVerdict{}, fmt.Errorf("cache: mkdir %s: %w", dir, err)
 	}
+
+	final := filepath.Join(dir, a.Filename)
+	var inProgress, streamedSHA string
+
 	if a.Large {
-		// Fail-closed, matching this file's stated invariant that a DECLARED
-		// sha256/.sig which cannot be evaluated is corruption, never NULL. Nothing
-		// sets Large AND a checksum today, but this is a shared function and the
-		// landmine is one struct field away.
-		if a.SHA256 != "" || a.SigURL != "" {
+		// D4: the fail-closed guard is NARROWED, not deleted. The sha256 half is
+		// gone because the path below now exists — the only honest reason to
+		// remove a fail-closed guard. SigURL's path expects a signature over a
+		// CHECKSUM FILE against a known embedded keyring, not a detached
+		// signature over a multi-GB ISO whose key booty does not ship, so it
+		// stays refused.
+		if a.SigURL != "" {
 			return false, artifactVerdict{}, fmt.Errorf(
-				"cache: %s: Large artifacts carry no verification path, but sha256/sig was declared", a.Filename)
+				"cache: %s: detached-signature verification is unsupported for resumable (Large) downloads", a.Filename)
 		}
-		// D13: resumable, untimed, and its ".download" in-progress file survives
-		// SweepPartials between passes. The endpoints MANIFEST references no
-		// checksums or signatures, so nothing reaches Artifact.SHA256/SigURL and
-		// the verdict is classNotVerifiable — same as the staged path would
-		// conclude. Note this is narrower than "upstream publishes none": the
-		// Tails release does publish sha256-checksums.txt and a .sig as assets the
-		// manifest never references (design §8.5). Wiring those is a recorded
-		// follow-up; until then the guard above keeps this path fail-closed.
-		final := filepath.Join(dir, a.Filename)
-		if err := downloadLargeFile(ctx, a.URL, final); err != nil {
+		inProgress = final + DownloadSuffix
+		if err := downloadLargeInto(ctx, a.URL, inProgress); err != nil {
 			return false, artifactVerdict{}, err
 		}
-		return true, artifactVerdict{class: classNotVerifiable}, nil
+		// `policy != "off"` is part of the CONDITION, not a later short-circuit:
+		// hashing first and discarding the result would spend the design's
+		// measured 3.55 s (~20 s on a slow spindle) on a 1.94 GB file in the one
+		// configuration that explicitly asked for no verification.
+		if a.SHA256 != "" && policy != "off" {
+			// D3: hash the COMPLETED file. downloadLargeInto resumes via Range, so
+			// a resumed transfer's stream carries only the DELTA, and the 416
+			// branch streams nothing at all.
+			//
+			// D4b: this hash is computed HERE, and a read failure is returned as an
+			// ERROR — not handed to verifyArtifact, which would classify it as
+			// classCorruption ("checksum unavailable") and, under D4a below,
+			// destroy a completed multi-GB download over a transient NAS blip.
+			// Returning err routes to reconcile.go's `vg.Wait() != nil -> continue`:
+			// no row written, no removeVersionDir, and the resumable bytes survive.
+			// "I could not evaluate the material" is infrastructure and must be
+			// retried; "the material does not match" is a verdict.
+			h, err := hashFile(inProgress)
+			if err != nil {
+				return false, artifactVerdict{}, fmt.Errorf("cache: hash %s: %w", inProgress, err)
+			}
+			streamedSHA = h
+		}
+	} else {
+		p, sha, err := config.DownloadStaged(ctx, dir, a.URL)
+		if err != nil {
+			return false, artifactVerdict{}, err
+		}
+		inProgress, streamedSHA = p, sha
+		// DownloadStaged derives the base name from the URL, which is the
+		// authority for the staged path — keep using it rather than a.Filename.
+		final = strings.TrimSuffix(p, ".partial")
 	}
-	partial, streamedSHA, err := config.DownloadStaged(ctx, dir, a.URL)
-	if err != nil {
-		return false, artifactVerdict{}, err
-	}
-	final := strings.TrimSuffix(partial, ".partial")
 
 	land := func(v artifactVerdict) (bool, artifactVerdict, error) {
-		if err := os.Rename(partial, final); err != nil {
+		if err := os.Rename(inProgress, final); err != nil {
 			return false, artifactVerdict{}, fmt.Errorf("cache: land %s: %w", final, err)
 		}
 		return true, v, nil
 	}
 	reject := func(v artifactVerdict) (bool, artifactVerdict, error) {
-		_ = os.Remove(partial)
+		// Removing the in-progress file discards the resumable bytes on purpose:
+		// resuming a file already known to hash wrong appends good bytes to bad
+		// ones forever. It is also what makes the reconcile-level retry guard
+		// necessary.
+		_ = os.Remove(inProgress)
 		return false, v, nil
 	}
 
 	if policy == "off" {
 		return land(artifactVerdict{class: classNotVerifiable})
 	}
-	v := verifyArtifact(ctx, partial, streamedSHA, a)
+	v := verifyArtifact(ctx, inProgress, streamedSHA, a)
 	switch v.class {
 	case classPass, classNotVerifiable:
 		return land(v)
 	case classForgery:
 		return reject(v) // never boots — refused under warn AND strict
 	case classCorruption:
-		if policy == "warn" {
+		// D4a: for a Large artifact this is a definitive hash MISMATCH — D2
+		// rejects an unfetchable/malformed sidecar before the download, and D4b
+		// above routes a local read failure out as an error rather than a
+		// verdict. `warn` has nothing to trade here: landing it records
+		// verified=0 while reconcile.go's settled-skip (which deliberately does
+		// not consult `verified`) then skips that version forever, so the
+		// corruption would be PERMANENT and would survive a later switch to
+		// strict. Unexplained divergence from what upstream published must not
+		// be served.
+		if policy == "warn" && !a.Large {
 			return land(v) // availability trade-off warn exists for
 		}
-		return reject(v) // strict
+		return reject(v)
 	default:
 		return reject(v)
 	}
@@ -322,8 +379,9 @@ func aggregateVerdicts(vs []artifactVerdict) (*bool, string) {
 // files — the reverify-facing half of the D16 single-source (the land-path uses
 // verifyArtifact + aggregateVerdicts on .partial files). It NEVER writes the DB
 // or moves files; the caller owns disposition. A verifiable artifact whose final
-// file is absent is a failure ("artifact absent") UNLESS a sibling .partial
-// exists (a re-download is in flight) — then the whole version records NULL
+// file is absent is a failure ("artifact absent") UNLESS a sibling in-progress
+// file exists — ".partial" for staged downloads, DownloadSuffix for resumable
+// ones (a re-download is in flight) — then the whole version records NULL
 // (re-review #8). id must exist (caller checks first / handles the error).
 func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, string, error) {
 	row, err := store.GetCacheEntry(id)
@@ -338,17 +396,21 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 	if err != nil {
 		return nil, "", fmt.Errorf("cache: verify params: %w", err)
 	}
-	// Tools carry no verification material at all (netboot.xyz publishes neither
-	// checksums nor signatures), so there is nothing to fetch and nothing to
-	// check. Short-circuit BEFORE Artifacts: it refuses any version that is not
-	// upstream's current tag, which would make reverify on an archived tool a
-	// permanent 500 rather than a verdict.
-	if o.Family().Name == "tool" {
-		return nil, "", nil
-	}
 	dir := cacheDir(canonicalToCacheName(row.OS), paramSegment(params), row.Arch, row.Version)
 	arts, err := o.Artifacts(ctx, row.Version, row.Arch, params)
 	if err != nil {
+		// A superseded tag has no upstream artifact list to check against, so
+		// there is no verdict to compute — the same (nil, "", nil) an archived
+		// tool returned before the family short-circuit was lifted. Without this
+		// mapping, reverifying any archived tool version would be a permanent
+		// HTTP 500 instead of a clean no-verdict.
+		//
+		// Every other Artifacts error still propagates: a transient sidecar blip
+		// now surfaces as a reverify 500, which is how FCOS already behaves but
+		// is new for tools.
+		if errors.Is(err, ostype.ErrVersionSuperseded) {
+			return nil, "", nil
+		}
 		return nil, "", fmt.Errorf("cache: verify artifacts: %w", err)
 	}
 
@@ -363,8 +425,15 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 			return nil, "", perr
 		}
 		if _, serr := os.Stat(final); serr != nil {
-			if _, perr := os.Stat(final + ".partial"); perr == nil {
-				return nil, "", nil // re-download in flight → no verdict
+			// A re-download in flight leaves a sibling in-progress file. The
+			// staged downloader writes ".partial"; the resumable (Large)
+			// downloader writes DownloadSuffix and NEVER a ".partial". Checking
+			// only ".partial" returns "artifact absent" -> classCorruption: a
+			// FALSE FAILURE VERDICT on a healthy system mid-resume.
+			for _, suffix := range []string{".partial", DownloadSuffix} {
+				if _, perr := os.Stat(final + suffix); perr == nil {
+					return nil, "", nil // re-download in flight → no verdict
+				}
 			}
 			verdicts = append(verdicts, artifactVerdict{class: classCorruption, err: fmt.Errorf("%s: artifact absent", a.Filename)})
 			continue

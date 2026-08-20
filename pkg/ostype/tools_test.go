@@ -33,6 +33,52 @@ func TestEveryToolIsSingleArch(t *testing.T) {
 	}
 }
 
+// A registration whose checksumCovers names a file outside its own files
+// allowlist can never be satisfied: Artifacts only ever looks up names from
+// files, so the covers entry would be inert and the ISO could silently land
+// not-verifiable. That is a registration bug, asserted here rather than
+// discovered in production.
+func TestToolChecksumCoversIsSubsetOfFiles(t *testing.T) {
+	for _, o := range All() {
+		tool, ok := o.(netbootxyzOS)
+		if !ok {
+			continue
+		}
+		for _, c := range tool.checksumCovers {
+			if !slices.Contains(tool.files, c) {
+				t.Errorf("%s: checksumCovers entry %q is not in files %v", tool.name, c, tool.files)
+			}
+		}
+		if len(tool.checksumCovers) > 0 && tool.checksums == "" {
+			t.Errorf("%s: declares checksumCovers %v but no checksums sidecar to satisfy them",
+				tool.name, tool.checksumCovers)
+		}
+	}
+}
+
+// The registration data is inert unless it is actually declared. Without this,
+// dropping either field leaves every other test green while Tails silently
+// reverts to caching 1.94 GB unverified.
+func TestTailsDeclaresItsSidecar(t *testing.T) {
+	o, ok := Lookup("tails")
+	if !ok {
+		t.Fatal("tails not registered")
+	}
+	tool, ok := o.(netbootxyzOS)
+	if !ok {
+		t.Fatal("tails is not a netbootxyzOS")
+	}
+	if tool.checksums != "sha256-checksums.txt" {
+		t.Errorf("checksums = %q, want \"sha256-checksums.txt\"", tool.checksums)
+	}
+	if !slices.Contains(tool.checksumCovers, "tails-amd64.iso") {
+		t.Errorf("checksumCovers = %v, must declare tails-amd64.iso", tool.checksumCovers)
+	}
+	if slices.Contains(tool.files, "sha256-checksums.txt") {
+		t.Error("the sidecar is verification material, never cached and never served — it must NOT be in files")
+	}
+}
+
 func TestToolArchesMatchRegistry(t *testing.T) {
 	for name, arches := range ToolArches() {
 		o, ok := Lookup(name)

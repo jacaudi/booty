@@ -2,12 +2,15 @@ package ostype
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 
+	"github.com/jeefy/booty/pkg/checksum"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/spf13/viper"
 	"go.yaml.in/yaml/v4"
@@ -75,20 +78,32 @@ func fetchNetbootxyzDoc(ctx context.Context) (map[string]netbootxyzEntry, error)
 	return doc.Endpoints, nil
 }
 
-// ResetNetbootxyzCache clears the memoized endpoint manifest. The only
-// production call site is pkg/cache/reconciler.go (reconcileAll's pass entry,
-// once per pass — NOT reconcileTarget, which runs once per target). This
-// intentionally diverges from ResetStreamsCache, which still resets
-// per-target: #73 found that a per-target netboot.xyz reset re-fetched the
-// ~35KB manifest once per tool target instead of once per tick. Do NOT
-// "restore parity" by moving this call back into reconcileTarget — that is
-// exactly the regression #73 fixed.
+// ResetNetbootxyzCache clears the memoized endpoint manifest. There are two
+// production call sites: pkg/cache/reconciler.go (reconcileAll's pass entry,
+// once per pass — NOT reconcileTarget, which runs once per target) and the
+// reverify handler in pkg/http/api_cache.go.
 //
-// The reverify path (pkg/http/api_cache.go) deliberately does NOT reset this
-// memo, unlike ResetStreamsCache which it does reset there: VerifyVersion
-// short-circuits the tool family before it ever calls Artifacts, the only
-// reader of this memo, so a tool reverify never observes stale data. Do not
-// "helpfully" restore a reset call there.
+// The RECONCILER's placement intentionally diverges from ResetStreamsCache,
+// which still resets per-target: #73 found that a per-target netboot.xyz reset
+// re-fetched the ~35KB manifest once per tool target instead of once per tick.
+// Do NOT "restore parity" by moving that call back into reconcileTarget — that
+// is exactly the regression #73 fixed. The reverify call site is a rare manual
+// endpoint and is not that regression.
+//
+// The reverify path (pkg/http/api_cache.go) DOES reset this memo, symmetric
+// with ResetStreamsCache. That changed when reverify stopped short-circuiting
+// the tool family: VerifyVersion now calls Artifacts — the only reader of this
+// memo — for a tool that declares verification material, so a reverify against
+// a stale manifest would compare against the wrong release's digests.
+//
+// Cost, stated rather than discovered later: there is no data race (the memo is
+// mutex-guarded and the published map is read-only), but the reset runs on the
+// API goroutine while reconcileAll may be mid-pass on the coordinator
+// goroutine. A reverify landing mid-pass forces a re-fetch, so a later target in
+// the SAME pass can observe a newer manifest than an earlier one —
+// DiscoverVersions returns tag T1, the subsequent Artifacts(version=T1) refuses
+// with ErrVersionSuperseded, and reconcileTarget logs and skips that version for
+// one tick. Self-healing and low severity.
 func ResetNetbootxyzCache() {
 	netbootxyzCache.Lock()
 	netbootxyzCache.endpoints = nil
@@ -147,6 +162,52 @@ type netbootxyzOS struct {
 	// because the size is not known until the request is already in flight, and
 	// the ceiling is on the whole request. Only Tails needs it today.
 	large map[string]bool
+
+	// checksums names the release asset publishing upstream digests for this
+	// tool's files, or "" when upstream publishes none — which is seven of the
+	// eight tools (verified across both source repos: netbootxyz/asset-mirror
+	// publishes sha256-checksums.txt on 76 of 76 Tails releases and on nothing
+	// else; netbootxyz/debian-squash, which serves clonezilla and rescatux,
+	// publishes no checksums at all).
+	//
+	// It is deliberately NOT in files: it is verification material — fetched,
+	// parsed and discarded, never cached and never served. It is also exempt
+	// from the manifest-membership check in Artifacts, because endpoints.yml
+	// does not list it. That omission is the entire premise of #76, and this is
+	// the one place the design derives an artifact URL from a filename booty
+	// hardcodes rather than one upstream declares. The composed URL is still
+	// host-pinned to assetBase and the fetched bytes are only ever compared
+	// against — never executed, cached, or served.
+	checksums string
+
+	// checksumCovers names the files the sidecar MUST list. A declared-covered
+	// file absent from the sidecar is an error; any OTHER file's absence is not,
+	// because the Tails sidecar legitimately lists only the ISO.
+	//
+	// What this uniquely guards is a SIDECAR-ONLY DESYNC: the manifest and the
+	// release asset still say tails-amd64.iso while the sidecar drops or
+	// re-keys that line. Nothing else in the pipeline notices — every other
+	// check passes — so the 1.94 GB ISO would silently land not-verifiable,
+	// which is the exact silent downgrade fail-loud exists to forbid.
+	//
+	// On an upstream RENAME, which check fires depends on the manifest:
+	//   - manifest tracked the rename -> the manifest-membership check below
+	//     errors first ("allowlisted file %q is not in the manifest entry"),
+	//     and this field is never reached;
+	//   - manifest LAGS the rename -> membership passes, but that release's
+	//     sidecar keys the NEW name, so the old name is uncovered and THIS
+	//     field errors — before any download, rather than the 404 a naive
+	//     reading predicts.
+	// Both fail loud. Do not simplify this comment to "only a desync" or to
+	// "rename protection" — say which branch.
+	//
+	// Not derivable from large, even though the two hold identical content
+	// today: large means "too big for the staged downloader's 5-minute
+	// ceiling", checksumCovers means "upstream promises a digest for this".
+	// Different change-drivers — a tool could publish a sidecar covering only
+	// small files, or mark a file large that upstream never checksums.
+	// Entries must be a subset of files (asserted by a registry test).
+	checksumCovers []string
 }
 
 func (t netbootxyzOS) Name() string             { return t.name }
@@ -214,11 +275,42 @@ func (t netbootxyzOS) DiscoverVersions(ctx context.Context, _ map[string]string)
 	return tags, nil
 }
 
+// sha256HexRE pins the shape of a digest a sidecar declares.
+//
+// It exists because of what a malformed one COSTS downstream, not for
+// cosmetics: landArtifact compares the declared value byte-exactly against
+// lowercase hex.EncodeToString output, and a Large artifact's mismatch is
+// classCorruption, which is rejected under warn AND strict (D4a). So a single
+// uppercase character or stray space in an upstream sidecar would delete the
+// completed 1.94 GB file, RemoveAll the version directory, and re-download from
+// zero on the next reconcile tick — forever. Rejecting it here instead turns
+// that into a loud discovery-time error, which reconcile.go downgrades to "skip
+// this version this tick", costing only the availability of UPDATES.
+//
+// This narrows the INPUT; it deliberately does NOT loosen the COMPARISON. A
+// case-insensitive compare was rejected because it would also change FCOS and
+// Flatcar. It also lives here rather than in checksum.ParseSums, which the
+// Debian DVD path shares — validating inside the parser would change that
+// consumer's behaviour.
+var sha256HexRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// ErrVersionSuperseded reports that the requested version is no longer the tag
+// upstream publishes for this endpoint. The netboot.xyz manifest holds one path
+// per endpoint, so honouring a stale version is impossible — but this is a
+// normal, expected state for an ARCHIVED version, not a fault. Callers that
+// merely want a verdict (pkg/cache's VerifyVersion, behind the reverify
+// endpoint) map it to "no verdict"; every other Artifacts error still
+// propagates.
+var ErrVersionSuperseded = errors.New("ostype: requested version is superseded upstream")
+
 // Artifacts returns one downloadable per file in t.files (see its doc
 // comment); every tool MUST declare its files (D14), there is no "empty means
-// every file in the entry" mode. No SHA256/SigURL: netboot.xyz publishes
-// neither, so artifacts land not-verifiable under every signature policy
-// (design §8.5, accepted risk).
+// every file in the entry" mode. Verification material: only a tool declaring
+// `checksums` gets a digest, and only for files that release's sidecar
+// actually lists. Today that is Tails' ISO alone; the other seven tools publish
+// nothing and land not-verifiable under every signature policy (accepted risk).
+// SigURL is never set — GPG verification of a detached signature over a
+// multi-GB ISO is out of scope.
 //
 // It REFUSES a version that is not the entry's current tag: the manifest holds
 // one path per endpoint, so honouring a stale version is impossible, and
@@ -233,7 +325,8 @@ func (t netbootxyzOS) Artifacts(ctx context.Context, version, arch string, _ map
 		return nil, err
 	}
 	if version != tag {
-		return nil, fmt.Errorf("ostype: %s/%s: requested version %q but upstream now publishes %q; refusing to mix releases", t.name, arch, version, tag)
+		return nil, fmt.Errorf("ostype: %s/%s: requested version %q but upstream now publishes %q; refusing to mix releases: %w",
+			t.name, arch, version, tag, ErrVersionSuperseded)
 	}
 	// D14: every tool declares its files. There is no "empty means everything"
 	// mode — netboot.xyz manifests list files their releases do not publish
@@ -245,6 +338,35 @@ func (t netbootxyzOS) Artifacts(ctx context.Context, version, arch string, _ map
 	names := t.files
 
 	base := viper.GetString(config.NetbootxyzAssetBase)
+
+	// D2: fetch the sidecar ONCE, before the file loop, so a multi-file tool
+	// pays one ~90-byte GET. Unfetchable or malformed is a LOUD failure, never a
+	// silent downgrade to not-verifiable: reconcile.go turns an Artifacts error
+	// into "log a warning and skip this version this tick" without touching the
+	// row, so fail-loud costs the availability of UPDATES, never of the existing
+	// cache.
+	//
+	// Not memoized: tails is amd64-only at retain 1 and targets are
+	// UNIQUE(os, arch, params), so this is roughly one GET per reconcile pass.
+	// A second memo would buy that back at the cost of a reset-coupling to
+	// ResetNetbootxyzCache and an unspecified failure-memoization policy.
+	var sums map[string]string
+	if t.checksums != "" {
+		su, err := artifactURL(base, e.Path, t.checksums)
+		if err != nil {
+			return nil, fmt.Errorf("ostype: %s: %w", t.name, err)
+		}
+		body, ferr := fetchMetadata(ctx, su)
+		if ferr != nil {
+			return nil, fmt.Errorf("ostype: %s: fetch %s: %w", t.name, t.checksums, ferr)
+		}
+		parsed, perr := checksum.ParseSums(body)
+		if perr != nil {
+			return nil, fmt.Errorf("ostype: %s: parse %s: %w", t.name, t.checksums, perr)
+		}
+		sums = parsed
+	}
+
 	out := make([]Artifact, 0, len(names))
 	for _, f := range names {
 		if !slices.Contains(e.Files, f) {
@@ -254,7 +376,23 @@ func (t netbootxyzOS) Artifacts(ctx context.Context, version, arch string, _ map
 		if err != nil {
 			return nil, fmt.Errorf("ostype: %s: %w", t.name, err)
 		}
-		out = append(out, Artifact{Filename: f, URL: u, Large: t.large[f]})
+		a := Artifact{Filename: f, URL: u, Large: t.large[f]}
+		// Lookup is by FILENAME, never "it's the only line". The sidecar has one
+		// line today; keying on the name is what makes a rename fail loudly
+		// instead of attaching the wrong file's digest to the ISO.
+		if d, ok := sums[f]; ok {
+			if !sha256HexRE.MatchString(d) {
+				return nil, fmt.Errorf(
+					"ostype: %s: %s declares digest %q for %q, which is not 64 lowercase hex characters", t.name, t.checksums, d, f)
+			}
+			a.SHA256 = d
+		} else if slices.Contains(t.checksumCovers, f) {
+			return nil, fmt.Errorf(
+				"ostype: %s: %q is declared checksum-covered but absent from %s", t.name, f, t.checksums)
+		}
+		// Any OTHER file absent from the sidecar stays not-verifiable: the Tails
+		// sidecar legitimately lists only the ISO.
+		out = append(out, a)
 	}
 	return out, nil
 }

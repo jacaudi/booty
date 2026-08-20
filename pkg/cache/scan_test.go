@@ -38,11 +38,7 @@ func TestScanRepairsAndReportsOrphans(t *testing.T) {
 	}
 }
 
-// TestScanSkipsPartialFiles asserts an in-flight .partial staged download is
-// never counted toward a cached version's size — a .partial is unverified
-// in-flight bytes, not a cached artifact (T2/T9 stage artifacts as
-// <file>.partial before landing them).
-func TestScanSkipsPartialFiles(t *testing.T) {
+func TestScanSkipsInFlightFiles(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 	viper.Set(config.DataDir, t.TempDir())
@@ -53,12 +49,19 @@ func TestScanSkipsPartialFiles(t *testing.T) {
 	os.MkdirAll(dir, 0o755)
 	os.WriteFile(filepath.Join(dir, "kernel-amd64"), []byte("12345"), 0o644)                // 5 bytes
 	os.WriteFile(filepath.Join(dir, "initramfs-amd64.xz.partial"), []byte("999999"), 0o644) // in-flight, must be ignored
+	// A resumable in-progress file is the LONGER-lived of the two on disk — a
+	// stalled multi-GB transfer sits for hours by design — so counting it
+	// inflates SumCacheBytes and the --cacheMaxBytes eviction budget by up to a
+	// whole ISO. Reachable when finalFilesPresent fails for one artifact of an
+	// already-cached version and an operator hits POST /api/v1/cache/scan
+	// mid-transfer. Deliberately large so a regression is unmissable.
+	os.WriteFile(filepath.Join(dir, "big.iso"+DownloadSuffix), make([]byte, 90000), 0o644)
 
 	if _, err := Scan(store); err != nil {
 		t.Fatal(err)
 	}
 	rows, _ := store.ListCacheEntries(db.CacheFilter{})
 	if len(rows) != 1 || rows[0].Size != 5 {
-		t.Fatalf("Scan must exclude *.partial from size, got %+v", rows)
+		t.Fatalf("Scan must exclude both *.partial and *%s from size, got %+v", DownloadSuffix, rows)
 	}
 }

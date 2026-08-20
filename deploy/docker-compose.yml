@@ -27,6 +27,7 @@ services:
       # - --flatcarChannel=stable            # uncomment to override the default Flatcar channel used by the embedded catalog
       # - --coreOSChannel=stable              # uncomment to override the default Fedora CoreOS channel
       # - --talosFactoryURL=https://factory.talos.dev  # uncomment to point at a private Talos Image Factory
-      # - --signaturePolicy=warn              # warn (default): block tampering, log other verify failures; strict/off also available
+      # - --signaturePolicy=warn              # warn (default): block tampering, log other verify failures (but refuse a checksum
+                                             # failure on a resumable multi-GB artifact); strict/off also available
 volumes:
   booty-data:
