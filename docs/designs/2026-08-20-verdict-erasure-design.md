@@ -450,10 +450,29 @@ nothing", so a test asserting only that nothing bad happened passes in both worl
 **2. `TestReconcileTarget_TransportErrorAloneRecordsNoRejection`** — the safety direction.
 **FCOS + `strict`.** The only failure is a transport error; every other artifact verifies and lands.
 Asserts no `cache_entries` row for that version, `VerifyRejectedWithin` returns `blocked=false`, and
-the version directory was not removed. Additionally seeds a **stale** archived row (older than the
-window) and asserts its `fetched_at` is unchanged after the DEFER — the no-wedge property §5.5
-claims.
-*Mutation:* change `rejected()` to `!o.landed` → must go red.
+the version directory was not removed.
+
+A second subtest pins the **no-wedge** property §5.5 claims: a DEFER must not touch a *prior*
+rejection row. Seed a rejection row via `UpsertCacheEntryArchived` with a distinctive sentinel
+reason, set `verifyRetryAfter = 0` so the guard does not block the version out of the land loop,
+then assert after the DEFER that the row's `verify_err` is still the sentinel and its
+`size`/`in_window` are unchanged.
+
+**Two corrections to an earlier revision of this section, both from Gate 2:**
+
+- *It asked for a **backdated** row and got an unimplementable test.* `UpsertCacheEntryArchived`
+  hardcodes `datetime('now')` (`pkg/db/cache.go:93`), `Store.db` is unexported, and the test lives
+  in `package cache` — so there is no way to seed a stale `fetched_at` from where the test runs.
+  Disabling the guard with `verifyRetryAfter = 0` reaches the same state and has repo precedent
+  (`reconcile_test.go:868`).
+- *It asserted on `fetched_at`, which cannot discriminate.* That column has one-second granularity,
+  so a same-second rewrite is byte-identical and the assertion would pass against a row that **had**
+  been overwritten — an inert test. `verify_err` is the discriminating column: under the mutation
+  below, `aggregateVerdicts` returns no failure, so the row is rewritten with `verify_err=""` and
+  the sentinel is destroyed. (Every writer of `fetched_at` also writes a column this subtest
+  checks, so the coverage is preserved transitively.)
+
+*Mutation:* change `rejected()` to `!o.landed` → both subtests must go red.
 
 **3. `TestReconcileTarget_WarnLandedCorruptionIsNotAVersionRejection`** — the D-B trap.
 **FCOS + `warn`.** A non-`Large` artifact fails its checksum while a sibling returns a transport
@@ -553,6 +572,15 @@ a tab-indented block, and `go vet` passes both ways.
   | `verify.go:264-267` | `fetchBytes(a.SigURL)` — sidecar HTTP failure / 5xx | `classCorruption` | `strict` |
   | `verify.go:268-271` | `os.Open(filePath)` — local I/O | `classCorruption` | `strict` |
   | `verify.go:290-292` | I/O error while `CheckDetachedSignature` reads the signed file — falls to `default:` | `classForgery` | **`warn` AND `strict`** |
+
+  **The most reachable trigger is not a 5xx — it is a cancelled context, i.e. an ordinary
+  SIGTERM mid-pass.** Measured by Gate 2: `reconcileTarget` receives the `signal.NotifyContext`
+  context (`cmd/main.go:362` → `pkg/cache/reconciler.go:127`), and a cancelled sidecar fetch
+  produces `class=classCorruption, err=nil, landed=false` under `strict` — so `rejected()` is true
+  and the recorded reason reads `signature material unavailable: … context canceled`. Under
+  `strict`, a Flatcar version whose sig fetch is cancelled by shutdown *while a sibling's download
+  errors* is now REJECTed on a clean restart: directory removed, row written, guard armed for an
+  hour. (Under `warn` it lands, so the default policy is unaffected.)
 
   These reach `landArtifact`'s `reject()` and therefore satisfy `!landed && err == nil`, so under D-A
   they now REJECT — arming the guard for an hour — where today a co-occurring sibling error would
