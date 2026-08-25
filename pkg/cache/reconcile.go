@@ -47,9 +47,9 @@ type artifactOutcome struct {
 // This is NOT the same as "an integrity verdict was reached": verifyArtifact
 // classifies some infrastructure faults as classCorruption/classForgery before
 // landArtifact ever sees them (verifyDetachedGPG's fetchBytes, os.Open and
-// default: arms), and those refusals
-// are indistinguishable here by construction. That residual is stated in the
-// design's section 8 and is deliberately not fixed here.
+// default: arms), and those refusals are indistinguishable here by
+// construction. That residual is stated in the design's section 8 and is
+// deliberately not fixed here.
 //
 // Deliberately NOT keyed on the verdict class: a non-Large artifact failing its
 // checksum under `warn` LANDS while carrying classCorruption, so a class-keyed
@@ -270,6 +270,17 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		// carry it in the outcome instead.
 		_ = vg.Wait()
 
+		if ctx.Err() != nil {
+			// Shutting down: loop() returns on ctx.Done() but does not preempt an
+			// in-flight pass, so this one keeps running with a dead context. A
+			// cancelled sidecar fetch is classified as corruption with a NIL error
+			// (verify.go's verifyDetachedGPG), which reads here as a REFUSAL — so no
+			// refusal from this pass is trustworthy. DEFER, exactly as before this
+			// disposition existed: nothing recorded, nothing wiped, resumable bytes
+			// kept.
+			continue
+		}
+
 		rejected := slices.ContainsFunc(outcomes, artifactOutcome.rejected)
 		errored := 0
 		for _, o := range outcomes {
@@ -283,7 +294,9 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		// below. A transport error with NO refusal still writes no cache_entries
 		// row — which is what keeps it from forging VerifyRejectedWithin's
 		// four-column signature, and what leaves a resumable <file>DownloadSuffix
-		// file on disk to resume next tick (D4b).
+		// file on disk to resume next tick (D4b). (The loop-entry
+		// UpsertTargetVersion above has already written cached=0; the guard reads
+		// cache_entries, not that column.)
 		//
 		// The accepted cost: a GENUINELY transient co-occurrence — upstream
 		// mid-publish, say, with a new sidecar against old bytes and a sibling not

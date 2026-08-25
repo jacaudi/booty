@@ -615,9 +615,7 @@ worst case is one guarded hour on a version whose bytes are already gone.
 a reachable transport failure: a warn-landed failed version (`cached=1`, `size>0`) later loses a file
 on disk → `finalFilesPresent` false → `reconcile.go:167` runs `UpsertTargetVersion{Cached: false}`,
 and `versions.go:22` does `cached = excluded.cached`, so `cached` drops to 0 while the *stale*
-`verified=0`/`verify_err` remain.
-**Narrowed 2026-08-20:** only when no sibling artifact was refused — see
-`docs/designs/2026-08-20-verdict-erasure-design.md`. If the re-download then hits a transport error, `vg.Wait() != nil`
+`verified=0`/`verify_err` remain. If the re-download then hits a transport error, `vg.Wait() != nil`
 returns before anything is written — leaving exactly the two-column signature, after a transport
 failure that §7.3 promises to exclude.
 **Narrowed 2026-08-20:** only when no sibling artifact was refused — see
