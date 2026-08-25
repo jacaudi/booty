@@ -334,7 +334,8 @@ func TestVerifyRejectedWithinReleasesAnAgedRejection(t *testing.T) {
 // keeps a STALE verified=0/verify_err while cached drops to 0. A transport
 // error on the re-download writes nothing, leaving that two-column signature —
 // which a two-column predicate would misread as a verification rejection and
-// guard, breaking the promise that transport failures are never guarded.
+// guard, breaking the promise that a transport failure with no co-occurring
+// refusal is never guarded.
 func TestVerifyRejectedWithinIgnoresAWarnLandedRowWithBytes(t *testing.T) {
 	s := newTestStore(t)
 	tid, err := s.CreateTarget(Target{
@@ -366,7 +367,8 @@ func TestVerifyRejectedWithinIgnoresAWarnLandedRowWithBytes(t *testing.T) {
 	}
 	if blocked {
 		t.Fatal("a warn-landed row with bytes on disk is NOT a verification rejection; " +
-			"guarding it would break the promise that transport failures are never guarded")
+			"guarding it would break the promise that a transport failure with no " +
+			"co-occurring refusal is never guarded")
 	}
 }
 

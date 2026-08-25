@@ -210,7 +210,9 @@ code that same error costs nothing, because `hashFile` is never reached.
 **Resolution:** the `Large` branch of `landArtifact` computes the digest itself and treats a read
 failure as a transport/IO error — `return false, artifactVerdict{}, err`. That routes to
 `reconcile.go:186`'s `vg.Wait() != nil → continue`, which writes no row, runs no `removeVersionDir`,
-and **leaves the resumable bytes on disk** to resume next tick. The successful digest is then passed
+and **leaves the resumable bytes on disk** to resume next tick.
+**Narrowed 2026-08-20:** only when no sibling artifact was refused — see
+`docs/designs/2026-08-20-verdict-erasure-design.md`. The successful digest is then passed
 to `verifyArtifact` as `streamedSHA256`, so `verifyArtifact` needs no change and its own `hashFile`
 branch becomes reachable only from `VerifyVersion` (reverify), where classifying an unreadable final
 file as corruption is existing, unchanged behaviour.
@@ -613,9 +615,13 @@ worst case is one guarded hour on a version whose bytes are already gone.
 a reachable transport failure: a warn-landed failed version (`cached=1`, `size>0`) later loses a file
 on disk → `finalFilesPresent` false → `reconcile.go:167` runs `UpsertTargetVersion{Cached: false}`,
 and `versions.go:22` does `cached = excluded.cached`, so `cached` drops to 0 while the *stale*
-`verified=0`/`verify_err` remain. If the re-download then hits a transport error, `vg.Wait() != nil`
+`verified=0`/`verify_err` remain.
+**Narrowed 2026-08-20:** only when no sibling artifact was refused — see
+`docs/designs/2026-08-20-verdict-erasure-design.md`. If the re-download then hits a transport error, `vg.Wait() != nil`
 returns before anything is written — leaving exactly the two-column signature, after a transport
-failure that §7.3 promises to exclude. `size=0 AND in_window=0` is what makes it unambiguous.
+failure that §7.3 promises to exclude.
+**Narrowed 2026-08-20:** only when no sibling artifact was refused — see
+`docs/designs/2026-08-20-verdict-erasure-design.md`. `size=0 AND in_window=0` is what makes it unambiguous.
 (Under D4a this specific sequence is now unreachable for `Large` artifacts, since they no longer
 warn-land — but it stays reachable for every other OS, so the predicate is pinned regardless.)
 
@@ -676,6 +682,8 @@ guard logs the version, its `verify_err`, and `retryAfter` as a duration ("retry
 - **Transport failures are excluded** and the §7.2 predicate now genuinely excludes them: a network
   failure returns at `reconcile.go:186-188` before any `cache_entries` row is written, so it cannot forge the four-column
   signature.
+  **Superseded 2026-08-20:** narrowed to a transport failure with no co-occurring refusal — see
+  `docs/designs/2026-08-20-verdict-erasure-design.md`.
 - **Self-clearing, so no new API surface.** A transient corruption heals on the next attempt after
   the window. A permanent upstream mismatch stays visible via `verify_err`, which the cache API
   already exposes.
@@ -694,6 +702,7 @@ guard logs the version, its `verify_err`, and `retryAfter` as a duration ("retry
   *observed* upstream state. Not fixed in the review fix wave that found it: closing it means
   recording a rejection even when a sibling errored, which redefines what `landed=false` together
   with `err != nil` means for version-level atomicity — a design decision, not a comment fix.
+  **Closed 2026-08-20** by `docs/designs/2026-08-20-verdict-erasure-design.md`.
 
 ### 7.4 Configuration
 
@@ -819,6 +828,8 @@ survived three review rounds; that is the failure mode this requirement exists t
     bug. The window is shrunk by setting `verifyRetryAfter` directly (§7.4) — no sleeps. Also assert
     a transport failure is **not** guarded, including the B3 sequence (warn-land → file loss →
     `cached=0` → transport error) for a non-`Large` artifact.
+    **Narrowed 2026-08-20:** only when no sibling artifact was refused — see
+    `docs/designs/2026-08-20-verdict-erasure-design.md`.
 16. `scan.go` excludes in-progress files from the size total (§5.5).
 
 **`pkg/checksum`:**

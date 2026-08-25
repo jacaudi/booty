@@ -200,17 +200,16 @@ func TestVerifyArtifact_UnparseableKeyIsCorruption(t *testing.T) {
 }
 
 // TestArtifactVerdictZeroValueIsNotAPass pins WHY classUnset exists, not merely
-// that it does. reconcile.go pre-allocates `verdicts := make([]artifactVerdict,
-// len(arts))` alongside `landedFlags := make([]bool, len(arts))` — two parallel
-// slices whose zero values default in OPPOSITE safety directions. A zero-valued
-// bool reads as "rejected", which is safe; before classUnset a zero-valued
-// artifactVerdict read as classPass, i.e. "verified OK", which is not.
+// that it does. reconcile.go pre-allocates `outcomes := make([]artifactOutcome,
+// len(arts))`, whose artifactVerdict field defaults in the OPPOSITE safety
+// direction from its landed bool: a zero-valued bool reads as "not landed",
+// which is safe; before classUnset a zero-valued artifactVerdict read as
+// classPass, i.e. "verified OK", which is not.
 //
-// No partially-filled slice reaches aggregateVerdicts today, because
-// `vg.Wait() != nil` abandons the whole version first. But D4b makes an error
-// return from landArtifact a NORMAL path for Large artifacts, so that
-// short-circuit now carries weight it did not carry before, and the zero value
-// should fail closed on its own rather than by depending on it.
+// Partially-filled verdict slices DO reach aggregateVerdicts: an artifact that
+// returns a transport error leaves its verdict at this zero value, and the
+// version is still aggregated whenever a sibling was refused. So the zero value
+// has to fail closed on its own — nothing upstream filters it out any more.
 //
 // This test goes red if someone folds classUnset away and puts classPass back
 // at iota 0.
@@ -819,9 +818,9 @@ func TestLandArtifactLargeWithSigURLStillHardFails(t *testing.T) {
 // an operator clearing the cache dir mid-pass — into: delete the completed
 // 1.94 GB file, RemoveAll the version directory, and arm the retry guard for an
 // hour. So landArtifact hashes the Large file ITSELF and returns the read
-// failure as an error, which routes to reconcile.go's `vg.Wait() != nil ->
-// continue`: no row written, no version dir removed, and the resumable bytes
-// left on disk to resume next tick.
+// failure as an error, which makes the artifact ERRORED rather than refused, so
+// reconcile.go defers the version: no row written, no version dir removed, and
+// the resumable bytes left on disk to resume next tick.
 func TestLandArtifactLargeHashReadFailureIsAnErrorNotAVerdict(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root bypasses the mode bits this test relies on")

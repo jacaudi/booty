@@ -61,18 +61,20 @@ func (o artifactOutcome) rejected() bool { return o.err == nil && !o.landed }
 // only from the reconcile coordinator goroutine, so every DB write here is
 // single-threaded (no viper/db races). Failures are non-fatal: a discovery
 // fetch error keeps the existing cached set (no prune); a per-artifact download
-// error is logged and retried next tick.
+// error is logged and retried next tick UNLESS another artifact in the same
+// version was refused, in which case the refusal is recorded and the version is
+// rejected.
 //
 // Desired set: discovery mode -> DiscoverVersions -> retentionFor, plus any
 // existing manual rows; manual mode -> just the existing manual rows. discovered
 // rows outside the retained set are pruned (row + dir); manual rows are NEVER
 // pruned.
 //
-// concurrency bounds artifact downloads. A FRESH errgroup.Group is created per
-// version (errgroup's error is set once and never reset, so a single shared,
-// reused group would poison every later Wait); the coordinator runs targets
-// sequentially, so a per-version cap is functionally identical to a global cap
-// at booty's ~3 upstreams.
+// concurrency bounds artifact downloads. The per-version errgroup.Group is used
+// purely as a bounded waiter — its goroutines always return nil, because a
+// transport error is carried per-artifact in artifactOutcome.err so it can be
+// attributed. The coordinator runs targets sequentially, so a per-version cap is
+// functionally identical to a global cap at booty's ~3 upstreams.
 func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db.Target) error {
 	// D17: fetch the FCOS channel streams doc at most once per pass; reset the
 	// memo at pass entry so a later pass resolves new builds against a fresh doc.
@@ -187,9 +189,12 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		// return above this loop — that hazard is pre-existing and tracked
 		// separately (#77), not fixed here.
 		//
-		// Transport failures are never guarded: they return before any
-		// cache_entries row is written, so they cannot forge the four-column
-		// signature VerifyRejectedWithin matches on.
+		// A transport failure ALONE is never guarded: with no artifact refused,
+		// the version defers before any cache_entries row is written, so it
+		// cannot forge the four-column signature VerifyRejectedWithin matches
+		// on. A transport failure co-occurring with a REFUSAL is a different
+		// case: the refusal is recorded and does arm the guard, which is
+		// deliberate — see artifactOutcome.rejected below.
 		blocked, guardReason, gerr := store.VerifyRejectedWithin(t.ID, version, verifyRetryAfter)
 		if gerr != nil {
 			// No ids: db.VerifyRejectedWithin already wraps as
