@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
@@ -978,5 +979,157 @@ func TestReconcileTarget_VerificationRejectionRateLimitsRedownload(t *testing.T)
 	if rows[0].Verified == nil || !*rows[0].Verified {
 		t.Fatalf("the retried Tails version must record verified=1, got %v (verifyErr %q)",
 			rows[0].Verified, rows[0].VerifyErr)
+	}
+}
+
+// fcosGoodBody is the artifact payload fcosSplitServer declares a digest for.
+// Passing it as kernelBody makes the kernel VERIFY; passing anything else makes
+// it MISMATCH.
+var fcosGoodBody = []byte("fcos-artifact")
+
+// fcosSplitServer serves a Fedora CoreOS stream declaring hexSHA(good) for all
+// three PXE artifacts, then serves each one differently so a single version can
+// carry a REFUSAL and a TRANSPORT ERROR at the same time — the co-occurrence
+// this change exists to handle, which no existing fixture can produce:
+//
+//	/44/kernel    -> kernelBody (fcosGoodBody verifies; anything else mismatches)
+//	/44/initramfs -> HTTP 500 when failInitramfs, else the matching bytes
+//	/44/rootfs    -> the matching bytes, always
+func fcosSplitServer(good, kernelBody []byte, failInitramfs bool) *httptest.Server {
+	declared := hexSHA(good)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			_, _ = fmt.Fprintf(w, `{"architectures":{"x86_64":{"artifacts":{"metal":{`+
+				`"release":"44.0.0.0","formats":{"pxe":{`+
+				`"kernel":{"location":"%[1]s/44/kernel","sha256":"%[2]s"},`+
+				`"initramfs":{"location":"%[1]s/44/initramfs","sha256":"%[2]s"},`+
+				`"rootfs":{"location":"%[1]s/44/rootfs","sha256":"%[2]s"}`+
+				`}}}}}}}`, "http://"+r.Host, declared)
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/initramfs"):
+			if failInitramfs {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(good)
+		case strings.HasSuffix(r.URL.Path, "/kernel"):
+			_, _ = w.Write(kernelBody)
+		default:
+			_, _ = w.Write(good)
+		}
+	}))
+}
+
+// newFCOSSplitFixture wires viper, a store and a discovery-mode FCOS target at a
+// fcosSplitServer. The caller drives reconcileTarget with the returned target.
+func newFCOSSplitFixture(t *testing.T, policy string, kernelBody []byte, failInitramfs bool) (*db.Store, db.Target) {
+	t.Helper()
+	srv := fcosSplitServer(fcosGoodBody, kernelBody, failInitramfs)
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.SignaturePolicy, policy)
+
+	store := newReconcileStore(t)
+	tid, err := store.CreateTarget(db.Target{
+		OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`,
+		Mode: "discovery", RetainN: 1, Source: "api", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	tgt, err := store.GetTarget(tid)
+	if err != nil {
+		t.Fatalf("GetTarget: %v", err)
+	}
+	return store, *tgt
+}
+
+// TestReconcileTarget_RejectionRecordedDespiteSiblingTransportError is the ONLY
+// test in this change that discriminates the feature. A version carries both a
+// definitive refusal (the kernel's bytes do not match its declared digest, and
+// `strict` refuses it) and a transport error (initramfs 500s). Before this
+// change, reconcileTarget's `vg.Wait() != nil -> continue` threw away EVERY
+// verdict for the version, so nothing was recorded, UpsertCacheEntryArchived
+// never ran, and VerifyRejectedWithin could not arm — the next tick re-download
+// the whole version, forever.
+//
+// It asserts the POSITIVE outcome (a row exists AND the guard is armed) rather
+// than the absence of something: the pre-change behaviour is "silently does
+// nothing", which any absence-only assertion passes in both worlds.
+func TestReconcileTarget_RejectionRecordedDespiteSiblingTransportError(t *testing.T) {
+	store, tgt := newFCOSSplitFixture(t, "strict", []byte("WRONG-KERNEL-BYTES"), true)
+
+	if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+		t.Fatalf("reconcileTarget: %v", err)
+	}
+
+	rows, err := store.ListCacheEntries(db.CacheFilter{})
+	if err != nil {
+		t.Fatalf("ListCacheEntries: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("a refusal co-occurring with a sibling transport error must still record a "+
+			"failure-visibility row; got %d rows: %+v", len(rows), rows)
+	}
+	r := rows[0]
+	if r.Size != 0 || r.InWindow || r.Verified == nil || *r.Verified {
+		t.Fatalf("want the four-column archived shape (size=0, in_window=0, verified=0), got %+v", r)
+	}
+	if !strings.Contains(r.VerifyErr, "checksum mismatch") {
+		t.Fatalf("verify_err must name the verification failure, got %q", r.VerifyErr)
+	}
+
+	// The point of recording the row: the retry guard can now arm.
+	blocked, reason, err := store.VerifyRejectedWithin(tgt.ID, "44.0.0.0", time.Hour)
+	if err != nil {
+		t.Fatalf("VerifyRejectedWithin: %v", err)
+	}
+	if !blocked {
+		t.Fatal("the retry guard must be armed after a refusal; otherwise the next tick " +
+			"re-downloads the whole version and keeps doing so every cache interval")
+	}
+	if !strings.Contains(reason, "checksum mismatch") {
+		t.Fatalf("the armed guard must carry the refusal reason, got %q", reason)
+	}
+
+	// Version-level atomicity still applies to a refusal.
+	if cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+		t.Fatal("a rejected version's directory must be removed")
+	}
+}
+
+// TestReconcileTarget_RejectionLogsErroredSiblingCount pins the compensating
+// mechanism for keeping transport detail OUT of verify_err. verify_err is
+// defined as the errors.Join of failing VERIFICATION verdicts only
+// (docs/schema/DATABASE.md), so a co-occurring transport error would otherwise
+// be invisible to the operator. The rejection's ERROR log carries it instead.
+// Untested, that is a promise rather than a mechanism.
+func TestReconcileTarget_RejectionLogsErroredSiblingCount(t *testing.T) {
+	store, tgt := newFCOSSplitFixture(t, "strict", []byte("WRONG-KERNEL-BYTES"), true)
+
+	var logbuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logbuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+		t.Fatalf("reconcileTarget: %v", err)
+	}
+
+	logged := logbuf.String()
+	if !strings.Contains(logged, "version rejected by verification") {
+		t.Fatalf("a rejected version must emit the rejection ERROR; got log: %q", logged)
+	}
+	if !strings.Contains(logged, "erroredSiblings=1") {
+		t.Fatalf("the rejection log must report how many siblings could not be evaluated "+
+			"(verify_err deliberately does not carry them); got log: %q", logged)
 	}
 }
