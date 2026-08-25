@@ -1133,3 +1133,137 @@ func TestReconcileTarget_RejectionLogsErroredSiblingCount(t *testing.T) {
 			"(verify_err deliberately does not carry them); got log: %q", logged)
 	}
 }
+
+// TestReconcileTarget_TransportErrorAloneRecordsNoRejection is the SAFETY
+// direction, and a trap guard rather than a feature test: it passes against the
+// pre-change code too. A version whose only failure is a transport error must
+// record nothing at all. If it recorded a failure-visibility row, a network
+// blip would forge VerifyRejectedWithin's four-column signature and suppress
+// re-downloads of a version that was never actually refused.
+//
+// Goes red if rejected() is ever loosened to plain !landed, which cannot tell a
+// refusal from an artifact that was never evaluated.
+func TestReconcileTarget_TransportErrorAloneRecordsNoRejection(t *testing.T) {
+	t.Run("nothing is recorded and the version dir survives", func(t *testing.T) {
+		// kernel verifies; only initramfs 500s. No artifact is ever refused.
+		store, tgt := newFCOSSplitFixture(t, "strict", fcosGoodBody, true)
+
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatalf("reconcileTarget: %v", err)
+		}
+
+		rows, err := store.ListCacheEntries(db.CacheFilter{})
+		if err != nil {
+			t.Fatalf("ListCacheEntries: %v", err)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("a transport error alone must record NO cache_entries row — writing one "+
+				"lets a network blip forge the retry guard's signature; got %+v", rows)
+		}
+
+		blocked, _, err := store.VerifyRejectedWithin(tgt.ID, "44.0.0.0", time.Hour)
+		if err != nil {
+			t.Fatalf("VerifyRejectedWithin: %v", err)
+		}
+		if blocked {
+			t.Fatal("a transport error must never arm the verification-rejection retry guard")
+		}
+
+		// The artifacts that DID land stay on disk so the next tick resumes rather
+		// than restarting; only a refusal removes the version dir.
+		if !cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+			t.Fatal("a deferred version's directory must survive; removing it is what makes " +
+				"a resumable download restart from zero")
+		}
+	})
+
+	// The no-wedge property: a DEFER must not touch a PRIOR rejection row. If it
+	// refreshed that row, a version could be held guarded indefinitely by
+	// repeated transport failures that never produced a verdict.
+	//
+	// The assertion is on verify_err, NOT on fetched_at: fetched_at has
+	// one-second granularity, so a same-second rewrite is byte-identical and an
+	// assertion on it would pass even when the row HAD been rewritten.
+	t.Run("a prior rejection row is left untouched", func(t *testing.T) {
+		const seeded = "SEEDED-PRIOR-REASON"
+		store, tgt := newFCOSSplitFixture(t, "strict", fcosGoodBody, true)
+
+		// Disable the guard so the version reaches the land loop at all; this is
+		// the same lever TestReconcileTarget_VerificationRejectionRateLimitsRedownload
+		// uses. A zero window makes the SQL bound "-0 seconds", which no row is
+		// newer than.
+		prev := verifyRetryAfter
+		verifyRetryAfter = 0
+		t.Cleanup(func() { verifyRetryAfter = prev })
+
+		if err := store.UpsertTargetVersion(db.TargetVersion{
+			TargetID: tgt.ID, Version: "44.0.0.0", Source: "discovered",
+		}); err != nil {
+			t.Fatalf("UpsertTargetVersion: %v", err)
+		}
+		tvID, err := store.TargetVersionID(tgt.ID, "44.0.0.0")
+		if err != nil {
+			t.Fatalf("TargetVersionID: %v", err)
+		}
+		if err := store.UpsertCacheEntryArchived(tvID, seeded); err != nil {
+			t.Fatalf("UpsertCacheEntryArchived: %v", err)
+		}
+
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatalf("reconcileTarget: %v", err)
+		}
+
+		rows, err := store.ListCacheEntries(db.CacheFilter{})
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("want exactly the seeded row; err=%v rows=%+v", err, rows)
+		}
+		if rows[0].VerifyErr != seeded {
+			t.Fatalf("a deferred tick must leave a prior rejection row untouched; verify_err "+
+				"changed from %q to %q", seeded, rows[0].VerifyErr)
+		}
+		if rows[0].Size != 0 || rows[0].InWindow {
+			t.Fatalf("the seeded row's four-column shape must be unchanged, got %+v", rows[0])
+		}
+	})
+}
+
+// TestReconcileTarget_WarnLandedCorruptionIsNotAVersionRejection is a trap guard
+// for the most tempting wrong implementation: keying the disposition off the
+// verdict CLASS instead of off whether the artifact landed.
+//
+// A non-Large artifact that fails its checksum under `warn` LANDS, carrying
+// classCorruption — that is the availability trade-off warn exists for. A
+// class-keyed predicate would read that landed artifact as a refusal, reject the
+// whole version, remove its directory and arm the retry guard, silently deleting
+// `warn` as a usable policy. The artifact landed, so there is no refusal here;
+// the sibling's transport error means the version simply DEFERS.
+func TestReconcileTarget_WarnLandedCorruptionIsNotAVersionRejection(t *testing.T) {
+	// warn + a mismatching kernel: the kernel lands with classCorruption.
+	// initramfs 500s, so the version defers.
+	store, tgt := newFCOSSplitFixture(t, "warn", []byte("WRONG-KERNEL-BYTES"), true)
+
+	if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+		t.Fatalf("reconcileTarget: %v", err)
+	}
+
+	rows, err := store.ListCacheEntries(db.CacheFilter{})
+	if err != nil {
+		t.Fatalf("ListCacheEntries: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("under warn a checksum mismatch LANDS, so the version was not refused and "+
+			"nothing may be recorded on a deferred tick; got %+v", rows)
+	}
+
+	blocked, _, err := store.VerifyRejectedWithin(tgt.ID, "44.0.0.0", time.Hour)
+	if err != nil {
+		t.Fatalf("VerifyRejectedWithin: %v", err)
+	}
+	if blocked {
+		t.Fatal("a warn-landed corruption must not arm the rejection retry guard")
+	}
+
+	if !cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+		t.Fatal("a warn-landed version's directory must not be removed")
+	}
+}
