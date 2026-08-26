@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
@@ -499,12 +500,7 @@ func TestReconcileSkipsAlreadyCachedVersion(t *testing.T) {
 	var artifactHits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".json") {
-			_, _ = fmt.Fprintf(w, `{"architectures":{"x86_64":{"artifacts":{"metal":{`+
-				`"release":"44.0.0.0","formats":{"pxe":{`+
-				`"kernel":{"location":"%[1]s/44/kernel","sha256":"%[2]s"},`+
-				`"initramfs":{"location":"%[1]s/44/initramfs","sha256":"%[2]s"},`+
-				`"rootfs":{"location":"%[1]s/44/rootfs","sha256":"%[2]s"}`+
-				`}}}}}}}`, "http://"+r.Host, sha)
+			_, _ = fmt.Fprintf(w, fcosStreamJSON, "http://"+r.Host, sha)
 			return
 		}
 		artifactHits.Add(1)
@@ -612,6 +608,21 @@ func TestLandArtifact_FlatcarShapeValidSignatureLandsUnderWarn(t *testing.T) {
 	}
 }
 
+// fcosStreamJSON is the Fedora CoreOS streams-JSON shape shared by every
+// hermetic FCOS fixture in this file: one PXE artifact set (kernel/initramfs/
+// rootfs) at release 44.0.0.0, all three declaring the SAME sha256 (the
+// caller's second Fprintf arg), against the SAME host base (the first). This
+// is an external contract — the upstream streams schema, not a booty
+// decision — so it is single-sourced here rather than copy-pasted per fixture
+// (DRY): a fourth declared PXE artifact upstream would require every fixture
+// using this shape to change together.
+const fcosStreamJSON = `{"architectures":{"x86_64":{"artifacts":{"metal":{` +
+	`"release":"44.0.0.0","formats":{"pxe":{` +
+	`"kernel":{"location":"%[1]s/44/kernel","sha256":"%[2]s"},` +
+	`"initramfs":{"location":"%[1]s/44/initramfs","sha256":"%[2]s"},` +
+	`"rootfs":{"location":"%[1]s/44/rootfs","sha256":"%[2]s"}` +
+	`}}}}}}}`
+
 // TestReconcileFCOSVerification exercises the reconcile admission/atomicity
 // branch hermetically: an FCOS streams+artifacts server whose declared sha256
 // either matches (land, verified=1) or mismatches (under strict → reject:
@@ -625,12 +636,7 @@ func TestReconcileFCOSVerification(t *testing.T) {
 	fcosServer := func(sha string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasSuffix(r.URL.Path, ".json") {
-				_, _ = fmt.Fprintf(w, `{"architectures":{"x86_64":{"artifacts":{"metal":{`+
-					`"release":"44.0.0.0","formats":{"pxe":{`+
-					`"kernel":{"location":"%[1]s/44/kernel","sha256":"%[2]s"},`+
-					`"initramfs":{"location":"%[1]s/44/initramfs","sha256":"%[2]s"},`+
-					`"rootfs":{"location":"%[1]s/44/rootfs","sha256":"%[2]s"}`+
-					`}}}}}}}`, "http://"+r.Host, sha)
+				_, _ = fmt.Fprintf(w, fcosStreamJSON, "http://"+r.Host, sha)
 				return
 			}
 			_, _ = w.Write(body)
@@ -978,5 +984,395 @@ func TestReconcileTarget_VerificationRejectionRateLimitsRedownload(t *testing.T)
 	if rows[0].Verified == nil || !*rows[0].Verified {
 		t.Fatalf("the retried Tails version must record verified=1, got %v (verifyErr %q)",
 			rows[0].Verified, rows[0].VerifyErr)
+	}
+}
+
+// fcosGoodBody is the artifact payload fcosSplitServer declares a digest for.
+// Passing it as kernelBody makes the kernel VERIFY; passing anything else makes
+// it MISMATCH.
+var fcosGoodBody = []byte("fcos-artifact")
+
+// fcosSplitServer serves a Fedora CoreOS stream declaring hexSHA(fcosGoodBody)
+// for all three PXE artifacts, then serves each one differently so a single
+// version can carry a REFUSAL and a TRANSPORT ERROR at the same time — the
+// co-occurrence this change exists to handle, which no existing fixture can
+// produce. The initramfs leg always 500s: every caller in this file wants the
+// transport-error half of that co-occurrence, so there is no second value to
+// parameterize:
+//
+//	/44/kernel    -> kernelBody (fcosGoodBody verifies; anything else mismatches)
+//	/44/initramfs -> always HTTP 500 (the transport-error half of the co-occurrence)
+//	/44/rootfs    -> fcosGoodBody, always
+func fcosSplitServer(kernelBody []byte) *httptest.Server {
+	declared := hexSHA(fcosGoodBody)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			_, _ = fmt.Fprintf(w, fcosStreamJSON, "http://"+r.Host, declared)
+			return
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/initramfs"):
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.HasSuffix(r.URL.Path, "/kernel"):
+			_, _ = w.Write(kernelBody)
+		default:
+			_, _ = w.Write(fcosGoodBody)
+		}
+	}))
+}
+
+// newFCOSSplitFixture wires viper, a store and a discovery-mode FCOS target at a
+// fcosSplitServer. The caller drives reconcileTarget with the returned target.
+func newFCOSSplitFixture(t *testing.T, policy string, kernelBody []byte) (*db.Store, db.Target) {
+	t.Helper()
+	srv := fcosSplitServer(kernelBody)
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.SignaturePolicy, policy)
+
+	store := newReconcileStore(t)
+	tid, err := store.CreateTarget(db.Target{
+		OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`,
+		Mode: "discovery", RetainN: 1, Source: "api", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	tgt, err := store.GetTarget(tid)
+	if err != nil {
+		t.Fatalf("GetTarget: %v", err)
+	}
+	return store, *tgt
+}
+
+// TestReconcileTarget_RejectionRecordedDespiteSiblingTransportError is the ONLY
+// test in this change that discriminates the feature. A version carries both a
+// definitive refusal (the kernel's bytes do not match its declared digest, and
+// `strict` refuses it) and a transport error (initramfs 500s). Before this
+// change, reconcileTarget's `vg.Wait() != nil -> continue` threw away EVERY
+// verdict for the version, so nothing was recorded, UpsertCacheEntryArchived
+// never ran, and VerifyRejectedWithin could not arm — the next tick re-downloads
+// the whole version, forever.
+//
+// It asserts the POSITIVE outcome (a row exists AND the guard is armed) rather
+// than the absence of something: the pre-change behaviour is "silently does
+// nothing", which any absence-only assertion passes in both worlds.
+func TestReconcileTarget_RejectionRecordedDespiteSiblingTransportError(t *testing.T) {
+	store, tgt := newFCOSSplitFixture(t, "strict", []byte("WRONG-KERNEL-BYTES"))
+
+	if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+		t.Fatalf("reconcileTarget: %v", err)
+	}
+
+	rows, err := store.ListCacheEntries(db.CacheFilter{})
+	if err != nil {
+		t.Fatalf("ListCacheEntries: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("a refusal co-occurring with a sibling transport error must still record a "+
+			"failure-visibility row; got %d rows: %+v", len(rows), rows)
+	}
+	r := rows[0]
+	if r.Size != 0 || r.InWindow || r.Verified == nil || *r.Verified {
+		t.Fatalf("want the four-column archived shape (size=0, in_window=0, verified=0), got %+v", r)
+	}
+	if !strings.Contains(r.VerifyErr, "checksum mismatch") {
+		t.Fatalf("verify_err must name the verification failure, got %q", r.VerifyErr)
+	}
+
+	// The point of recording the row: the retry guard can now arm.
+	blocked, reason, err := store.VerifyRejectedWithin(tgt.ID, "44.0.0.0", time.Hour)
+	if err != nil {
+		t.Fatalf("VerifyRejectedWithin: %v", err)
+	}
+	if !blocked {
+		t.Fatal("the retry guard must be armed after a refusal; otherwise the next tick " +
+			"re-downloads the whole version and keeps doing so every cache interval")
+	}
+	if !strings.Contains(reason, "checksum mismatch") {
+		t.Fatalf("the armed guard must carry the refusal reason, got %q", reason)
+	}
+
+	// Version-level atomicity still applies to a refusal.
+	if cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+		t.Fatal("a rejected version's directory must be removed")
+	}
+}
+
+// TestReconcileTarget_RejectionLogsErroredSiblingCount pins the compensating
+// mechanism for keeping transport detail OUT of verify_err. verify_err is
+// defined as the errors.Join of failing VERIFICATION verdicts only
+// (docs/schema/DATABASE.md), so a co-occurring transport error would otherwise
+// be invisible to the operator. The rejection's ERROR log carries it instead.
+// Untested, that is a promise rather than a mechanism.
+func TestReconcileTarget_RejectionLogsErroredSiblingCount(t *testing.T) {
+	store, tgt := newFCOSSplitFixture(t, "strict", []byte("WRONG-KERNEL-BYTES"))
+
+	var logbuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logbuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+		t.Fatalf("reconcileTarget: %v", err)
+	}
+
+	logged := logbuf.String()
+	if !strings.Contains(logged, "version rejected by verification") {
+		t.Fatalf("a rejected version must emit the rejection ERROR; got log: %q", logged)
+	}
+	if !strings.Contains(logged, "erroredSiblings=1") {
+		t.Fatalf("the rejection log must report how many siblings could not be evaluated "+
+			"(verify_err deliberately does not carry them); got log: %q", logged)
+	}
+}
+
+// TestReconcileTarget_TransportErrorAloneRecordsNoRejection is the SAFETY
+// direction, and a trap guard rather than a feature test: it passes against the
+// pre-change code too. A version whose only failure is a transport error must
+// record nothing at all. If it recorded a failure-visibility row, a network
+// blip would forge VerifyRejectedWithin's four-column signature and suppress
+// re-downloads of a version that was never actually refused.
+//
+// Goes red if rejected() is ever loosened to plain !landed, which cannot tell a
+// refusal from an artifact that was never evaluated.
+func TestReconcileTarget_TransportErrorAloneRecordsNoRejection(t *testing.T) {
+	t.Run("nothing is recorded and the version dir survives", func(t *testing.T) {
+		// kernel verifies; only initramfs 500s. No artifact is ever refused.
+		store, tgt := newFCOSSplitFixture(t, "strict", fcosGoodBody)
+
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatalf("reconcileTarget: %v", err)
+		}
+
+		rows, err := store.ListCacheEntries(db.CacheFilter{})
+		if err != nil {
+			t.Fatalf("ListCacheEntries: %v", err)
+		}
+		if len(rows) != 0 {
+			t.Fatalf("a transport error alone must record NO cache_entries row — writing one "+
+				"lets a network blip forge the retry guard's signature; got %+v", rows)
+		}
+
+		blocked, _, err := store.VerifyRejectedWithin(tgt.ID, "44.0.0.0", time.Hour)
+		if err != nil {
+			t.Fatalf("VerifyRejectedWithin: %v", err)
+		}
+		if blocked {
+			t.Fatal("a transport error must never arm the verification-rejection retry guard")
+		}
+
+		// The artifacts that DID land stay on disk so the next tick resumes rather
+		// than restarting; only a refusal removes the version dir.
+		if !cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+			t.Fatal("a deferred version's directory must survive; removing it is what makes " +
+				"a resumable download restart from zero")
+		}
+	})
+
+	// The no-wedge property: a DEFER must not touch a PRIOR rejection row. If it
+	// refreshed that row, a version could be held guarded indefinitely by
+	// repeated transport failures that never produced a verdict.
+	//
+	// The assertion is on verify_err, NOT on fetched_at: fetched_at has
+	// one-second granularity, so a same-second rewrite is byte-identical and an
+	// assertion on it would pass even when the row HAD been rewritten.
+	t.Run("a prior rejection row is left untouched", func(t *testing.T) {
+		const seeded = "SEEDED-PRIOR-REASON"
+		store, tgt := newFCOSSplitFixture(t, "strict", fcosGoodBody)
+
+		// Disable the guard so the version reaches the land loop at all; this is
+		// the same lever TestReconcileTarget_VerificationRejectionRateLimitsRedownload
+		// uses. A zero window makes the SQL bound "-0 seconds", which no row is
+		// newer than.
+		prev := verifyRetryAfter
+		verifyRetryAfter = 0
+		t.Cleanup(func() { verifyRetryAfter = prev })
+
+		if err := store.UpsertTargetVersion(db.TargetVersion{
+			TargetID: tgt.ID, Version: "44.0.0.0", Source: "discovered",
+		}); err != nil {
+			t.Fatalf("UpsertTargetVersion: %v", err)
+		}
+		tvID, err := store.TargetVersionID(tgt.ID, "44.0.0.0")
+		if err != nil {
+			t.Fatalf("TargetVersionID: %v", err)
+		}
+		if err := store.UpsertCacheEntryArchived(tvID, seeded); err != nil {
+			t.Fatalf("UpsertCacheEntryArchived: %v", err)
+		}
+
+		if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+			t.Fatalf("reconcileTarget: %v", err)
+		}
+
+		rows, err := store.ListCacheEntries(db.CacheFilter{})
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("want exactly the seeded row; err=%v rows=%+v", err, rows)
+		}
+		if rows[0].VerifyErr != seeded {
+			t.Fatalf("a deferred tick must leave a prior rejection row untouched; verify_err "+
+				"changed from %q to %q", seeded, rows[0].VerifyErr)
+		}
+		if rows[0].Size != 0 || rows[0].InWindow {
+			t.Fatalf("the seeded row's four-column shape must be unchanged, got %+v", rows[0])
+		}
+	})
+}
+
+// TestReconcileTarget_WarnLandedCorruptionIsNotAVersionRejection is a trap guard
+// for the most tempting wrong implementation: keying the disposition off the
+// verdict CLASS instead of off whether the artifact landed.
+//
+// A non-Large artifact that fails its checksum under `warn` LANDS, carrying
+// classCorruption — that is the availability trade-off warn exists for. A
+// class-keyed predicate would read that landed artifact as a refusal, reject the
+// whole version, remove its directory and arm the retry guard, silently deleting
+// `warn` as a usable policy. The artifact landed, so there is no refusal here;
+// the sibling's transport error means the version simply DEFERS.
+func TestReconcileTarget_WarnLandedCorruptionIsNotAVersionRejection(t *testing.T) {
+	// warn + a mismatching kernel: the kernel lands with classCorruption.
+	// initramfs 500s, so the version defers.
+	store, tgt := newFCOSSplitFixture(t, "warn", []byte("WRONG-KERNEL-BYTES"))
+
+	if err := reconcileTarget(t.Context(), store, 4, tgt); err != nil {
+		t.Fatalf("reconcileTarget: %v", err)
+	}
+
+	rows, err := store.ListCacheEntries(db.CacheFilter{})
+	if err != nil {
+		t.Fatalf("ListCacheEntries: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("under warn a checksum mismatch LANDS, so the version was not refused and "+
+			"nothing may be recorded on a deferred tick; got %+v", rows)
+	}
+
+	blocked, _, err := store.VerifyRejectedWithin(tgt.ID, "44.0.0.0", time.Hour)
+	if err != nil {
+		t.Fatalf("VerifyRejectedWithin: %v", err)
+	}
+	if blocked {
+		t.Fatal("a warn-landed corruption must not arm the rejection retry guard")
+	}
+
+	if !cacheDirExists("coreos", "stable", "x86_64", "44.0.0.0") {
+		t.Fatal("a warn-landed version's directory must not be removed")
+	}
+}
+
+// TestReconcileTarget_ContextCancelledDuringSidecarFetchDefers is the S1
+// regression test. loop() (reconciler.go) returns on ctx.Done() but does not
+// preempt an in-flight reconcileAll pass, so a SIGTERM mid-pass leaves
+// reconcileTarget running with a DEAD context. If that lands between one
+// artifact's successful download and its detached-signature fetch,
+// verifyDetachedGPG's fetchBytes(ctx, a.SigURL) fails with "context
+// canceled" — classified classCorruption with a NIL artifactOutcome.err (see
+// artifactOutcome.rejected's doc comment) — which reads here as a REFUSAL
+// indistinguishable from a genuine signature failure. Before the ctx.Err()
+// guard this landed, that forged a REJECTED disposition: wipe the version
+// dir, write a verified=0 row, and arm the hour-long retry guard, all for a
+// verification failure that never happened. This drives that exact sequence
+// through the real Flatcar/SigURL path — the only registered OS that reaches
+// verifyDetachedGPG from reconcileTarget, since it is SigURL-only with no
+// sha256 — and asserts the DEFER outcome instead: nothing recorded, nothing
+// removed, guard unarmed.
+//
+// gpgFixture (verify_test.go) cannot drive this scenario: it always answers
+// immediately with a VALID signature, and this bug is about a fetch that
+// never completes at all — fetchBytes returns its error before
+// checkDetachedSignature is ever reached, so no keyring (gpgFixture's
+// throwaway one, or Flatcar's hardcoded production one) is ever consulted.
+// The signature endpoint below instead blocks on <-r.Context().Done(), the
+// same idiom TestDownloadLargeFile_CancelStops (isodownload_test.go) already
+// uses to make a cancellation deterministic rather than a timing race:
+// concurrency=1 forces landArtifact to process Flatcar's two PXE artifacts
+// strictly in sequence, so vmlinuz's OWN download (an ordinary, un-gated
+// response) has already landed on disk before its signature fetch ever
+// starts — the test cancels only once that fetch is observed in flight.
+func TestReconcileTarget_ContextCancelledDuringSidecarFetchDefers(t *testing.T) {
+	sigRequested := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".sig") {
+			select {
+			case sigRequested <- struct{}{}:
+			default:
+			}
+			<-r.Context().Done() // never responds; the test cancels instead
+			return
+		}
+		_, _ = w.Write([]byte("artifact-bytes")) // vmlinuz / cpio.gz body
+	}))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.FlatcarURL, srv.URL+"/%s/%s")
+	viper.Set(config.SignaturePolicy, "strict")
+
+	store := newReconcileStore(t)
+	tid, err := store.CreateTarget(db.Target{
+		OS: "flatcar", Arch: "amd64", Params: `{"channel":"stable"}`,
+		Mode: "manual", RetainN: 1, Source: "catalog", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	if err := store.UpsertTargetVersion(db.TargetVersion{
+		TargetID: tid, Version: "100.0.0", Source: "manual",
+	}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	tgt, err := store.GetTarget(tid)
+	if err != nil {
+		t.Fatalf("GetTarget: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- reconcileTarget(ctx, store, 1, *tgt) }() // concurrency=1: artifacts run strictly in sequence
+
+	select {
+	case <-sigRequested:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the signature fetch to start")
+	}
+	cancel() // the SIGTERM-equivalent: fires mid-pass, between download and verify
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("reconcileTarget: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("reconcileTarget did not return after cancellation")
+	}
+
+	rows, err := store.ListCacheEntries(db.CacheFilter{})
+	if err != nil {
+		t.Fatalf("ListCacheEntries: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("a mid-pass cancellation must record NOTHING — it is not a verification "+
+			"verdict; got %+v", rows)
+	}
+
+	blocked, _, err := store.VerifyRejectedWithin(tid, "100.0.0", time.Hour)
+	if err != nil {
+		t.Fatalf("VerifyRejectedWithin: %v", err)
+	}
+	if blocked {
+		t.Fatal("a mid-pass cancellation must never arm the verification-rejection retry guard")
+	}
+
+	if !cacheDirExists("flatcar", "stable", "amd64", "100.0.0") {
+		t.Fatal("a deferred version's directory must survive a mid-pass cancellation")
 	}
 }

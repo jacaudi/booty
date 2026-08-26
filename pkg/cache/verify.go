@@ -29,8 +29,10 @@ type verifyClass int
 // was never assigned a class cannot be read as "verified OK". It is not a
 // verdict any producer returns: landArtifact's switch routes it to the
 // reject default, and aggregateVerdicts counts it as neither verifiable nor
-// passing. Defensive only — reconcile.go's `vg.Wait() != nil -> continue`
-// still guarantees no partially-filled verdict slice reaches aggregation.
+// passing. This is LOAD-BEARING, not merely defensive: reconcile.go's
+// disposition records a version whose siblings errored, so a partially-filled
+// verdict slice DOES reach aggregateVerdicts, and an errored artifact's slot is
+// exactly this zero value.
 const (
 	classUnset         verifyClass = iota // zero value — never a real verdict
 	classPass                             // verified OK
@@ -140,8 +142,13 @@ func landArtifact(ctx context.Context, dir string, a ostype.Artifact, policy str
 			// ERROR — not handed to verifyArtifact, which would classify it as
 			// classCorruption ("checksum unavailable") and, under D4a below,
 			// destroy a completed multi-GB download over a transient NAS blip.
-			// Returning err routes to reconcile.go's `vg.Wait() != nil -> continue`:
-			// no row written, no removeVersionDir, and the resumable bytes survive.
+			// Returning err makes this artifact ERRORED rather than refused, so
+			// reconcile.go defers the version: no row written, no
+			// removeVersionDir, and the resumable bytes survive. (That holds when
+			// no sibling was refused. Today that is always the case for a Large
+			// artifact — Tails' siblings declare no digest, so the ISO is the only
+			// artifact in its version that CAN be refused — but that is a property
+			// of the current registration, not a guarantee.)
 			// "I could not evaluate the material" is infrastructure and must be
 			// retried; "the material does not match" is a verdict.
 			h, err := hashFile(inProgress)

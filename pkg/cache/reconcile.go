@@ -28,22 +28,53 @@ import (
 // it to a flag when an operator actually needs to tune it, not before.
 var verifyRetryAfter = time.Hour
 
+// artifactOutcome keeps one artifact's landArtifact result intact so the
+// version-level disposition can tell a REFUSAL from a FAILURE TO EVALUATE. The
+// two parallel slices it replaces could not: a refusal and a transport error
+// both leave the landed flag false, so the errgroup's single first-error was the
+// only thing separating them — and that carries no per-artifact attribution.
+type artifactOutcome struct {
+	landed  bool
+	verdict artifactVerdict
+	err     error
+}
+
+// rejected reports that landArtifact's disposition switch REFUSED these bytes,
+// as opposed to landArtifact having been unable to evaluate them at all. Its
+// reject() closure is the only producer of (landed=false, err=nil); every other
+// early return in landArtifact carries a non-nil error.
+//
+// This is NOT the same as "an integrity verdict was reached": verifyArtifact
+// classifies some infrastructure faults as classCorruption/classForgery before
+// landArtifact ever sees them (verifyDetachedGPG's fetchBytes, os.Open and
+// default: arms), and those refusals are indistinguishable here by
+// construction. That residual is stated in the design's section 8 and is
+// deliberately not fixed here.
+//
+// Deliberately NOT keyed on the verdict class: a non-Large artifact failing its
+// checksum under `warn` LANDS while carrying classCorruption, so a class-keyed
+// predicate would reject the version and delete the availability trade-off warn
+// exists for.
+func (o artifactOutcome) rejected() bool { return o.err == nil && !o.landed }
+
 // reconcileTarget brings ONE target's cache into its desired state. It is called
 // only from the reconcile coordinator goroutine, so every DB write here is
 // single-threaded (no viper/db races). Failures are non-fatal: a discovery
 // fetch error keeps the existing cached set (no prune); a per-artifact download
-// error is logged and retried next tick.
+// error is logged and retried next tick UNLESS another artifact in the same
+// version was refused, in which case the refusal is recorded and the version is
+// rejected.
 //
 // Desired set: discovery mode -> DiscoverVersions -> retentionFor, plus any
 // existing manual rows; manual mode -> just the existing manual rows. discovered
 // rows outside the retained set are pruned (row + dir); manual rows are NEVER
 // pruned.
 //
-// concurrency bounds artifact downloads. A FRESH errgroup.Group is created per
-// version (errgroup's error is set once and never reset, so a single shared,
-// reused group would poison every later Wait); the coordinator runs targets
-// sequentially, so a per-version cap is functionally identical to a global cap
-// at booty's ~3 upstreams.
+// concurrency bounds artifact downloads. The per-version errgroup.Group is used
+// purely as a bounded waiter — its goroutines always return nil, because a
+// transport error is carried per-artifact in artifactOutcome.err so it can be
+// attributed. The coordinator runs targets sequentially, so a per-version cap is
+// functionally identical to a global cap at booty's ~3 upstreams.
 func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db.Target) error {
 	// D17: fetch the FCOS channel streams doc at most once per pass; reset the
 	// memo at pass entry so a later pass resolves new builds against a fresh doc.
@@ -158,9 +189,12 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		// return above this loop — that hazard is pre-existing and tracked
 		// separately (#77), not fixed here.
 		//
-		// Transport failures are never guarded: they return before any
-		// cache_entries row is written, so they cannot forge the four-column
-		// signature VerifyRejectedWithin matches on.
+		// A transport failure ALONE is never guarded: with no artifact refused,
+		// the version defers before any cache_entries row is written, so it
+		// cannot forge the four-column signature VerifyRejectedWithin matches
+		// on. A transport failure co-occurring with a REFUSAL is a different
+		// case: the refusal is recorded and does arm the guard, which is
+		// deliberate — see artifactOutcome.rejected below.
 		blocked, guardReason, gerr := store.VerifyRejectedWithin(t.ID, version, verifyRetryAfter)
 		if gerr != nil {
 			// No ids: db.VerifyRejectedWithin already wraps as
@@ -215,8 +249,7 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 			return fmt.Errorf("cache: upsert %d/%s: %w", t.ID, version, err)
 		}
 		policy := viper.GetString(config.SignaturePolicy)
-		verdicts := make([]artifactVerdict, len(arts))
-		landedFlags := make([]bool, len(arts))
+		outcomes := make([]artifactOutcome, len(arts))
 		vg := new(errgroup.Group)
 		vg.SetLimit(max(concurrency, 1))
 		for i, a := range arts {
@@ -224,33 +257,90 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 				landed, v, err := landArtifact(ctx, dir, a, policy)
 				if err != nil {
 					slog.Warn("cache: artifact fetch failed", "os", t.OS, "version", version, "file", a.Filename, "err", err)
-					return err
 				}
-				verdicts[i], landedFlags[i] = v, landed
+				outcomes[i] = artifactOutcome{landed: landed, verdict: v, err: err}
 				return nil
 			})
 		}
-		if vg.Wait() != nil {
-			continue // transport error → whole version retried next tick (nothing recorded)
+		// Every goroutine returns nil: a transport error is carried per-artifact
+		// in outcomes[i].err so it can be ATTRIBUTED, which the group's single
+		// first-error cannot do. The group is a bounded waiter here, nothing more
+		// — so Wait's value is structurally always nil. REINTRODUCING `return err`
+		// above would make this line SWALLOW that error rather than route it;
+		// carry it in the outcome instead.
+		_ = vg.Wait()
+
+		if ctx.Err() != nil {
+			// Shutting down: loop() returns on ctx.Done() but does not preempt an
+			// in-flight pass, so this one keeps running with a dead context. A
+			// cancelled sidecar fetch is classified as corruption with a NIL error
+			// (verify.go's verifyDetachedGPG), which reads here as a REFUSAL — so no
+			// refusal from this pass is trustworthy. DEFER, exactly as before this
+			// disposition existed: nothing recorded, nothing wiped, resumable bytes
+			// kept.
+			continue
+		}
+
+		rejected := slices.ContainsFunc(outcomes, artifactOutcome.rejected)
+		errored := 0
+		for _, o := range outcomes {
+			if o.err != nil {
+				errored++
+			}
+		}
+
+		// A refusal WINS over a co-occurring transport error: it is knowledge a
+		// retry will not change, and recording it is what arms the retry guard
+		// below. A transport error with NO refusal still writes no cache_entries
+		// row — which is what keeps it from forging VerifyRejectedWithin's
+		// four-column signature, and what leaves a resumable <file>DownloadSuffix
+		// file on disk to resume next tick (D4b). (The loop-entry
+		// UpsertTargetVersion above has already written cached=0; the guard reads
+		// cache_entries, not that column.)
+		//
+		// The accepted cost: a GENUINELY transient co-occurrence — upstream
+		// mid-publish, say, with a new sidecar against old bytes and a sibling not
+		// yet uploaded — now holds a NEW version back for up to verifyRetryAfter
+		// where it would previously retry within minutes. Versions live for weeks
+		// and the guard clears itself, so this trades minutes of freshness for a
+		// bounded re-download loop.
+		if !rejected && errored > 0 {
+			continue
 		}
 
 		tvID, verr := store.TargetVersionID(t.ID, version)
 		if verr != nil {
 			return fmt.Errorf("cache: resolve tv id %d/%s: %w", t.ID, version, verr)
 		}
+		verdicts := make([]artifactVerdict, len(outcomes))
+		for i, o := range outcomes {
+			verdicts[i] = o.verdict
+		}
 		verified, verifyErr := aggregateVerdicts(verdicts)
 
-		if slices.Contains(landedFlags, false) {
+		if rejected {
 			// Version REJECTED (a failure the policy refuses to land). Version-level
 			// atomicity: wipe the partial-or-landed dir so NewestCached falls back
 			// to the prior cached version (§6), and record a failure-visibility row.
 			if err := removeVersionDir(cacheName, segment, t.Arch, version); err != nil {
 				slog.Warn("cache: remove rejected version dir failed", "os", t.OS, "version", version, "err", err)
 			}
+			// D-D: verifyErr is non-empty for every reachable refusal —
+			// aggregateVerdicts always attaches a message to
+			// classCorruption/classForgery. An empty one would write this row and
+			// leave the retry guard DISARMED, because its predicate requires a
+			// non-empty verify_err. That is left undefended on purpose: the path
+			// is doubly unreachable, and an unarmed guard is the safe direction.
 			if err := store.UpsertCacheEntryArchived(tvID, verifyErr); err != nil {
 				return fmt.Errorf("cache: record rejected %d/%s: %w", t.ID, version, err)
 			}
-			slog.Error("cache: version rejected by verification", "os", t.OS, "version", version, "policy", policy, "err", verifyErr)
+			// erroredSiblings is the ONLY place a co-occurring transport error
+			// surfaces: verify_err stays verification-only by design, so the
+			// operator learns from this line that part of the version could not
+			// be evaluated at all.
+			slog.Error("cache: version rejected by verification",
+				"os", t.OS, "version", version, "policy", policy, "err", verifyErr,
+				"erroredSiblings", errored)
 			continue
 		}
 
