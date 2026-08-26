@@ -500,12 +500,7 @@ func TestReconcileSkipsAlreadyCachedVersion(t *testing.T) {
 	var artifactHits atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".json") {
-			_, _ = fmt.Fprintf(w, `{"architectures":{"x86_64":{"artifacts":{"metal":{`+
-				`"release":"44.0.0.0","formats":{"pxe":{`+
-				`"kernel":{"location":"%[1]s/44/kernel","sha256":"%[2]s"},`+
-				`"initramfs":{"location":"%[1]s/44/initramfs","sha256":"%[2]s"},`+
-				`"rootfs":{"location":"%[1]s/44/rootfs","sha256":"%[2]s"}`+
-				`}}}}}}}`, "http://"+r.Host, sha)
+			_, _ = fmt.Fprintf(w, fcosStreamJSON, "http://"+r.Host, sha)
 			return
 		}
 		artifactHits.Add(1)
