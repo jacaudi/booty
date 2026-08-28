@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/jeefy/booty/pkg/config"
@@ -675,5 +676,79 @@ func TestEnsureDebianDVD_VerifyFailureBoundsTheRetry(t *testing.T) {
 	}
 	if downloads != first {
 		t.Fatalf("a guarded pass must download NOTHING; downloads went %d -> %d", first, downloads)
+	}
+}
+
+// TestEnsureDebianDVD_VerifyRetryResumesAfterTheWindow pins the OTHER half of
+// #77's bound: the marker must rate-limit, not wedge. A marker older than
+// verifyRetryAfter releases the guard so a converged mirror can self-heal, which
+// is the whole reason design D3 keeps removeUnverifiedISOs. os.Chtimes can
+// backdate a file; UpsertCacheEntryArchived hardcodes datetime('now') and
+// Store.db is unexported, which is exactly why this guard is a file and not a row.
+func TestEnsureDebianDVD_VerifyRetryResumesAfterTheWindow(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	var downloads int
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error {
+			downloads++
+			return os.WriteFile(dest, []byte("bad"), 0o644)
+		},
+		func(ctx context.Context, dir string, names []string) error { return errors.New("checksum mismatch") },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error { return nil })
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 2})
+	_ = store.SetTargetDesiredMode(id, "dvd", 2)
+	tgt, _ := store.GetTarget(id)
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err == nil {
+		t.Fatal("first pass must return the verify failure")
+	}
+	first := downloads
+
+	// Backdate the marker past the window.
+	dir := cacheDir("debian", "12", "amd64", "12.15.0")
+	marker := filepath.Join(dir, dvdVerifyFailedName)
+	stale := time.Now().Add(-(verifyRetryAfter + time.Minute))
+	if err := os.Chtimes(marker, stale, stale); err != nil {
+		t.Fatalf("backdate marker: %v", err)
+	}
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err == nil {
+		t.Fatal("an expired guard must retry, and this fixture still fails verify")
+	}
+	if downloads <= first {
+		t.Fatalf("a marker older than verifyRetryAfter must release the guard; downloads stuck at %d", first)
+	}
+}
+
+// TestEnsureDebianDVD_ZeroRetryWindowNeverGuards pins the degenerate direction of
+// the same clause: with the window at zero the guard must never hold. The seam is
+// verifyRetryAfter as a package var, the same swap reconcile_test.go uses.
+func TestEnsureDebianDVD_ZeroRetryWindowNeverGuards(t *testing.T) {
+	old := verifyRetryAfter
+	verifyRetryAfter = 0
+	t.Cleanup(func() { verifyRetryAfter = old })
+
+	store := newEnsureDVDStore(t)
+	var downloads int
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error {
+			downloads++
+			return os.WriteFile(dest, []byte("bad"), 0o644)
+		},
+		func(ctx context.Context, dir string, names []string) error { return errors.New("checksum mismatch") },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error { return nil })
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 2})
+	_ = store.SetTargetDesiredMode(id, "dvd", 2)
+	tgt, _ := store.GetTarget(id)
+
+	_ = ensureDebianDVD(t.Context(), store, *tgt, "12.15.0")
+	first := downloads
+	_ = ensureDebianDVD(t.Context(), store, *tgt, "12.15.0")
+	if downloads <= first {
+		t.Fatalf("verifyRetryAfter=0 must never guard; downloads stuck at %d", first)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/diskfs/go-diskfs"
 	"github.com/jeefy/booty/pkg/checksum"
@@ -107,13 +108,17 @@ func markDVDVerifyFailed(dir string) {
 	}
 }
 
-// dvdVerifyGuarded reports whether dir's DVD set was refused by verification
-// recently enough that it must not be re-downloaded yet. A missing marker
-// releases the guard: every degenerate case fails OPEN, which is the behaviour
-// that predates the marker.
+// dvdVerifyGuarded reports whether dir's DVD set was refused by verification less
+// than verifyRetryAfter ago. A missing marker or an elapsed window both release
+// the guard: every degenerate case fails OPEN, which is the behaviour that
+// predates the marker. A backwards wall-clock jump holds the guard for the jump's
+// duration and no longer — the same exposure the SQL guard's datetime('now') has.
 func dvdVerifyGuarded(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, dvdVerifyFailedName))
-	return err == nil
+	fi, err := os.Stat(filepath.Join(dir, dvdVerifyFailedName))
+	if err != nil {
+		return false
+	}
+	return time.Since(fi.ModTime()) < verifyRetryAfter
 }
 
 // isoExtractFunc extracts one ISO9660 image's full contents into destDir,
