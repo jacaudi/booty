@@ -790,3 +790,56 @@ func TestEnsureDebianDVD_DownloadFailureDoesNotArmTheGuard(t *testing.T) {
 		t.Fatalf("a download failure must retry on the very next tick; downloads stuck at %d", first)
 	}
 }
+
+// TestEnsureDebianDVD_SuccessfulVerifyClearsTheMarker pins the marker's cleanup.
+// Design D1 calls this hygiene rather than correctness — the guard is only read
+// inside the not-yet-settled branch and a stale mtime ages out — but nothing else
+// keeps the marker out of dirSize, Scan's size walk and the unauthenticated
+// /data/cache/ read surface, so this test is the only thing pinning it.
+//
+// EXEMPT from the mutation rule (see the plan's Global Constraints); its red
+// phase is the substitute.
+func TestEnsureDebianDVD_SuccessfulVerifyClearsTheMarker(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	fail := true
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error { return os.WriteFile(dest, []byte("iso"), 0o644) },
+		func(ctx context.Context, dir string, names []string) error {
+			if fail {
+				return errors.New("checksum mismatch")
+			}
+			return nil
+		},
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error {
+			if err := os.MkdirAll(final, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(final, dvdSentinelName), nil, 0o644)
+		})
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 2})
+	_ = store.SetTargetDesiredMode(id, "dvd", 2)
+	tgt, _ := store.GetTarget(id)
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err == nil {
+		t.Fatal("first pass must fail verification")
+	}
+	dir := cacheDir("debian", "12", "amd64", "12.15.0")
+	marker := filepath.Join(dir, dvdVerifyFailedName)
+	stale := time.Now().Add(-(verifyRetryAfter + time.Minute))
+	if err := os.Chtimes(marker, stale, stale); err != nil {
+		t.Fatalf("backdate marker: %v", err)
+	}
+
+	fail = false
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err != nil {
+		t.Fatalf("second pass must succeed: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("a successful verify must remove the marker (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, dvdSentinelName)); err != nil {
+		t.Fatalf("a successful pass must leave the completion sentinel: %v", err)
+	}
+}

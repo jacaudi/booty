@@ -121,6 +121,18 @@ func dvdVerifyGuarded(dir string) bool {
 	return time.Since(fi.ModTime()) < verifyRetryAfter
 }
 
+// clearDVDVerifyFailed removes the retry marker after a successful verification.
+// Not required for correctness — the guard is only read inside the not-yet-settled
+// branch and a stale marker ages out — but it keeps the marker out of dirSize,
+// Scan's size walk, and the unauthenticated /data/cache/ read surface. Absent is
+// fine; a real removal failure is logged and non-fatal.
+func clearDVDVerifyFailed(dir string) {
+	path := filepath.Join(dir, dvdVerifyFailedName)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		slog.Warn("cache: debian dvd: remove verify-failed marker", "path", path, "err", err)
+	}
+}
+
 // isoExtractFunc extracts one ISO9660 image's full contents into destDir,
 // preserving relative paths (creating destDir as needed). isoExtractor is a
 // package-var seam — like debianCDKeyring above — so the merge-logic test can
@@ -504,6 +516,7 @@ func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version 
 			markDVDVerifyFailed(dir)
 			return err
 		}
+		clearDVDVerifyFailed(dir)
 		if err := isoExtract(ctx, dir, isoNames, dir, t.Arch); err != nil { // writes sentinel LAST
 			return err
 		}
