@@ -333,8 +333,11 @@ func TestReverifyLeavesAGuardedRejectionReasonIntact(t *testing.T) {
 // verified=true. Left alone, the operator would see a green badge over a directory
 // with no bytes, and reverify would toast "Re-verified" over it.
 //
-// Withdrawal cannot release the retry guard: db.VerifyRejectedWithin's predicate
-// needs verified=0, and neither true nor NULL matches.
+// Withdrawal cannot release the retry guard, because the withdrawal happens in
+// SQL under a verified=1 predicate and so never rewrites the verified=0 row
+// db.VerifyRejectedWithin looks for. That predicate is pinned directly, in the
+// two pkg/db tests named TestWithdrawCacheAffirmation*; the assertion below is
+// the end-to-end half.
 func TestReverifyWithdrawsAnAffirmationOverMissingMaterial(t *testing.T) {
 	deps, _ := targetsTestDeps(t)
 	api := newTestAPI(t, deps)

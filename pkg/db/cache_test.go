@@ -415,3 +415,89 @@ func TestVerifyRejectedWithinZeroWindowNeverBlocks(t *testing.T) {
 		t.Fatal("a zero window must disable the guard, not block")
 	}
 }
+
+// TestWithdrawCacheAffirmationClearsAStandingAffirmation covers design D10's
+// write: once a version's declared material is no longer on disk to examine, a
+// standing verified=true is a claim about bytes that are not there, and an
+// ARCHIVED version never re-enters the reconcile loop to correct it.
+func TestWithdrawCacheAffirmationClearsAStandingAffirmation(t *testing.T) {
+	s := newTestStore(t)
+	tid, err := s.CreateTarget(Target{
+		OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`,
+		Mode: "discovery", RetainN: 1, Source: "api", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	if err := s.UpsertTargetVersion(TargetVersion{TargetID: tid, Version: "44.20260607.3.1", Source: "discovered", Cached: true}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	tvID := mustVersionID(t, s, tid, "44.20260607.3.1")
+	if err := s.UpsertCacheEntry(tvID, 100); err != nil {
+		t.Fatalf("UpsertCacheEntry: %v", err)
+	}
+	if err := s.SetCacheVerified(tvID, new(true), ""); err != nil {
+		t.Fatalf("SetCacheVerified: %v", err)
+	}
+	rows, err := s.ListCacheEntries(CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
+	}
+	if rows[0].Verified == nil || !*rows[0].Verified {
+		t.Fatalf("fixture is inert: the seeded row is not verified=true, got %v", rows[0].Verified)
+	}
+
+	if err := s.WithdrawCacheAffirmation(tvID); err != nil {
+		t.Fatalf("WithdrawCacheAffirmation: %v", err)
+	}
+
+	after, err := s.ListCacheEntries(CacheFilter{})
+	if err != nil || len(after) != 1 {
+		t.Fatalf("ListCacheEntries after: %v (rows=%d)", err, len(after))
+	}
+	if after[0].Verified != nil {
+		t.Fatalf("a standing affirmation must be withdrawn to NULL, got verified=%v", *after[0].Verified)
+	}
+	if after[0].VerifyErr != "" {
+		t.Fatalf("a withdrawal leaves no reason behind, got verify_err=%q", after[0].VerifyErr)
+	}
+	if after[0].Size != 100 || !after[0].InWindow {
+		t.Fatalf("the withdrawal must touch only verified/verify_err, got %+v", after[0])
+	}
+}
+
+// TestWithdrawCacheAffirmationLeavesARecordedRejectionIntact is why the UPDATE
+// carries its verified=1 predicate. The reverify handler calls the withdrawal
+// AFTER VerifyVersion has spent minutes fetching and re-hashing multi-GB
+// material, and the reconciler goroutine runs concurrently and can archive this
+// very row inside that window. The predicate — not the handler's pre-call read —
+// is what keeps a rejection recorded in that window, and the retry guard it
+// arms, from being erased.
+func TestWithdrawCacheAffirmationLeavesARecordedRejectionIntact(t *testing.T) {
+	s := newTestStore(t)
+	const reason = "SENTINEL-REASON: rootfs checksum mismatch"
+	tid, tvID := seedRejectedVersion(t, s, "fedora-coreos", "x86_64", "44.20260607.3.1", reason)
+
+	if err := s.WithdrawCacheAffirmation(tvID); err != nil {
+		t.Fatalf("WithdrawCacheAffirmation: %v", err)
+	}
+
+	rows, err := s.ListCacheEntries(CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
+	}
+	if rows[0].Verified == nil || *rows[0].Verified {
+		t.Fatalf("a recorded REJECTION must survive the withdrawal, got verified=%v", rows[0].Verified)
+	}
+	if rows[0].VerifyErr != reason {
+		t.Fatalf("the operator's reason must survive the withdrawal; verify_err went %q -> %q", reason, rows[0].VerifyErr)
+	}
+
+	blocked, guardErr, err := s.VerifyRejectedWithin(tid, "44.20260607.3.1", time.Hour)
+	if err != nil {
+		t.Fatalf("VerifyRejectedWithin: %v", err)
+	}
+	if !blocked || guardErr != reason {
+		t.Fatalf("the withdrawal must not RELEASE the retry guard: blocked=%v verifyErr=%q", blocked, guardErr)
+	}
+}

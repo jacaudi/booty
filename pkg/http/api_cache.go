@@ -192,17 +192,21 @@ func registerCache(api huma.API, deps APIDeps) {
 			// that is gone is a claim about bytes that are not there, and an
 			// ARCHIVED version never re-enters the reconcile loop to correct it
 			// (the in_window=1 clause in pkg/db/versions.go). A recorded FAILURE is
-			// left alone — preserving it is this issue's whole point. Withdrawal
-			// cannot release the retry guard: its predicate needs verified=0, and
-			// neither true nor NULL matches.
+			// left alone — preserving it is this issue's whole point.
 			//
-			// row is the pre-VerifyVersion read above and is deliberately NOT
-			// re-fetched: VerifyVersion never writes the DB (see its doc comment),
-			// so nothing can have changed row.Verified between the two points.
-			if row.Verified != nil && *row.Verified {
-				if err := deps.Store.SetCacheVerified(row.TargetVersionID, nil, ""); err != nil {
-					return nil, huma.Error500InternalServerError("withdraw verdict", err)
-				}
+			// WHICH ROWS TO TOUCH IS DECIDED IN SQL, NOT FROM `row`. row was read
+			// before VerifyVersion, which fetches and re-hashes multi-GB material,
+			// and the reconciler goroutine (started alongside this server in
+			// cmd/main.go) writes this same cache_entries row via
+			// UpsertCacheEntryArchived. VerifyVersion itself never writes the DB,
+			// but the process around it does, so a rejection can land between the
+			// read and this line; branching on row.Verified would erase it. It is
+			// WithdrawCacheAffirmation's verified=1 predicate — not the read — that
+			// makes the withdrawal safe, and therefore also what keeps it from
+			// releasing db.VerifyRejectedWithin's retry guard, whose predicate needs
+			// the verified=0 the withdrawal now leaves alone.
+			if err := deps.Store.WithdrawCacheAffirmation(row.TargetVersionID); err != nil {
+				return nil, huma.Error500InternalServerError("withdraw verdict", err)
 			}
 		case verr != nil:
 			return nil, huma.Error500InternalServerError("verify", verr)
