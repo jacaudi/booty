@@ -630,3 +630,50 @@ func TestEnsureDebianDVD_SkipsAlreadyDownloadedISO(t *testing.T) {
 		t.Fatalf("pre-existing ISO content must be preserved untouched, got %q", body)
 	}
 }
+
+// TestEnsureDebianDVD_VerifyFailureBoundsTheRetry pins #77: a DVD set refused by
+// isoVerify must not be re-downloaded on the very next tick. Today ensureDebianDVD
+// records NOTHING persistent on a verify failure (every DB write sits below the
+// early return), so the next pass re-pulls a multi-disc set from zero — tens of GB
+// per hour at the 5-minute --cacheInterval default. The bound is a marker file in
+// the version dir, read before any network work happens.
+func TestEnsureDebianDVD_VerifyFailureBoundsTheRetry(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	var downloads int
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error {
+			downloads++
+			return os.WriteFile(dest, []byte("bad"), 0o644)
+		},
+		func(ctx context.Context, dir string, names []string) error { return errors.New("checksum mismatch") },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error { return nil })
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 2})
+	_ = store.SetTargetDesiredMode(id, "dvd", 2)
+	tgt, _ := store.GetTarget(id)
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err == nil {
+		t.Fatal("first pass must return the verify failure")
+	}
+	first := downloads
+	if first == 0 {
+		t.Fatal("fixture is inert: the first pass downloaded nothing")
+	}
+
+	dir := cacheDir("debian", "12", "amd64", "12.15.0")
+	if _, err := os.Stat(filepath.Join(dir, dvdVerifyFailedName)); err != nil {
+		t.Fatalf("a verify failure must write the retry marker: %v", err)
+	}
+
+	// The guarded pass must download NOTHING and must not be an error: being
+	// rate-limited is not a failure to do the job (design D6). (It is not
+	// network-free — reconcile.go resolves the version upstream before calling
+	// in — but no ISO bytes move, which is the multi-GB cost #77 is about.)
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err != nil {
+		t.Fatalf("a guarded pass must return nil, got %v", err)
+	}
+	if downloads != first {
+		t.Fatalf("a guarded pass must download NOTHING; downloads went %d -> %d", first, downloads)
+	}
+}
