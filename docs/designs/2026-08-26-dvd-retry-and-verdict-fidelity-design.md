@@ -486,11 +486,21 @@ The real argument for D9 has two parts, and the second is a decision, not an obs
    unevaluable, a `verified=true` row has its affirmation **withdrawn** (`verified → NULL`), while a
    recorded **failure** is left untouched. That closes the archived-Flatcar case — the operator sees
    "no verdict" rather than a green badge for a directory with no bytes — without reopening D9 or
-   D13, and without a new DB writer: the handler already holds the row from `GetCacheEntry`
-   (`api_cache.go:147`).
+   D13. It does, however, need **a new DB writer**: `db.WithdrawCacheAffirmation`
+   (`pkg/db/cache.go:102-109`). The handler does hold a row from `GetCacheEntry`
+   (`api_cache.go:148`), but that row cannot decide the withdrawal — it was read *before*
+   `VerifyVersion`, which spends minutes fetching and re-hashing multi-GB material, and the
+   reconciler goroutine writes this same `cache_entries` row via `UpsertCacheEntryArchived` inside
+   that window. Branching in Go on the stale `row.Verified` would erase a rejection recorded there.
+   The writer puts the test and the write in one statement instead —
+   `UPDATE cache_entries SET verified = NULL, verify_err = '' WHERE target_version_id = ? AND verified = 1`
+   (`pkg/db/cache.go:104`).
 
-Withdrawal cannot release a retry guard: the four-column predicate requires `verified = 0`, and
-neither `true` nor `NULL` matches it.
+Withdrawal cannot release a retry guard — **and it is the `AND verified = 1` predicate that makes
+that true**, not the pre-call read. `VerifyRejectedWithin`'s four-column predicate requires
+`verified = 0` (`pkg/db/cache.go:182`); the predicate confines the withdrawal to rows sitting at
+`true`, which leaves them at `NULL`, and neither value matches. Without it the same statement
+rewrites a `verified = 0` row to `NULL` with an empty `verify_err` and releases the guard.
 
 ### D11 — collect, never short-circuit; and the in-flight branch is folded in, not exempted
 
@@ -654,12 +664,18 @@ and the tail:
 			// that is gone is a claim about bytes that are not there, and an
 			// ARCHIVED version never re-enters the reconcile loop to correct it
 			// (db/versions.go's in_window=1 clause). A recorded FAILURE is left
-			// alone — preserving it is this issue's whole point. Withdrawal
-			// cannot release the retry guard: its predicate needs verified=0.
-			if row.Verified != nil && *row.Verified {
-				if err := deps.Store.SetCacheVerified(row.TargetVersionID, nil, ""); err != nil {
-					return nil, huma.Error500InternalServerError("withdraw verdict", err)
-				}
+			// alone — preserving it is this issue's whole point.
+			//
+			// Called UNCONDITIONALLY. Which rows to touch is decided in SQL, by
+			// WithdrawCacheAffirmation's AND verified = 1, never from `row`: row
+			// was read before VerifyVersion, and although VerifyVersion itself
+			// never writes the DB, the reconciler goroutine can archive this same
+			// row during the multi-GB re-hash, so branching on row.Verified would
+			// erase a rejection landed in that window. The predicate is also what
+			// keeps the withdrawal off the verified=0 row db.VerifyRejectedWithin
+			// looks for, and so from releasing the retry guard.
+			if err := deps.Store.WithdrawCacheAffirmation(row.TargetVersionID); err != nil {
+				return nil, huma.Error500InternalServerError("withdraw verdict", err)
 			}
 		case verr != nil:
 			return nil, huma.Error500InternalServerError("verify", verr)
@@ -736,7 +752,10 @@ The existing `TestEnsureDebianDVD_VerifyFailureClearsISOsForRefetch` (`:363`) mu
    (`verify_test.go:504`, `:541`), which are `package cache` and unreachable from `package http`.
    Seed a rejected row via `UpsertCacheEntryArchived` with a sentinel `verify_err`, remove the dir,
    POST reverify. Assert **200**, and that `verify_err` still reads the sentinel.
-   *Mutation:* make the handler call `SetCacheVerified` unconditionally → `verify_err` degrades.
+   *Mutation:* drop `AND verified = 1` from `WithdrawCacheAffirmation`'s `UPDATE`
+   (`pkg/db/cache.go:104`) → the unconditional withdrawal rewrites the rejected row, `verify_err`
+   degrades to empty here, and `TestWithdrawCacheAffirmationLeavesARecordedRejectionIntact`
+   (`pkg/db/cache_test.go:476`) reddens with it.
    **Assert on `verify_err`, never on `fetched_at`** — one-second granularity cannot discriminate a
    same-second rewrite.
 9. **`TestReverifyWithdrawsAnAffirmationOverMissingMaterial`** — seed a `verified=true` row, remove
