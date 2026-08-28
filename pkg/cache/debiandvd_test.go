@@ -752,3 +752,41 @@ func TestEnsureDebianDVD_ZeroRetryWindowNeverGuards(t *testing.T) {
 		t.Fatalf("verifyRetryAfter=0 must never guard; downloads stuck at %d", first)
 	}
 }
+
+// TestEnsureDebianDVD_DownloadFailureDoesNotArmTheGuard pins design D4/D4b: only
+// a VERIFICATION failure is knowledge a retry inside the window cannot change. An
+// isoDownload failure is "could not evaluate" — downloadLargeFile leaves resumable
+// <iso>.download bytes and the next tick resumes via Range — so arming the guard
+// there would throw away resumable progress for an hour on an ordinary blip.
+func TestEnsureDebianDVD_DownloadFailureDoesNotArmTheGuard(t *testing.T) {
+	store := newEnsureDVDStore(t)
+	var downloads int
+	swapDVDSeams(t,
+		func(ctx context.Context, url, dest string) error {
+			downloads++
+			return errors.New("connection reset")
+		},
+		func(ctx context.Context, dir string, names []string) error { return nil },
+		func(ctx context.Context, isoDir string, names []string, final, arch string) error { return nil })
+
+	id, _ := store.CreateTarget(db.Target{OS: "debian", Arch: "amd64", Params: `{"channel":"12"}`,
+		Mode: "discovery", RetainN: 1, Source: "catalog", Enabled: true, SourceMode: "netinst", DvdCount: 2})
+	_ = store.SetTargetDesiredMode(id, "dvd", 2)
+	tgt, _ := store.GetTarget(id)
+
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err == nil {
+		t.Fatal("first pass must return the download failure")
+	}
+	first := downloads
+
+	dir := cacheDir("debian", "12", "amd64", "12.15.0")
+	if _, err := os.Stat(filepath.Join(dir, dvdVerifyFailedName)); !os.IsNotExist(err) {
+		t.Fatalf("a DOWNLOAD failure must never arm the verify guard (err=%v)", err)
+	}
+	if err := ensureDebianDVD(t.Context(), store, *tgt, "12.15.0"); err == nil {
+		t.Fatal("second pass must still return the download failure")
+	}
+	if downloads <= first {
+		t.Fatalf("a download failure must retry on the very next tick; downloads stuck at %d", first)
+	}
+}
