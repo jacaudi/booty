@@ -325,3 +325,69 @@ func TestReverifyLeavesAGuardedRejectionReasonIntact(t *testing.T) {
 		t.Fatalf("a recorded FAILURE must be left alone, got verified=%v", after[0].Verified)
 	}
 }
+
+// TestReverifyWithdrawsAnAffirmationOverMissingMaterial pins design D10. Declining
+// to record a verdict is not enough on its own: an ARCHIVED version never re-enters
+// the reconcile loop (desired is built from discovered ∪ ListCachedInWindowVersions,
+// and the latter requires in_window=1), so nothing else will ever correct a stale
+// verified=true. Left alone, the operator would see a green badge over a directory
+// with no bytes, and reverify would toast "Re-verified" over it.
+//
+// Withdrawal cannot release the retry guard: db.VerifyRejectedWithin's predicate
+// needs verified=0, and neither true nor NULL matches.
+func TestReverifyWithdrawsAnAffirmationOverMissingMaterial(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+
+	body := []byte("rootfs-bytes")
+	srv := httptest.NewServer(fcosStreamsHandler(t, hexSHAHTTP(body)))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+	viper.Set(config.CoreOSChannel, "stable")
+
+	tid, err := deps.Store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	if err := deps.Store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "44.20260607.3.1", Source: "discovered", Cached: true}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	tvID, err := deps.Store.TargetVersionID(tid, "44.20260607.3.1")
+	if err != nil {
+		t.Fatalf("TargetVersionID: %v", err)
+	}
+	if err := deps.Store.UpsertCacheEntry(tvID, 100); err != nil {
+		t.Fatalf("UpsertCacheEntry: %v", err)
+	}
+	// A standing affirmation, earned when the bytes were still there.
+	if err := deps.Store.SetCacheVerified(tvID, new(true), ""); err != nil {
+		t.Fatalf("SetCacheVerified: %v", err)
+	}
+	// The files are gone. The directory is deliberately never created.
+	rows, err := deps.Store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
+	}
+	if rows[0].Verified == nil || !*rows[0].Verified {
+		t.Fatalf("fixture is inert: the seeded row is not verified=true, got %v", rows[0].Verified)
+	}
+	id := rows[0].ID
+
+	resp := api.Post("/api/v1/cache/"+itoa(id)+"/reverify", struct{}{})
+	if resp.Code != 200 {
+		t.Fatalf("reverify = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+
+	after, err := deps.Store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(after) != 1 {
+		t.Fatalf("ListCacheEntries after: %v (rows=%d)", err, len(after))
+	}
+	if after[0].Verified != nil {
+		t.Fatalf("an affirmation over missing material must be WITHDRAWN to NULL, got verified=%v", *after[0].Verified)
+	}
+}

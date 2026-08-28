@@ -182,16 +182,28 @@ func registerCache(api huma.API, deps APIDeps) {
 		// and destroying any recorded reason. Defensible — an operator explicitly
 		// asked — and SetCacheVerified's nil-clearing capability exists for the
 		// real case its own doc comment names.
-		//
-		// The unevaluable case gains one more rule in the next commit (D10): a
-		// standing verified=true is withdrawn. Not here — this commit only stops
-		// the overwrite.
 		switch {
 		case errors.Is(verr, cache.ErrVersionUnevaluable):
 			// NOT an HTTP error: the Cache view runs reverify as a BULK action, so
 			// a 4xx here would report mass failure for a correct no-op.
 			slog.Warn("cache: reverify found no material to examine; verdict not recorded",
 				"id", n, "os", row.OS, "version", row.Version, "err", verr)
+			// D10: withdraw a standing AFFIRMATION. "verified=true" over material
+			// that is gone is a claim about bytes that are not there, and an
+			// ARCHIVED version never re-enters the reconcile loop to correct it
+			// (the in_window=1 clause in pkg/db/versions.go). A recorded FAILURE is
+			// left alone — preserving it is this issue's whole point. Withdrawal
+			// cannot release the retry guard: its predicate needs verified=0, and
+			// neither true nor NULL matches.
+			//
+			// row is the pre-VerifyVersion read above and is deliberately NOT
+			// re-fetched: VerifyVersion never writes the DB (see its doc comment),
+			// so nothing can have changed row.Verified between the two points.
+			if row.Verified != nil && *row.Verified {
+				if err := deps.Store.SetCacheVerified(row.TargetVersionID, nil, ""); err != nil {
+					return nil, huma.Error500InternalServerError("withdraw verdict", err)
+				}
+			}
 		case verr != nil:
 			return nil, huma.Error500InternalServerError("verify", verr)
 		default:
