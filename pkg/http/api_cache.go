@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -165,25 +166,38 @@ func registerCache(api huma.API, deps APIDeps) {
 		ostype.ResetStreamsCache()
 		ostype.ResetNetbootxyzCache()
 		verified, verifyErr, verr := cache.VerifyVersion(ctx, deps.Store, n)
-		if verr != nil {
-			return nil, huma.Error500InternalServerError("verify", verr)
-		}
-		// Recording is UNCONDITIONAL, which touches the verification-rejection
-		// retry guard (db.VerifyRejectedWithin) two ways. Stated here because
-		// this is where it happens; both are deliberate, neither is fixed here.
+		// Recording is CONDITIONAL. One hazard from the original unconditional
+		// write survives, deliberately; the other two are closed here.
 		//
-		// 1. A nil verdict — a superseded tool tag, or a tool declaring no
-		//    material — writes verified=NULL and an empty verify_err, so the
-		//    guard's four-column predicate stops matching and the guard is
-		//    RELEASED early. Defensible: an operator explicitly asked.
-		// 2. A row already REJECTED for a checksum mismatch has had its
-		//    directory removed (D4a) and sits at size 0, so reverify finds the
-		//    artifact absent and overwrites the operator-meaningful "checksum
-		//    mismatch" with "artifact absent". The predicate still matches
-		//    (verify_err stays non-empty) and fetched_at is untouched, so the
-		//    guard stays armed — with a degraded reason.
-		if err := deps.Store.SetCacheVerified(row.TargetVersionID, verified, verifyErr); err != nil {
-			return nil, huma.Error500InternalServerError("record verdict", err)
+		// CLOSED (#83): a row already REJECTED for a checksum mismatch has had its
+		// directory removed (D4a), so reverify finds nothing to examine. Recording
+		// that as a verdict overwrote the operator-meaningful reason with a claim
+		// about a different fault. It is now ErrVersionUnevaluable, and no verdict
+		// is recorded. Its in-flight twin — a reverify during a post-window
+		// re-download — is closed by the same sentinel.
+		//
+		// SURVIVES: a nil verdict from a superseded tool tag, or from a version
+		// whose artifacts declare no material at all, still writes verified=NULL
+		// AND an empty verify_err, releasing db.VerifyRejectedWithin's guard early
+		// and destroying any recorded reason. Defensible — an operator explicitly
+		// asked — and SetCacheVerified's nil-clearing capability exists for the
+		// real case its own doc comment names.
+		//
+		// The unevaluable case gains one more rule in the next commit (D10): a
+		// standing verified=true is withdrawn. Not here — this commit only stops
+		// the overwrite.
+		switch {
+		case errors.Is(verr, cache.ErrVersionUnevaluable):
+			// NOT an HTTP error: the Cache view runs reverify as a BULK action, so
+			// a 4xx here would report mass failure for a correct no-op.
+			slog.Warn("cache: reverify found no material to examine; verdict not recorded",
+				"id", n, "os", row.OS, "version", row.Version, "err", verr)
+		case verr != nil:
+			return nil, huma.Error500InternalServerError("verify", verr)
+		default:
+			if err := deps.Store.SetCacheVerified(row.TargetVersionID, verified, verifyErr); err != nil {
+				return nil, huma.Error500InternalServerError("record verdict", err)
+			}
 		}
 		r, err := deps.Store.GetCacheEntry(n)
 		if err != nil {

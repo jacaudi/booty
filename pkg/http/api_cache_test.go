@@ -258,3 +258,70 @@ func TestCacheDTOVerifiedTriState(t *testing.T) {
 		})
 	}
 }
+
+// TestReverifyLeavesAGuardedRejectionReasonIntact is #83 end-to-end. A version
+// refused for a checksum mismatch has had its directory removed by design (D4a),
+// so a later reverify finds nothing to examine. Recording that as a verdict
+// replaces the operator-meaningful reason with a claim about a DIFFERENT fault
+// that has a DIFFERENT remedy — sending the operator hunting a storage problem
+// instead of an upstream integrity problem.
+//
+// 200, not 409: CacheView runs reverify as a BULK action over every selected row,
+// so a 4xx here would report mass failure for a correct no-op (design D13).
+//
+// Asserts on verify_err, NEVER on fetched_at — fetched_at has one-second
+// granularity and cannot discriminate a same-second rewrite.
+func TestReverifyLeavesAGuardedRejectionReasonIntact(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+
+	srv := httptest.NewServer(fcosStreamsHandler(t, hexSHAHTTP([]byte("rootfs-bytes"))))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+	viper.Set(config.CoreOSChannel, "stable")
+
+	tid, err := deps.Store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	if err := deps.Store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "44.20260607.3.1", Source: "discovered", Cached: true}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	tvID, err := deps.Store.TargetVersionID(tid, "44.20260607.3.1")
+	if err != nil {
+		t.Fatalf("TargetVersionID: %v", err)
+	}
+
+	// The rejection row D4a leaves behind: size 0, out of window, verified 0, and
+	// the operator-meaningful reason. The directory is deliberately never created.
+	const reason = "SENTINEL-REASON: rootfs checksum mismatch"
+	if err := deps.Store.UpsertCacheEntryArchived(tvID, reason); err != nil {
+		t.Fatalf("UpsertCacheEntryArchived: %v", err)
+	}
+	rows, err := deps.Store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
+	}
+	id := rows[0].ID
+
+	resp := api.Post("/api/v1/cache/"+itoa(id)+"/reverify", struct{}{})
+	if resp.Code != 200 {
+		t.Fatalf("reverify of an unevaluable version must answer 200 (bulk action), got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	after, err := deps.Store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(after) != 1 {
+		t.Fatalf("ListCacheEntries after: %v (rows=%d)", err, len(after))
+	}
+	if after[0].VerifyErr != reason {
+		t.Fatalf("reverify must NOT degrade a recorded rejection reason; verify_err went %q -> %q", reason, after[0].VerifyErr)
+	}
+	if after[0].Verified == nil || *after[0].Verified {
+		t.Fatalf("a recorded FAILURE must be left alone, got verified=%v", after[0].Verified)
+	}
+}
