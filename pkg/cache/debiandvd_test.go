@@ -355,10 +355,11 @@ func TestEnsureDebianDVD_SentinelPresentButRowsMissingSelfHeals(t *testing.T) {
 // introduced by the NEW-1 skip-already-downloaded optimization: a full-size but
 // wrong-content ISO (e.g. a divergent mirror / re-spun point release) fails
 // isoVerify, but isoVerify only DETECTS the mismatch — it doesn't remove the bad
-// file. Without cleanup, the next tick would os.Stat the still-present destPath,
+// file. Without cleanup, a later tick would os.Stat the still-present destPath,
 // SKIP the re-download, and fail verify again forever. So on a verify failure
 // ensureDebianDVD must REMOVE the downloaded ISOs (+ SHA256SUMS/.sign) before
-// returning the error, letting the next tick re-download clean. This is still a
+// returning the error, letting a later tick re-download clean — "later" and not
+// "next" because #77's dvdVerifyFailedName marker now bounds that retry. This is still a
 // pre-flip failure path: source_mode stays netinst, desired_mode stays dvd, and
 // no extracted tree exists yet.
 func TestEnsureDebianDVD_VerifyFailureClearsISOsForRefetch(t *testing.T) {
@@ -377,8 +378,9 @@ func TestEnsureDebianDVD_VerifyFailureClearsISOsForRefetch(t *testing.T) {
 		t.Fatal("expected verify failure")
 	}
 
-	// Every ISO plus SHA256SUMS/.sign must be gone so the next tick re-downloads
+	// Every ISO plus SHA256SUMS/.sign must be gone so a later tick re-downloads
 	// them clean (the skip-if-destPath-exists path would otherwise loop forever).
+	// The retry bound itself is pinned by TestEnsureDebianDVD_VerifyFailureBoundsTheRetry.
 	dir := cacheDir("debian", "12", "amd64", "12.15.0")
 	isoNames, _, _, _ := debianDVDSources("12", "amd64", "12.15.0", 2)
 	for _, name := range append(isoNames, "SHA256SUMS", "SHA256SUMS.sign") {

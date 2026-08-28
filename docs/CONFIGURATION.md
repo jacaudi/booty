@@ -466,9 +466,13 @@ elapses — so a persistently divergent upstream cannot re-pull its artifacts ev
 `--cacheInterval`. The guard is **version-level and OS-agnostic**: it covers Flatcar, Fedora CoreOS,
 Debian netinst, Talos and the netboot.xyz tools alike, not only Tails. Only the re-download is
 suppressed; the verdict and its `verify_err` stay recorded and API-exposed throughout, and a
-transient failure heals on the first attempt after the window. Debian **DVD** targets are the one
-exception — they are dispatched before this loop and the guard never runs for them, a pre-existing
-gap tracked as [jacaudi/booty#77](https://github.com/jacaudi/booty/issues/77).
+transient failure heals on the first attempt after the window. Debian **DVD** targets are dispatched
+before that loop and so never reach the version-level guard, but they are bounded by the **same
+one-hour window** through a separate mechanism ([#77](https://github.com/jacaudi/booty/issues/77)): a
+refused DVD set leaves a marker in its version directory, and a tick inside the window **downloads
+nothing** — it still makes the small upstream request that resolves the current point release, but
+no ISO bytes move. Unlike the version-level guard, a DVD refusal records **no** `verify_err` and
+stays invisible in the Cache view — the reason is logged, not stored.
 
 ### Tails is now checksum-verified (#76)
 

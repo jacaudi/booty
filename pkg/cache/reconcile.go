@@ -21,7 +21,14 @@ import (
 // removeVersionDir, which RemoveAlls the directory including the in-progress
 // file, so the next tick starts from zero.
 //
-// A package var, not a viper key: the consumer and its tests are both
+// TWO readers, one window. The version loop below reads it via
+// db.VerifyRejectedWithin; ensureDebianDVD reads it via dvdVerifyGuarded
+// (pkg/cache/debiandvd.go), because Debian DVD targets are dispatched before
+// that loop and record no cache_entries row to key a SQL predicate on (#77).
+// "How long a verification rejection suppresses a re-download" is one piece of
+// knowledge, so it stays single-sourced here rather than being copied.
+//
+// A package var, not a viper key: both consumers and their tests are
 // `package cache`, so the repo's "network dependencies must be viper-backed"
 // rule — which is about a dependency read from ANOTHER package — does not
 // apply, and ostype's discoveryTimeout is the cheaper local precedent. Promote
@@ -185,9 +192,11 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		// avoids the fetch.
 		//
 		// Version-level and OS-agnostic on purpose: every OS reaching this loop
-		// gets the same rate limit. It does NOT cover Debian DVD targets, which
-		// return above this loop — that hazard is pre-existing and tracked
-		// separately (#77), not fixed here.
+		// gets the same rate limit. Debian DVD targets return above this loop and
+		// so never reach this guard, but they are bounded by the SAME window
+		// through a separate mechanism — ensureDebianDVD reads a marker file with
+		// dvdVerifyGuarded (pkg/cache/debiandvd.go). Two readers, one window; see
+		// verifyRetryAfter above.
 		//
 		// A transport failure ALONE is never guarded: with no artifact refused,
 		// the version defers before any cache_entries row is written, so it

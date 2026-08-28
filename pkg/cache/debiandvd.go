@@ -358,9 +358,14 @@ func removeStaleNetinstArtifacts(dir string) {
 }
 
 // removeUnverifiedISOs deletes the just-downloaded DVD set (isoNames +
-// SHA256SUMS/.sign) from dir after isoVerify rejected it, so the next
-// reconcile tick re-downloads clean instead of skipping the still-present
-// (bad) files and re-failing verify forever (the NEW-1 skip's failure mode).
+// SHA256SUMS/.sign) from dir after isoVerify rejected it, so a LATER reconcile
+// tick re-downloads clean instead of skipping the still-present (bad) files and
+// re-failing verify forever (the NEW-1 skip's failure mode). Not the NEXT tick:
+// the caller also writes dvdVerifyFailedName, which suppresses the re-download
+// until verifyRetryAfter elapses (#77). Deletion plus a bounded retry is the
+// only shape that both stops the bleeding and still self-heals when mirrors
+// converge — keeping the bad bytes would re-hash the whole set every tick and
+// never recover, because the bad bytes are never re-fetched.
 // Best-effort: an absent file is fine; a real removal failure is logged and
 // non-fatal (the tick already returns the verify error regardless).
 func removeUnverifiedISOs(dir string, isoNames []string) {
@@ -446,6 +451,19 @@ func dirSize(dir string) int64 {
 // A failed/partial DOWNLOAD returns before the sentinel is written and before
 // any DB mutation, leaving source_mode=netinst + desired_mode=dvd for the next
 // tick to retry from scratch.
+//
+// A failed VERIFICATION is different (#77): the heavy work is additionally
+// gated on dvdVerifyGuarded, so a set that was just refused is not re-downloaded
+// until verifyRetryAfter elapses. The guard sits ahead of MkdirAll, so a guarded
+// tick downloads NO ISOs, and it returns nil rather than an error — a deliberate
+// deferral is not a failure to reach source_mode=dvd.
+//
+// It does not make the tick network-free, and does not claim to: with no manual
+// cached row yet (every DB write below sits under the verify failure's return),
+// existingDVDVersion misses and reconcile.go has already resolved the version
+// via debian.DiscoverVersions, an unmemoized cdimage index GET, before calling
+// in here. That request is small and bounded; the multi-disc download is what
+// #77 is about.
 func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version string) error {
 	params, err := decodeParams(t.Params)
 	if err != nil {
