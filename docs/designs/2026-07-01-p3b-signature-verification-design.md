@@ -1,5 +1,9 @@
 # P3b — Signature verification — Design
 
+> **Annotation 2026-08-27** — the `artifact absent` verdict this design introduced is **removed** by
+> `docs/designs/2026-08-26-dvd-retry-and-verdict-fidelity-design.md` (#83): material that is not on
+> disk to examine is no longer classified as corruption. Original text below is unchanged.
+
 **Date:** 2026-07-01 · **Slice:** P3b (deferred half of roadmap P3; P3a merged as PR #49) ·
 **Depends on:** issue #48's params-driven drivers (separate PR, lands first — see
 `2026-07-01-issue-48-params-driven-channels-design.md`) · **Spec:** canonical v1 design §2.9.

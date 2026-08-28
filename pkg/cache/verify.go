@@ -397,11 +397,17 @@ var ErrVersionUnevaluable = errors.New("cache: no material on disk to verify")
 // VerifyVersion recomputes a cached version's verdict from its on-disk FINAL
 // files — the reverify-facing half of the D16 single-source (the land-path uses
 // verifyArtifact + aggregateVerdicts on .partial files). It NEVER writes the DB
-// or moves files; the caller owns disposition. A verifiable artifact whose final
-// file is absent is a failure ("artifact absent") UNLESS a sibling in-progress
-// file exists — ".partial" for staged downloads, DownloadSuffix for resumable
-// ones (a re-download is in flight) — then the whole version records NULL
-// (re-review #8). id must exist (caller checks first / handles the error).
+// or moves files; the caller owns disposition.
+//
+// Declared material that is not on disk to examine — deleted, evicted, or
+// mid-re-download; absent and in-flight are ONE case — is NOT verdicted. It is
+// collected, and if there is nothing better to record the whole call returns
+// ErrVersionUnevaluable so the caller declines to record anything
+// (jacaudi/booty#83). "Nothing better" means: no present artifact failed. A real
+// failure found on a present sibling IS returned, because it is durable
+// knowledge; an affirmation is NOT, because a version with missing declared
+// material must never be affirmed. id must exist (caller checks first / handles
+// the error).
 func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, string, error) {
 	row, err := store.GetCacheEntry(id)
 	if err != nil {

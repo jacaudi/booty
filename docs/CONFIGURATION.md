@@ -458,7 +458,11 @@ admitted under `warn`: the reconciler's idempotency skip guard leaves settled (`
 present) versions in place and does not re-verify them. The recourse is
 `POST /api/v1/cache/{id}/reverify`, which re-checks the version under the current policy and re-records
 `verified=0` so the operator can **see** it; removal is then a manual decision (`DELETE` is `403`
-until auth lands in P10).
+until auth lands in P10). One qualification: if the version's declared material is no longer on
+disk — deleted, evicted, or mid-re-download — reverify records **nothing**, because there is nothing
+to judge. A previously recorded `verified=0` and its reason survive untouched (that is the point:
+they are the only record of *why* the bytes were refused), and a standing `verified=1` is withdrawn
+to "no verdict" rather than left asserting something about bytes that are gone.
 
 **A rejected version is rate-limited before it is re-downloaded.** When verification refuses a
 version, booty does not re-download it until a retry window (currently one hour, not tunable)
