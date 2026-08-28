@@ -528,9 +528,19 @@ func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version 
 			// self-healing possible, but on its own it restores a full multi-disc
 			// re-download every --cacheInterval, indefinitely — tens of GB/hour at
 			// the 5-minute default. The marker bounds that to one attempt per
-			// verifyRetryAfter. Written ONLY here: an isoDownload failure above is
-			// "could not evaluate" (design D4b) and leaves resumable .download bytes
-			// that must retry on the next tick.
+			// verifyRetryAfter. Written on this branch only: an isoDownload failure
+			// above is "could not evaluate" (design D4b) and leaves resumable
+			// .download bytes that must retry on the next tick.
+			//
+			// This branch is NOT purely verdicts, and does not claim to be:
+			// verifyDVDChecksums returns a bare error for several "could not
+			// evaluate" faults too — a hashFile read error mid-ISO, an unreadable
+			// SHA256SUMS, verifyDetachedGPGLocal failing to open the signature — and
+			// they are marked alongside real mismatches. Accepted rather than
+			// narrowed (design residual 9): removeUnverifiedISOs above already
+			// deletes the set on those same faults, so the marker adds only the
+			// one-hour delay before the retry, which on a flaky NAS is the kinder
+			// outcome. Narrowing it needs the classification residual 3 names.
 			markDVDVerifyFailed(dir)
 			return err
 		}

@@ -895,6 +895,16 @@ files in each) and `.superpowers/` is a historical ledger; neither is in scope.
    **Found by Gate 1, stated here rather than fixed.**
 8. **`docs/schema/DATABASE.md:109`'s failure-class list stays incomplete** in four other ways after
    this change (§9). Pre-existing; correcting it is a doc change with its own enumeration.
+9. **The DVD marker is armed by infrastructure faults, not only by verdicts.** `debiandvd.go` writes
+   it on *any* non-nil `isoVerify` error, and `verifyDVDChecksums` returns a bare error for several
+   "could not evaluate" faults as well as for mismatches: a `hashFile` read error part-way through a
+   multi-GB ISO, an unreadable `SHA256SUMS`, `verifyDetachedGPGLocal` failing to open the signature.
+   That is the same laundering D4b forbids on the land path, one frame lower, and residual 3 does not
+   cover it — residual 3 names `verifyArtifact`/`verifyDetachedGPG` on the generic path, not
+   `verifyDVDChecksums`. Accepted rather than narrowed: `removeUnverifiedISOs` already deletes the
+   set on those same faults today, so this change's only marginal effect is the one-hour delay before
+   the retry, which on a flaky filesystem is arguably the kinder outcome. Narrowing it needs the
+   error classification residual 3 declines to build. **Found by the final whole-branch review.**
 
 ---
 
