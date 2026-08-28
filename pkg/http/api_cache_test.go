@@ -391,3 +391,71 @@ func TestReverifyWithdrawsAnAffirmationOverMissingMaterial(t *testing.T) {
 		t.Fatalf("an affirmation over missing material must be WITHDRAWN to NULL, got verified=%v", *after[0].Verified)
 	}
 }
+
+// TestReverifyStillRecordsANilVerdict is design D14's trap guard: the change must
+// NOT widen into what remains of the nil-verdict hazard. A version that declares
+// no verifiable material at all still writes verified=NULL and an empty
+// verify_err, clearing a recorded reason and releasing the retry guard. That is
+// deliberate and documented as residual 2 — this test proves it did not change.
+//
+// The FCOS "older pinned build" branch (version != the streams release) returns
+// artifacts with neither sha256 nor a .sig, so VerifyVersion's not-verifiable
+// short-circuit fires BEFORE the os.Stat — len(unevaluable) stays 0 and the new
+// code is never reached. Contrast with
+// TestReverifyLeavesAGuardedRejectionReasonIntact, which seeds the SAME archived
+// row shape at the CURRENT release, where the artifacts ARE verifiable and the
+// reason is preserved. The two together discriminate the change's boundary.
+//
+// EXEMPT from the mutation rule (see the plan's Global Constraints).
+func TestReverifyStillRecordsANilVerdict(t *testing.T) {
+	deps, _ := targetsTestDeps(t)
+	api := newTestAPI(t, deps)
+
+	srv := httptest.NewServer(fcosStreamsHandler(t, hexSHAHTTP([]byte("rootfs-bytes"))))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+	viper.Set(config.CoreOSChannel, "stable")
+
+	tid, err := deps.Store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	// NOT the streams release: the pattern-fallback branch, whose artifacts
+	// declare no sha256 and no .sig.
+	const pinned = "43.20260101.3.0"
+	if err := deps.Store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: pinned, Source: "discovered", Cached: true}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	tvID, err := deps.Store.TargetVersionID(tid, pinned)
+	if err != nil {
+		t.Fatalf("TargetVersionID: %v", err)
+	}
+	if err := deps.Store.UpsertCacheEntryArchived(tvID, "SENTINEL-REASON: rootfs checksum mismatch"); err != nil {
+		t.Fatalf("UpsertCacheEntryArchived: %v", err)
+	}
+	rows, err := deps.Store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
+	}
+
+	resp := api.Post("/api/v1/cache/"+itoa(rows[0].ID)+"/reverify", struct{}{})
+	if resp.Code != 200 {
+		t.Fatalf("reverify = %d, want 200: %s", resp.Code, resp.Body.String())
+	}
+
+	after, err := deps.Store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(after) != 1 {
+		t.Fatalf("ListCacheEntries after: %v (rows=%d)", err, len(after))
+	}
+	if after[0].Verified != nil {
+		t.Fatalf("a version declaring no verifiable material must still record verified=NULL, got %v", *after[0].Verified)
+	}
+	if after[0].VerifyErr != "" {
+		t.Fatalf("residual 2 is UNCHANGED: the nil write still clears verify_err; got %q", after[0].VerifyErr)
+	}
+}
