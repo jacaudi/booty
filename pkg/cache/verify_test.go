@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -254,15 +255,17 @@ type errString string
 
 func (e errString) Error() string { return string(e) }
 
-// TestVerifyVersion_AbsentFinalWithPartialIsNull pins the split at VerifyVersion's
-// absent-final handling (verify.go, re-review #8): a verifiable artifact whose
-// FINAL file is absent yields NULL (no verdict) when a sibling <final>.partial
-// exists (a re-download is in flight), but a FAILURE when no .partial exists. The
-// FCOS current build declares sha256 (so the artifacts are verifiable and the
-// absent-final branch is reached); the two phases share one seeding so the NULL is
-// attributable to the .partial sibling, not to non-verifiable artifacts — Phase 2
-// removes the partials and asserts FAILURE, discriminating the split.
-func TestVerifyVersion_AbsentFinalWithPartialIsNull(t *testing.T) {
+// TestVerifyVersionAbsentAndInFlightAreBothUnevaluable pins design D11: absent
+// material and in-flight material are ONE case — material that is not there to
+// examine. It replaces TestVerifyVersion_AbsentFinalWithPartialIsNull, which
+// pinned the split D11 deletes.
+//
+// The old split short-circuited out of the per-artifact loop on the first
+// in-flight sibling, discarding every verdict collected so far and writing
+// SetCacheVerified(nil, "") — which clears verify_err too. That is the same harm
+// #83 exists to prevent, reached by a second route: reverify during a post-window
+// re-download wiped the rejection reason AND released the retry guard.
+func TestVerifyVersionAbsentAndInFlightAreBothUnevaluable(t *testing.T) {
 	ostype.ResetStreamsCache()
 	t.Cleanup(ostype.ResetStreamsCache)
 
@@ -322,38 +325,33 @@ func TestVerifyVersion_AbsentFinalWithPartialIsNull(t *testing.T) {
 		filepath.Join(dir, "rootfs.partial"),
 	}
 
-	// Phase 1: finals absent, a sibling .partial present → re-download in flight → NULL.
+	// Phase 1: finals absent, a sibling .partial present → IN FLIGHT → unevaluable.
 	for _, p := range partials {
 		if err := os.WriteFile(p, []byte("in-flight"), 0o644); err != nil {
 			t.Fatalf("write partial: %v", err)
 		}
 	}
-	verified, verifyErr, err := VerifyVersion(t.Context(), store, id)
-	if err != nil {
-		t.Fatalf("VerifyVersion (partial present): %v", err)
+	verified, _, err := VerifyVersion(t.Context(), store, id)
+	if !errors.Is(err, ErrVersionUnevaluable) {
+		t.Fatalf("in-flight material must be UNEVALUABLE, got err=%v", err)
 	}
 	if verified != nil {
-		t.Fatalf("absent final WITH sibling .partial must be NULL (no verdict), got verified=%v verifyErr=%q", *verified, verifyErr)
-	}
-	if verifyErr != "" {
-		t.Fatalf("NULL verdict must carry no verify_err, got %q", verifyErr)
+		t.Fatalf("an unevaluable version must carry no verdict, got %v", *verified)
 	}
 
-	// Phase 2 (proves the split): identical seeding, no .partial → absent final FAILS.
+	// Phase 2: identical seeding, no .partial → still unevaluable. D11 collapses
+	// the split: the old code returned NULL here and a FAILURE there.
 	for _, p := range partials {
 		if err := os.Remove(p); err != nil {
 			t.Fatalf("remove partial: %v", err)
 		}
 	}
-	verified, verifyErr, err = VerifyVersion(t.Context(), store, id)
-	if err != nil {
-		t.Fatalf("VerifyVersion (no partial): %v", err)
+	verified, _, err = VerifyVersion(t.Context(), store, id)
+	if !errors.Is(err, ErrVersionUnevaluable) {
+		t.Fatalf("absent material must be UNEVALUABLE (not a corruption verdict), got err=%v", err)
 	}
-	if verified == nil || *verified {
-		t.Fatalf("absent final with NO .partial must FAIL (verified=false), got verified=%v", verified)
-	}
-	if verifyErr == "" {
-		t.Fatalf("failure verdict must carry a non-empty verify_err")
+	if verified != nil {
+		t.Fatalf("an unevaluable version must carry no verdict, got %v", *verified)
 	}
 }
 
@@ -614,11 +612,13 @@ func TestVerifyVersionTailsProducesAVerdict(t *testing.T) {
 	}
 }
 
-// §6.2 — a Large artifact's in-flight sibling is DownloadSuffix, never
-// ".partial". Checking only ".partial" returns "artifact absent" ->
-// classCorruption: a FALSE FAILURE VERDICT on a perfectly healthy system that
-// is simply mid-resume.
-func TestVerifyVersionTailsInFlightResumeIsNoVerdict(t *testing.T) {
+// TestVerifyVersionTailsInFlightResumeIsUnevaluable pins D11 for the resumable
+// (Large) downloader, whose in-flight sibling is DownloadSuffix and never
+// ".partial". It replaces TestVerifyVersionTailsInFlightResumeIsNoVerdict: a live
+// resume is still not a verdict, but reporting it as NULL let the handler write
+// SetCacheVerified(nil, ""), clearing an operator-meaningful verify_err. It is now
+// unevaluable, which the handler declines to record at all.
+func TestVerifyVersionTailsInFlightResumeIsUnevaluable(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 	viper.Set(config.DataDir, t.TempDir())
@@ -641,12 +641,12 @@ func TestVerifyVersionTailsInFlightResumeIsNoVerdict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	verified, verifyErr, err := VerifyVersion(t.Context(), store, id)
-	if err != nil {
-		t.Fatalf("VerifyVersion: %v", err)
+	verified, _, err := VerifyVersion(t.Context(), store, id)
+	if !errors.Is(err, ErrVersionUnevaluable) {
+		t.Fatalf("a live resume must be UNEVALUABLE, got err=%v", err)
 	}
 	if verified != nil {
-		t.Fatalf("a live resume must yield NO VERDICT, got verified=%v verifyErr=%q", *verified, verifyErr)
+		t.Fatalf("an unevaluable version must carry no verdict, got %v", *verified)
 	}
 }
 
@@ -972,4 +972,67 @@ func TestLandArtifactLarge416VerifiesBeforeLanding(t *testing.T) {
 			t.Error("the 416 path renamed an unverified file into the final path")
 		}
 	})
+}
+
+// TestVerifyVersionAbsentMaterialIsUnevaluableNotAVerdict pins #83's producer-side
+// fix: a declared artifact that is not on disk is NOT a statement about the bytes'
+// integrity. Recording it as classCorruption overwrites the operator-meaningful
+// reason a rejected version's bytes are gone (D4a removed them by design) with a
+// different fault that has a different remedy.
+func TestVerifyVersionAbsentMaterialIsUnevaluableNotAVerdict(t *testing.T) {
+	ostype.ResetStreamsCache()
+	t.Cleanup(ostype.ResetStreamsCache)
+
+	streams := `{
+  "architectures": { "x86_64": { "artifacts": { "metal": {
+    "release": "44.0.0.0",
+    "formats": { "pxe": {
+      "kernel":    { "location": "https://ex/44/kernel",    "sha256": "aaa" },
+      "initramfs": { "location": "https://ex/44/initramfs", "sha256": "bbb" },
+      "rootfs":    { "location": "https://ex/44/rootfs",    "sha256": "ccc" }
+    } } } } } }
+}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(streams))
+	}))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+
+	store := newReconcileStore(t)
+	tid, err := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+	if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "44.0.0.0", Source: "discovered", Cached: true}); err != nil {
+		t.Fatalf("UpsertTargetVersion: %v", err)
+	}
+	tvID, err := store.TargetVersionID(tid, "44.0.0.0")
+	if err != nil {
+		t.Fatalf("TargetVersionID: %v", err)
+	}
+	if err := store.UpsertCacheEntry(tvID, 100); err != nil {
+		t.Fatalf("UpsertCacheEntry: %v", err)
+	}
+	rows, err := store.ListCacheEntries(db.CacheFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ListCacheEntries: %v (rows=%d)", err, len(rows))
+	}
+
+	// No files written at all: every declared artifact is unexaminable.
+	verified, verifyErr, err := VerifyVersion(t.Context(), store, rows[0].ID)
+	if !errors.Is(err, ErrVersionUnevaluable) {
+		t.Fatalf("absent declared material must be UNEVALUABLE, got err=%v verified=%v verifyErr=%q", err, verified, verifyErr)
+	}
+	if !strings.Contains(err.Error(), "kernel") {
+		t.Fatalf("the unevaluable error must name the unexaminable files, got %q", err.Error())
+	}
+	if verified != nil {
+		t.Fatalf("an unevaluable version must carry NO verdict, got verified=%v", *verified)
+	}
 }

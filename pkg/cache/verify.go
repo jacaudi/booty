@@ -382,6 +382,18 @@ func aggregateVerdicts(vs []artifactVerdict) (*bool, string) {
 	return &yes, ""
 }
 
+// ErrVersionUnevaluable reports that some of a version's DECLARED material is not
+// on disk to examine — deleted, evicted, or mid-re-download. It is NOT a
+// verification failure: the caller must not record a verdict, because the row it
+// would overwrite may hold the real reason the bytes are gone (a rejection under
+// D4a removes them by design — jacaudi/booty#83).
+//
+// The error channel is deliberate rather than a new return type: in this package
+// "could not evaluate" IS the error channel — landArtifact uses it for exactly
+// this distinction (D4b) — so a sentinel keeps one vocabulary instead of
+// introducing a second. Constructed at exactly one site, in VerifyVersion's tail.
+var ErrVersionUnevaluable = errors.New("cache: no material on disk to verify")
+
 // VerifyVersion recomputes a cached version's verdict from its on-disk FINAL
 // files — the reverify-facing half of the D16 single-source (the land-path uses
 // verifyArtifact + aggregateVerdicts on .partial files). It NEVER writes the DB
@@ -422,6 +434,7 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 	}
 
 	verdicts := make([]artifactVerdict, 0, len(arts))
+	var unevaluable []string // declared material that is not on disk to examine
 	for _, a := range arts {
 		if a.SHA256 == "" && a.SigURL == "" {
 			verdicts = append(verdicts, artifactVerdict{class: classNotVerifiable})
@@ -432,21 +445,28 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 			return nil, "", perr
 		}
 		if _, serr := os.Stat(final); serr != nil {
-			// A re-download in flight leaves a sibling in-progress file. The
-			// staged downloader writes ".partial"; the resumable (Large)
-			// downloader writes DownloadSuffix and NEVER a ".partial". Checking
-			// only ".partial" returns "artifact absent" -> classCorruption: a
-			// FALSE FAILURE VERDICT on a healthy system mid-resume.
-			for _, suffix := range []string{".partial", DownloadSuffix} {
-				if _, perr := os.Stat(final + suffix); perr == nil {
-					return nil, "", nil // re-download in flight → no verdict
-				}
-			}
-			verdicts = append(verdicts, artifactVerdict{class: classCorruption, err: fmt.Errorf("%s: artifact absent", a.Filename)})
+			// #83: the material is NOT HERE TO EXAMINE — deleted, evicted, or
+			// mid-re-download. That is not a claim about its integrity, and
+			// recording it as corruption overwrites the real reason a rejected
+			// version's bytes are gone (D4a removed them by design) with a
+			// different fault that has a different remedy.
+			//
+			// Absent and in-flight are ONE case (D11), which is why there is no
+			// longer a .partial/DownloadSuffix probe here: distinguishing them only
+			// ever fed a bare return from inside this loop, and that discarded a
+			// sibling's real mismatch, order-dependently, while clearing verify_err
+			// via SetCacheVerified(nil, "").
+			//
+			// COLLECTED, never short-circuited: a failure found on a present
+			// sibling is durable knowledge and must survive.
+			unevaluable = append(unevaluable, a.Filename)
 			continue
 		}
 		verdicts = append(verdicts, verifyArtifact(ctx, final, "", a))
 	}
 	verified, verifyErr := aggregateVerdicts(verdicts)
+	if len(unevaluable) > 0 {
+		return nil, "", fmt.Errorf("%s: %w", strings.Join(unevaluable, ", "), ErrVersionUnevaluable)
+	}
 	return verified, verifyErr, nil
 }
