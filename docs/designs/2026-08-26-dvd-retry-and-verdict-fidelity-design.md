@@ -372,8 +372,11 @@ func clearDVDVerifyFailed(dir string) { … }
 ### 5.3 The wiring in `ensureDebianDVD`
 
 Inside the existing `if !dvdSentinelPresent(dir)` block, ahead of `os.MkdirAll` — so a guarded tick
-does **no network at all**, matching the version loop's reason for placing its guard before
-`o.Artifacts` (`reconcile.go:182-185`):
+**downloads no ISOs**, matching the version loop's reason for placing its guard before
+`o.Artifacts` (`reconcile.go:182-185`). It does **not** make the tick network-free and does not claim
+to: with no cached row yet, `existingDVDVersion` misses and `reconcile.go` has already resolved the
+version through `debian.DiscoverVersions`, an unmemoized cdimage index GET, before calling in here.
+That request is small and bounded; the multi-disc download is what #77 is about:
 
 ```go
 if !dvdSentinelPresent(dir) { // heavy work only when the tree is not yet settled
@@ -436,7 +439,7 @@ settled, so there is nothing to account for.
 
 | Prior tick ended in | Marker | Next tick |
 |---|---|---|
-| verify failure, < 1 h ago | present, fresh | guarded: no network, `Warn`, `return nil` |
+| verify failure, < 1 h ago | present, fresh | guarded: downloads no ISOs (the version-resolving index GET still happens), `Warn`, `return nil` |
 | verify failure, > 1 h ago | present, stale | full re-download from zero, re-verify — self-heals if the mirror converged |
 | download failure | absent | resumes from `<iso>.download` via `Range`, as today |
 | **extract failure** | **absent** | **re-verifies the retained ISOs, re-extracts, fails again — unbounded. Residual 7.** |
