@@ -467,8 +467,9 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 	verified, verifyErr := aggregateVerdicts(verdicts)
 	// D11: a real failure found on a PRESENT sibling is durable knowledge and is
 	// recorded. Unexaminable material only suppresses recording when there is
-	// nothing better to record.
-	if len(unevaluable) > 0 && verified == nil {
+	// nothing better to record — and it must NEVER let a version be affirmed
+	// while declared material is missing.
+	if len(unevaluable) > 0 && (verified == nil || *verified) {
 		return nil, "", fmt.Errorf("%s: %w", strings.Join(unevaluable, ", "), ErrVersionUnevaluable)
 	}
 	return verified, verifyErr, nil

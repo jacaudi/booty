@@ -1102,3 +1102,60 @@ func TestVerifyVersionUnexaminableSiblingDoesNotMaskARealMismatch(t *testing.T) 
 		t.Fatalf("verify_err must NOT name the merely-absent siblings, got %q", verifyErr)
 	}
 }
+
+// TestVerifyVersionUnexaminableSiblingNeverAffirms pins D11's MIDDLE row, which is
+// the load-bearing one: a version with missing DECLARED material must never be
+// affirmed verified=true, and must not keep an affirmation it earned when the
+// bytes were still there. Without this, one passing artifact would green-badge a
+// directory that is missing the rest.
+func TestVerifyVersionUnexaminableSiblingNeverAffirms(t *testing.T) {
+	ostype.ResetStreamsCache()
+	t.Cleanup(ostype.ResetStreamsCache)
+
+	body := []byte("rootfs-bytes")
+	sum := hexSHA(body)
+	streams := `{
+  "architectures": { "x86_64": { "artifacts": { "metal": {
+    "release": "44.0.0.0",
+    "formats": { "pxe": {
+      "kernel":    { "location": "https://ex/44/kernel",    "sha256": "` + sum + `" },
+      "initramfs": { "location": "https://ex/44/initramfs", "sha256": "` + sum + `" },
+      "rootfs":    { "location": "https://ex/44/rootfs",    "sha256": "` + sum + `" }
+    } } } } } }
+}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(streams))
+	}))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+
+	store := newReconcileStore(t)
+	tid, _ := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
+	_ = store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "44.0.0.0", Source: "discovered", Cached: true})
+	tvID, _ := store.TargetVersionID(tid, "44.0.0.0")
+	_ = store.UpsertCacheEntry(tvID, 100)
+	rows, _ := store.ListCacheEntries(db.CacheFilter{})
+
+	dir := cacheDir("coreos", "stable", "x86_64", "44.0.0.0")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// kernel is PRESENT and PASSES. initramfs and rootfs are absent.
+	if err := os.WriteFile(filepath.Join(dir, "kernel"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	verified, verifyErr, err := VerifyVersion(t.Context(), store, rows[0].ID)
+	if !errors.Is(err, ErrVersionUnevaluable) {
+		t.Fatalf("missing declared material must be UNEVALUABLE even when every present artifact passes; got err=%v verified=%v verifyErr=%q", err, verified, verifyErr)
+	}
+	if verified != nil && *verified {
+		t.Fatal("a version with missing declared material must NEVER be affirmed verified=true")
+	}
+}
