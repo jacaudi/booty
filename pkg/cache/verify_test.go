@@ -1036,3 +1036,69 @@ func TestVerifyVersionAbsentMaterialIsUnevaluableNotAVerdict(t *testing.T) {
 		t.Fatalf("an unevaluable version must carry NO verdict, got verified=%v", *verified)
 	}
 }
+
+// TestVerifyVersionUnexaminableSiblingDoesNotMaskARealMismatch pins D11's FIRST
+// disposition row: when a PRESENT artifact genuinely fails, that failure is
+// durable knowledge and must be reported, even though a sibling is unexaminable.
+// This is strictly better than the code it replaces, which either joined
+// "artifact absent" into the message or discarded the failure entirely via the
+// in-flight short-circuit, order-dependently.
+//
+// VerifyVersion RETURNS the verdict; it never writes the DB.
+func TestVerifyVersionUnexaminableSiblingDoesNotMaskARealMismatch(t *testing.T) {
+	ostype.ResetStreamsCache()
+	t.Cleanup(ostype.ResetStreamsCache)
+
+	body := []byte("rootfs-bytes")
+	sum := hexSHA(body)
+	streams := `{
+  "architectures": { "x86_64": { "artifacts": { "metal": {
+    "release": "44.0.0.0",
+    "formats": { "pxe": {
+      "kernel":    { "location": "https://ex/44/kernel",    "sha256": "` + sum + `" },
+      "initramfs": { "location": "https://ex/44/initramfs", "sha256": "` + sum + `" },
+      "rootfs":    { "location": "https://ex/44/rootfs",    "sha256": "` + sum + `" }
+    } } } } } }
+}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(streams))
+	}))
+	t.Cleanup(srv.Close)
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.CoreOSStreamsURL, srv.URL+"/%s.json")
+	viper.Set(config.CoreOSChannel, "stable")
+	viper.Set(config.CoreOSArchitecture, "x86_64")
+
+	store := newReconcileStore(t)
+	tid, _ := store.CreateTarget(db.Target{OS: "fedora-coreos", Arch: "x86_64", Params: `{"channel":"stable"}`, Mode: "discovery", RetainN: 1, Source: "api", Enabled: true})
+	_ = store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: "44.0.0.0", Source: "discovered", Cached: true})
+	tvID, _ := store.TargetVersionID(tid, "44.0.0.0")
+	_ = store.UpsertCacheEntry(tvID, 100)
+	rows, _ := store.ListCacheEntries(db.CacheFilter{})
+
+	dir := cacheDir("coreos", "stable", "x86_64", "44.0.0.0")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// kernel is PRESENT and its bytes do NOT match. initramfs and rootfs are absent.
+	if err := os.WriteFile(filepath.Join(dir, "kernel"), []byte("tampered-not-matching"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	verified, verifyErr, err := VerifyVersion(t.Context(), store, rows[0].ID)
+	if err != nil {
+		t.Fatalf("a real mismatch on a present sibling must be REPORTED, not swallowed as unevaluable: %v", err)
+	}
+	if verified == nil || *verified {
+		t.Fatalf("a present artifact that fails must yield verified=false, got %v", verified)
+	}
+	if !strings.Contains(verifyErr, "kernel") {
+		t.Fatalf("verify_err must name the MISMATCH, got %q", verifyErr)
+	}
+	if strings.Contains(verifyErr, "initramfs") || strings.Contains(verifyErr, "rootfs") {
+		t.Fatalf("verify_err must NOT name the merely-absent siblings, got %q", verifyErr)
+	}
+}

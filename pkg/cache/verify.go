@@ -465,7 +465,10 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 		verdicts = append(verdicts, verifyArtifact(ctx, final, "", a))
 	}
 	verified, verifyErr := aggregateVerdicts(verdicts)
-	if len(unevaluable) > 0 {
+	// D11: a real failure found on a PRESENT sibling is durable knowledge and is
+	// recorded. Unexaminable material only suppresses recording when there is
+	// nothing better to record.
+	if len(unevaluable) > 0 && verified == nil {
 		return nil, "", fmt.Errorf("%s: %w", strings.Join(unevaluable, ", "), ErrVersionUnevaluable)
 	}
 	return verified, verifyErr, nil
