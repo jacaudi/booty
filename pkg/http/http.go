@@ -17,24 +17,14 @@ import (
 	"github.com/spf13/viper"
 )
 
-// StartHTTP starts the HTTP server in a background goroutine and returns it so
-// the caller can Shutdown() it during graceful shutdown. Signal handling and
-// the ordered shutdown live with the caller; this function only starts serving.
-//
-// It refuses to start when deps.Auth is nil and deps.NoAuth is false: that
-// combination means no credential was wired at all, and authMiddleware passes
-// a nil store through unconditionally (so pre-existing in-process tests keep
-// working) -- so this refusal is the only place a silent-open deployment is
-// caught. Returning an error rather than calling os.Exit keeps that refusal
-// testable.
-func StartHTTP(deps APIDeps) (*http.Server, error) {
-	if deps.Auth == nil && !deps.NoAuth {
-		return nil, errors.New("http: no Auth token store and --noAuth not set; refusing to start unauthenticated")
-	}
-
-	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
-	slog.Info("starting HTTP server", "addr", port)
-	// Create a mux for routing incoming requests
+// baseMux builds the plain (non-Huma) HTTP surface: the boot-config
+// endpoints (ignition/machineconfig/preseed/hosts/register), the open
+// /login and /logout endpoints, the UI, and the /data/ artifact server. It
+// is the single source of the base-mux routes, so a test asserting a route
+// is (or, once Task 6 retires some, is NOT) mounted exercises the exact same
+// registration StartHTTP uses instead of a hand-built stand-in mux that
+// could silently drift from it.
+func baseMux(deps APIDeps) *http.ServeMux {
 	myHandler := http.NewServeMux()
 
 	// All URLs will be handled by this function
@@ -59,6 +49,29 @@ func StartHTTP(deps APIDeps) (*http.Server, error) {
 		os.Exit(1)
 	}
 	myHandler.Handle("/ui/", http.StripPrefix("/ui/", uiHandler(uiFS)))
+
+	return myHandler
+}
+
+// StartHTTP starts the HTTP server in a background goroutine and returns it so
+// the caller can Shutdown() it during graceful shutdown. Signal handling and
+// the ordered shutdown live with the caller; this function only starts serving.
+//
+// It refuses to start when deps.Auth is nil and deps.NoAuth is false: that
+// combination means no credential was wired at all, and authMiddleware passes
+// a nil store through unconditionally (so pre-existing in-process tests keep
+// working) -- so this refusal is the only place a silent-open deployment is
+// caught. Returning an error rather than calling os.Exit keeps that refusal
+// testable.
+func StartHTTP(deps APIDeps) (*http.Server, error) {
+	if deps.Auth == nil && !deps.NoAuth {
+		return nil, errors.New("http: no Auth token store and --noAuth not set; refusing to start unauthenticated")
+	}
+
+	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
+	slog.Info("starting HTTP server", "addr", port)
+
+	myHandler := baseMux(deps)
 
 	// Mount the typed /api/v1 surface on the same mux (additive).
 	RegisterAPI(myHandler, deps)

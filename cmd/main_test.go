@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jeefy/booty/pkg/auth"
 	"github.com/jeefy/booty/pkg/config"
@@ -93,13 +94,12 @@ func TestHandleHUPReloadsAndFailsSafe(t *testing.T) {
 	if _, err := store.Load(); err != nil {
 		t.Fatal(err)
 	}
-	original := store.Token().Expose()
 
 	// A rotated-out-of-band file is picked up.
 	if err := os.WriteFile(path, []byte("rotated-out-of-band"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	handleHUP(store, false)
+	handleHUP(store, false, false)
 	if got := store.Token().Expose(); got != "rotated-out-of-band" {
 		t.Fatalf("after HUP token = %q, want the rewritten value", got)
 	}
@@ -109,30 +109,59 @@ func TestHandleHUPReloadsAndFailsSafe(t *testing.T) {
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	handleHUP(store, false)
+	handleHUP(store, false, false)
 	if got := store.Token().Expose(); got != "rotated-out-of-band" {
 		t.Fatalf("a blank file changed the live token to %q", got)
 	}
 
 	// Under --noAuth the reload is a no-op rather than a crash.
-	handleHUP(store, true)
+	handleHUP(store, true, false)
 	if got := store.Token().Expose(); got != "rotated-out-of-band" {
 		t.Fatalf("noAuth HUP changed the token to %q", got)
 	}
-	_ = original
+}
+
+// TestHandleHUPPreservesAnExplicitToken closes a hole where SIGHUP would
+// silently replace a --apiToken/BOOTY_API_TOKEN credential with whatever is
+// sitting in <dataDir>/api-token -- reachable whenever an operator switches
+// from file-generated auth to an explicit token without ever deleting the
+// stale file (SetExplicit deliberately never touches disk, so the old file
+// just sits there). A HUP under that config must be a no-op, not a silent
+// reload from the stale file.
+func TestHandleHUPPreservesAnExplicitToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), auth.TokenFileName)
+	// A different, populated token file exists on disk -- e.g. left over from
+	// an earlier run before --apiToken/BOOTY_API_TOKEN was set.
+	if err := os.WriteFile(path, []byte("stale-file-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := auth.NewStore(path)
+	if err := store.SetExplicit("explicit-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	handleHUP(store, false, true)
+
+	if got := store.Token().Expose(); got != "explicit-token" {
+		t.Fatalf("HUP against an explicitly-set token installed %q, want the explicit token preserved", got)
+	}
 }
 
 // TestWatchSIGHUPStopsWithItsContext guards against a goroutine that outlives
-// the process under -race.
+// the process under -race. watchSIGHUP's returned channel is closed by the
+// goroutine's own defer, so this is a direct assertion of exit rather than
+// the absence-of-a-crash the earlier version of this test settled for.
 func TestWatchSIGHUPStopsWithItsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	store := auth.NewStore(filepath.Join(t.TempDir(), auth.TokenFileName))
 	if _, err := store.Load(); err != nil {
 		t.Fatal(err)
 	}
-	watchSIGHUP(ctx, store, false)
+	done := watchSIGHUP(ctx, store, false, false)
 	cancel()
-	// No assertion is possible on goroutine exit directly; -race plus the
-	// leaked-signal-handler check in `go test` is the guard. The value here is
-	// that the call compiles with the ctx-scoped shape and is exercised.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchSIGHUP's goroutine did not exit within 2s of ctx being cancelled")
+	}
 }

@@ -321,6 +321,12 @@ func run(cmd *cobra.Command, argv []string) error {
 	// docker logs / journalctl on first run.
 	tokenStore := auth.NewStore(filepath.Join(viper.GetString(config.DataDir), auth.TokenFileName))
 	noAuth := viper.GetBool(config.NoAuth)
+	// explicit is also threaded into watchSIGHUP below: a HUP must not
+	// silently replace an explicit --apiToken/BOOTY_API_TOKEN credential with
+	// whatever is sitting in <dataDir>/api-token, which SetExplicit
+	// deliberately never touches and which can easily be stale (e.g. left
+	// over from before the operator switched to an explicit token).
+	explicit := !noAuth && viper.GetString(config.ApiToken) != ""
 	switch {
 	case noAuth:
 		slog.Warn("--noAuth is set: the /api/v1 management surface is UNAUTHENTICATED")
@@ -329,7 +335,7 @@ func run(cmd *cobra.Command, argv []string) error {
 		// (Task 8): under --noAuth, <dataDir>/api-token is never created, so
 		// `booty token print` reports "no API token" until booty runs without
 		// --noAuth once, or `booty token rotate --yes` creates one.
-	case viper.GetString(config.ApiToken) != "":
+	case explicit:
 		// Fail fast on a blank explicit token: `--apiToken " "` must abort
 		// startup, never open the API (12-Factor III -- a misconfigured
 		// service should not start).
@@ -428,7 +434,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	// `docker kill -s HUP` is a common reload idiom -- gating this on !noAuth
 	// would make --noAuth silently turn a routine reload into an outage. Under
 	// --noAuth the reload is a no-op that logs, which is the right behaviour.
-	watchSIGHUP(ctx, tokenStore, noAuth)
+	watchSIGHUP(ctx, tokenStore, noAuth, explicit)
 
 	// Single cache reconciler replaces the per-OS version-check crons. Start it
 	// after the host store is loaded; it owns all target/version DB writes and
@@ -532,27 +538,44 @@ func startProxyDHCP() *proxydhcp.Server {
 // watchSIGHUP re-reads the token file on every SIGHUP until ctx is done. A
 // failed reload is logged and the live token left untouched, so a HUP against
 // a deleted or unreadable file cannot lock the operator out.
-func watchSIGHUP(ctx context.Context, store *auth.Store, noAuth bool) {
+//
+// It returns a channel that is closed when its goroutine exits, so a test can
+// assert the goroutine actually stops instead of merely compiling the
+// ctx-scoped call; production callers may ignore it.
+func watchSIGHUP(ctx context.Context, store *auth.Store, noAuth, explicit bool) <-chan struct{} {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGHUP)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer signal.Stop(ch)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ch:
-				handleHUP(store, noAuth)
+				handleHUP(store, noAuth, explicit)
 			}
 		}
 	}()
+	return done
 }
 
 // handleHUP is watchSIGHUP's body, split out so it is directly testable
 // without delivering a real signal to the test process.
-func handleHUP(store *auth.Store, noAuth bool) {
+func handleHUP(store *auth.Store, noAuth, explicit bool) {
 	if noAuth {
 		slog.Info("SIGHUP: --noAuth is set; nothing to reload")
+		return
+	}
+	if explicit {
+		// The live token came from --apiToken/BOOTY_API_TOKEN, which
+		// SetExplicit installs without ever touching <dataDir>/api-token.
+		// Reloading from that file here would silently replace the explicit
+		// credential with whatever (possibly stale) token happens to be on
+		// disk -- reload it and every session cookie is re-keyed to a
+		// credential the operator did not set.
+		slog.Info("SIGHUP: token is set explicitly via --apiToken/BOOTY_API_TOKEN; nothing to reload")
 		return
 	}
 	if err := store.Reload(); err != nil {

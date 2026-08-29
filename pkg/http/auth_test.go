@@ -449,26 +449,51 @@ func TestNilAuthStorePassesThroughSoExistingTestsKeepWorking(t *testing.T) {
 }
 
 // TestLoginAndLogoutAreMountedOnTheBaseMux proves the two open endpoints are
-// actually reachable, not merely defined. StartHTTP binds a port, so this
-// exercises the same registration through a bare mux instead.
+// actually reachable through baseMux -- the SAME registration StartHTTP
+// calls -- rather than a hand-built stand-in mux that could silently drift
+// from it (a hand-built mux does not fail if the real registration is later
+// deleted). StartHTTP binds a port, so this exercises baseMux directly
+// instead.
 func TestLoginAndLogoutAreMountedOnTheBaseMux(t *testing.T) {
 	store := tokenStore(t, "mounted-token")
-	mux := http.NewServeMux()
-	mux.HandleFunc("/login", handleLogin(store))
-	mux.HandleFunc("/logout", handleLogout)
-	mux.HandleFunc("/", handleRequest) // the catch-all must not swallow them
+	mux := baseMux(APIDeps{Auth: store})
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", nil)
 	req.Header.Set(TokenHeader, "mounted-token")
 	mux.ServeHTTP(rr, req)
 	if rr.Code != 204 {
-		t.Fatalf("POST /login through the mux = %d, want 204 (the catch-all must not win)", rr.Code)
+		t.Fatalf("POST /login through baseMux = %d, want 204 (the catch-all must not win)", rr.Code)
 	}
 
 	rr2 := httptest.NewRecorder()
 	mux.ServeHTTP(rr2, httptest.NewRequest(http.MethodPost, "/logout", nil))
 	if rr2.Code != 204 {
-		t.Fatalf("POST /logout through the mux = %d, want 204", rr2.Code)
+		t.Fatalf("POST /logout through baseMux = %d, want 204", rr2.Code)
+	}
+}
+
+// TestStartHTTPAllowsANilStoreUnderNoAuth is the positive half of the
+// refusal guard in StartHTTP: --noAuth with no Auth store configured must be
+// allowed to start, or a later tightening of the guard (e.g. dropping
+// "&& !deps.NoAuth") would silently break --noAuth startup with nothing here
+// to catch it. httpPort=0 binds an OS-assigned ephemeral port rather than a
+// fixed one, and the server is closed immediately so the test leaves no
+// socket listening behind it.
+func TestStartHTTPAllowsANilStoreUnderNoAuth(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.HttpPort, 0)
+
+	srv, err := StartHTTP(APIDeps{NoAuth: true})
+	if err != nil {
+		t.Fatalf("StartHTTP(NoAuth: true) with a nil Auth store = %v, want nil error", err)
+	}
+	if srv == nil {
+		t.Fatal("StartHTTP(NoAuth: true) with a nil Auth store must return a running server")
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatalf("srv.Close() = %v", err)
 	}
 }
