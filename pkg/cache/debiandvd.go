@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/diskfs/go-diskfs"
 	"github.com/jeefy/booty/pkg/checksum"
@@ -74,6 +75,62 @@ const dvdSentinelName = ".booty-dvd-complete"
 func dvdSentinelPresent(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, dvdSentinelName))
 	return err == nil
+}
+
+// dvdVerifyFailedName marks a DVD set that FAILED verification, bounding how
+// often the set is re-downloaded (jacaudi/booty#77). It is the DVD state
+// machine's counterpart to the cache_entries failure row db.VerifyRejectedWithin
+// matches on: that predicate needs four columns because cache_entries has many
+// writers and none of the others may forge the signature (see pkg/db/cache.go),
+// whereas this file has exactly ONE writer — the isoVerify-failure branch of
+// ensureDebianDVD — so its bare existence is unforgeable.
+//
+// Unlike dvdSentinelName, whose doc comment states that PRESENCE and not mtime
+// is its signal, this marker is deliberately mtime-bearing: the retry window is
+// the whole point. os.Stat yields a real time.Time, so neither SQLite's
+// "-N seconds" no-op nor the fetched_at UTC-TEXT parse trap applies here.
+//
+// It is written EMPTY, like dvdSentinelName. Everything under the version dir is
+// reachable over unauthenticated HTTP (pkg/http/http.go's dataSubtrees allows
+// all of /data/cache/, and isPartialPath filters only the two in-flight
+// suffixes), and verifyDVDChecksums' errors embed absolute server paths and
+// expected digests. The reason is logged instead — see ensureDebianDVD.
+const dvdVerifyFailedName = ".booty-dvd-verify-failed"
+
+// markDVDVerifyFailed arms the DVD verify-retry bound for dir. Best-effort: a
+// write failure is logged and non-fatal — the caller returns the verification
+// error regardless, and an unwritten marker degrades to the old unbounded retry
+// rather than to anything unsafe.
+func markDVDVerifyFailed(dir string) {
+	path := filepath.Join(dir, dvdVerifyFailedName)
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		slog.Warn("cache: debian dvd: write verify-failed marker", "path", path, "err", err)
+	}
+}
+
+// dvdVerifyGuarded reports whether dir's DVD set was refused by verification less
+// than verifyRetryAfter ago. A missing marker or an elapsed window both release
+// the guard: every degenerate case fails OPEN, which is the behaviour that
+// predates the marker. A backwards wall-clock jump holds the guard for the jump's
+// duration and no longer — the same exposure the SQL guard's datetime('now') has.
+func dvdVerifyGuarded(dir string) bool {
+	fi, err := os.Stat(filepath.Join(dir, dvdVerifyFailedName))
+	if err != nil {
+		return false
+	}
+	return time.Since(fi.ModTime()) < verifyRetryAfter
+}
+
+// clearDVDVerifyFailed removes the retry marker after a successful verification.
+// Not required for correctness — the guard is only read inside the not-yet-settled
+// branch and a stale marker ages out — but it keeps the marker out of dirSize,
+// Scan's size walk, and the unauthenticated /data/cache/ read surface. Absent is
+// fine; a real removal failure is logged and non-fatal.
+func clearDVDVerifyFailed(dir string) {
+	path := filepath.Join(dir, dvdVerifyFailedName)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		slog.Warn("cache: debian dvd: remove verify-failed marker", "path", path, "err", err)
+	}
 }
 
 // isoExtractFunc extracts one ISO9660 image's full contents into destDir,
@@ -301,9 +358,14 @@ func removeStaleNetinstArtifacts(dir string) {
 }
 
 // removeUnverifiedISOs deletes the just-downloaded DVD set (isoNames +
-// SHA256SUMS/.sign) from dir after isoVerify rejected it, so the next
-// reconcile tick re-downloads clean instead of skipping the still-present
-// (bad) files and re-failing verify forever (the NEW-1 skip's failure mode).
+// SHA256SUMS/.sign) from dir after isoVerify rejected it, so a LATER reconcile
+// tick re-downloads clean instead of skipping the still-present (bad) files and
+// re-failing verify forever (the NEW-1 skip's failure mode). Not the NEXT tick:
+// the caller also writes dvdVerifyFailedName, which suppresses the re-download
+// until verifyRetryAfter elapses (#77). Deletion plus a bounded retry is the
+// only shape that both stops the bleeding and still self-heals when mirrors
+// converge — keeping the bad bytes would re-hash the whole set every tick and
+// never recover, because the bad bytes are never re-fetched.
 // Best-effort: an absent file is fine; a real removal failure is logged and
 // non-fatal (the tick already returns the verify error regardless).
 func removeUnverifiedISOs(dir string, isoNames []string) {
@@ -389,6 +451,19 @@ func dirSize(dir string) int64 {
 // A failed/partial DOWNLOAD returns before the sentinel is written and before
 // any DB mutation, leaving source_mode=netinst + desired_mode=dvd for the next
 // tick to retry from scratch.
+//
+// A failed VERIFICATION is different (#77): the heavy work is additionally
+// gated on dvdVerifyGuarded, so a set that was just refused is not re-downloaded
+// until verifyRetryAfter elapses. The guard sits ahead of MkdirAll, so a guarded
+// tick downloads NO ISOs, and it returns nil rather than an error — a deliberate
+// deferral is not a failure to reach source_mode=dvd.
+//
+// It does not make the tick network-free, and does not claim to: with no manual
+// cached row yet (every DB write below sits under the verify failure's return),
+// existingDVDVersion misses and reconcile.go has already resolved the version
+// via debian.DiscoverVersions, an unmemoized cdimage index GET, before calling
+// in here. That request is small and bounded; the multi-disc download is what
+// #77 is about.
 func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version string) error {
 	params, err := decodeParams(t.Params)
 	if err != nil {
@@ -409,6 +484,18 @@ func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version 
 	}
 
 	if !dvdSentinelPresent(dir) { // heavy work only when the tree is not yet settled
+		if dvdVerifyGuarded(dir) {
+			// The reason is NOT repeated here: the marker is empty by design (see
+			// dvdVerifyFailedName), and reconcile.go already logged the full
+			// verification error when the set was refused. Returning nil rather
+			// than an error is deliberate (design D6) — being rate-limited is not
+			// a failure to bring the target to source_mode=dvd, and an error here
+			// would make reconcile.go log "debian dvd ensure failed" for a healthy
+			// deferral.
+			slog.Warn("cache: debian dvd set rejected by verification; not retrying yet",
+				"target", t.ID, "arch", t.Arch, "version", version, "retryAfter", verifyRetryAfter)
+			return nil
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
@@ -433,12 +520,31 @@ func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version 
 			// Combined with the skip-if-destPath-exists path above, a full-size but
 			// wrong-content ISO (divergent mirror / re-spun point release) would be
 			// skipped and re-rejected every tick forever. Remove the downloaded ISOs
-			// + sums/sig so the next tick re-downloads them clean and can self-heal
+			// + sums/sig so a LATER tick re-downloads them clean and can self-heal
 			// once mirrors converge. Pre-flip failure: no sentinel/extracted tree
 			// exists yet, source_mode stays netinst.
 			removeUnverifiedISOs(dir, isoNames)
+			// A LATER tick, not the NEXT one (#77). The removal above is what makes
+			// self-healing possible, but on its own it restores a full multi-disc
+			// re-download every --cacheInterval, indefinitely — tens of GB/hour at
+			// the 5-minute default. The marker bounds that to one attempt per
+			// verifyRetryAfter. Written on this branch only: an isoDownload failure
+			// above is "could not evaluate" (design D4b) and leaves resumable
+			// .download bytes that must retry on the next tick.
+			//
+			// This branch is NOT purely verdicts, and does not claim to be:
+			// verifyDVDChecksums returns a bare error for several "could not
+			// evaluate" faults too — a hashFile read error mid-ISO, an unreadable
+			// SHA256SUMS, verifyDetachedGPGLocal failing to open the signature — and
+			// they are marked alongside real mismatches. Accepted rather than
+			// narrowed (design residual 9): removeUnverifiedISOs above already
+			// deletes the set on those same faults, so the marker adds only the
+			// one-hour delay before the retry, which on a flaky NAS is the kinder
+			// outcome. Narrowing it needs the classification residual 3 names.
+			markDVDVerifyFailed(dir)
 			return err
 		}
+		clearDVDVerifyFailed(dir)
 		if err := isoExtract(ctx, dir, isoNames, dir, t.Arch); err != nil { // writes sentinel LAST
 			return err
 		}

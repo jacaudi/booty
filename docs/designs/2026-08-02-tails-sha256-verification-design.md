@@ -1,5 +1,12 @@
 # Design: verify the Tails ISO against its published sha256
 
+> **Annotation 2026-08-27** — §7.3's recorded gap "the version-level retry guard does not cover
+> Debian DVD targets" is **closed** by
+> `docs/designs/2026-08-26-dvd-retry-and-verdict-fidelity-design.md` (#77): DVD targets are bounded
+> by the same `verifyRetryAfter` window through a marker file rather than a `cache_entries` row.
+> §6.2's absent-vs-`.partial` split is superseded by that design's D11 — absent and in-flight are now
+> one case. Original text below is unchanged.
+
 **Issue:** [jacaudi/booty#76](https://github.com/jacaudi/booty/issues/76)
 **Status:** design — Gate 1 (5 blocking, 9 significant) and a scoped re-review (2 blocking, 4 new
 defects) have both returned; all findings addressed below

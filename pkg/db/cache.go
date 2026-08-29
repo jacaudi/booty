@@ -79,6 +79,35 @@ func (s *Store) SetCacheVerified(targetVersionID int64, verified *bool, verifyEr
 	return nil
 }
 
+// WithdrawCacheAffirmation clears a STANDING AFFIRMATION — and only a standing
+// affirmation — to NULL with an empty verify_err, touching nothing else. It is
+// design D10's write: once a version's declared material is no longer on disk to
+// examine, verified=true is a claim about bytes that are not there, and an
+// archived version never re-enters the reconcile loop to correct it.
+//
+// THE `verified = 1` PREDICATE IS LOAD-BEARING, and is the whole reason this is
+// a separate method rather than a SetCacheVerified(nil, empty) call. The reverify
+// handler reaches this point from a row it read BEFORE VerifyVersion, which
+// fetches and re-hashes multi-GB material; the reconciler goroutine runs
+// concurrently with the HTTP server and writes this same cache_entries row via
+// UpsertCacheEntryArchived. Deciding in Go from that stale read would erase a
+// rejection the reconciler recorded inside the window — and erasing it costs
+// more than the operator's reason: VerifyRejectedWithin needs verified=0 AND a
+// non-empty verify_err, so clearing both RELEASES the retry guard and makes a
+// version that was just refused eligible for an immediate full re-download.
+// Deciding in SQL keeps the test and the write in one statement, so a row the
+// reconciler moved to verified=0 is left exactly as it was found.
+//
+// No-op if the row is absent, or already at verified=0 or NULL.
+func (s *Store) WithdrawCacheAffirmation(targetVersionID int64) error {
+	if _, err := s.db.Exec(
+		`UPDATE cache_entries SET verified = NULL, verify_err = '' WHERE target_version_id = ? AND verified = 1`,
+		targetVersionID); err != nil {
+		return fmt.Errorf("db: withdraw affirmation tv=%d: %w", targetVersionID, err)
+	}
+	return nil
+}
+
 // UpsertCacheEntryArchived writes the failure-visibility row for a version that
 // was REJECTED (bytes never landed / were removed): size=0, in_window=0,
 // verified=0 with the verify_err text, so the Cache view shows an archived,

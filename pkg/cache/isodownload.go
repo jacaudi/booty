@@ -21,12 +21,13 @@ var isoClient = &http.Client{}
 // would destroy a resumable multi-GB ISO between ticks. This suffix survives
 // the sweep, which also makes such a file the LONGER-lived of the two on disk.
 //
-// Exported and single-sourced because that one fact has four consumers:
-// this file writes it, pkg/http/http.go refuses to serve it, pkg/cache/scan.go
-// excludes it from the size total, and pkg/cache/verify.go both writes it
-// (landArtifact's Large branch) and reads it (VerifyVersion's in-flight check).
-// Four hand-synced literals for one contract is how three of those sites came
-// to disagree.
+// Exported and single-sourced because, beyond this file that defines and writes
+// it, that one fact has three consumers: pkg/http/http.go refuses to serve it,
+// pkg/cache/scan.go excludes it from the size total, and pkg/cache/verify.go
+// writes it (landArtifact's Large branch). There USED to be a fourth —
+// VerifyVersion's in-flight check — which #83 deleted: absent and in-flight are one
+// case now, so nothing needs to tell them apart. Hand-synced literals for one
+// contract is how three of these sites came to disagree.
 const DownloadSuffix = ".download"
 
 // downloadLargeInto streams url into inProgressPath, resuming from that file's

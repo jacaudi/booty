@@ -1,5 +1,10 @@
 # Design: a transport error must neither forge nor erase a verification verdict
 
+> **Annotation 2026-08-27** — the two gaps this design scoped out, #77 (the Debian DVD retry is
+> structurally out of reach of the version loop) and #83 (reverify degrades a rejection reason), are
+> both addressed by `docs/designs/2026-08-26-dvd-retry-and-verdict-fidelity-design.md`. Original text
+> below is unchanged.
+
 **Issue:** none filed — this closes final-review finding **S1** from
 [jacaudi/booty#76](https://github.com/jacaudi/booty/issues/76) (shipped as PR #82, merge `c7c30db`)
 **Status:** design — Gate 1 returned (4 blocking, 7 significant, 6 minor); all folded in below

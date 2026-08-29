@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -165,25 +166,54 @@ func registerCache(api huma.API, deps APIDeps) {
 		ostype.ResetStreamsCache()
 		ostype.ResetNetbootxyzCache()
 		verified, verifyErr, verr := cache.VerifyVersion(ctx, deps.Store, n)
-		if verr != nil {
-			return nil, huma.Error500InternalServerError("verify", verr)
-		}
-		// Recording is UNCONDITIONAL, which touches the verification-rejection
-		// retry guard (db.VerifyRejectedWithin) two ways. Stated here because
-		// this is where it happens; both are deliberate, neither is fixed here.
+		// Recording is CONDITIONAL. One hazard from the original unconditional
+		// write survives, deliberately; the other two are closed here.
 		//
-		// 1. A nil verdict — a superseded tool tag, or a tool declaring no
-		//    material — writes verified=NULL and an empty verify_err, so the
-		//    guard's four-column predicate stops matching and the guard is
-		//    RELEASED early. Defensible: an operator explicitly asked.
-		// 2. A row already REJECTED for a checksum mismatch has had its
-		//    directory removed (D4a) and sits at size 0, so reverify finds the
-		//    artifact absent and overwrites the operator-meaningful "checksum
-		//    mismatch" with "artifact absent". The predicate still matches
-		//    (verify_err stays non-empty) and fetched_at is untouched, so the
-		//    guard stays armed — with a degraded reason.
-		if err := deps.Store.SetCacheVerified(row.TargetVersionID, verified, verifyErr); err != nil {
-			return nil, huma.Error500InternalServerError("record verdict", err)
+		// CLOSED (#83): a row already REJECTED for a checksum mismatch has had its
+		// directory removed (D4a), so reverify finds nothing to examine. Recording
+		// that as a verdict overwrote the operator-meaningful reason with a claim
+		// about a different fault. It is now ErrVersionUnevaluable, and no verdict
+		// is recorded. Its in-flight twin — a reverify during a post-window
+		// re-download — is closed by the same sentinel.
+		//
+		// SURVIVES: a nil verdict from a superseded tool tag, or from a version
+		// whose artifacts declare no material at all, still writes verified=NULL
+		// AND an empty verify_err, releasing db.VerifyRejectedWithin's guard early
+		// and destroying any recorded reason. Defensible — an operator explicitly
+		// asked — and SetCacheVerified's nil-clearing capability exists for the
+		// real case its own doc comment names.
+		switch {
+		case errors.Is(verr, cache.ErrVersionUnevaluable):
+			// NOT an HTTP error: the Cache view runs reverify as a BULK action, so
+			// a 4xx here would report mass failure for a correct no-op.
+			slog.Warn("cache: reverify found no material to examine; verdict not recorded",
+				"id", n, "os", row.OS, "version", row.Version, "err", verr)
+			// D10: withdraw a standing AFFIRMATION. "verified=true" over material
+			// that is gone is a claim about bytes that are not there, and an
+			// ARCHIVED version never re-enters the reconcile loop to correct it
+			// (the in_window=1 clause in pkg/db/versions.go). A recorded FAILURE is
+			// left alone — preserving it is this issue's whole point.
+			//
+			// WHICH ROWS TO TOUCH IS DECIDED IN SQL, NOT FROM `row`. row was read
+			// before VerifyVersion, which fetches and re-hashes multi-GB material,
+			// and the reconciler goroutine (started alongside this server in
+			// cmd/main.go) writes this same cache_entries row via
+			// UpsertCacheEntryArchived. VerifyVersion itself never writes the DB,
+			// but the process around it does, so a rejection can land between the
+			// read and this line; branching on row.Verified would erase it. It is
+			// WithdrawCacheAffirmation's verified=1 predicate — not the read — that
+			// makes the withdrawal safe, and therefore also what keeps it from
+			// releasing db.VerifyRejectedWithin's retry guard, whose predicate needs
+			// the verified=0 the withdrawal now leaves alone.
+			if err := deps.Store.WithdrawCacheAffirmation(row.TargetVersionID); err != nil {
+				return nil, huma.Error500InternalServerError("withdraw verdict", err)
+			}
+		case verr != nil:
+			return nil, huma.Error500InternalServerError("verify", verr)
+		default:
+			if err := deps.Store.SetCacheVerified(row.TargetVersionID, verified, verifyErr); err != nil {
+				return nil, huma.Error500InternalServerError("record verdict", err)
+			}
 		}
 		r, err := deps.Store.GetCacheEntry(n)
 		if err != nil {

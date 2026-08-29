@@ -458,7 +458,11 @@ admitted under `warn`: the reconciler's idempotency skip guard leaves settled (`
 present) versions in place and does not re-verify them. The recourse is
 `POST /api/v1/cache/{id}/reverify`, which re-checks the version under the current policy and re-records
 `verified=0` so the operator can **see** it; removal is then a manual decision (`DELETE` is `403`
-until auth lands in P10).
+until auth lands in P10). One qualification: if the version's declared material is no longer on
+disk — deleted, evicted, or mid-re-download — reverify records **nothing**, because there is nothing
+to judge. A previously recorded `verified=0` and its reason survive untouched (that is the point:
+they are the only record of *why* the bytes were refused), and a standing `verified=1` is withdrawn
+to "no verdict" rather than left asserting something about bytes that are gone.
 
 **A rejected version is rate-limited before it is re-downloaded.** When verification refuses a
 version, booty does not re-download it until a retry window (currently one hour, not tunable)
@@ -466,9 +470,13 @@ elapses — so a persistently divergent upstream cannot re-pull its artifacts ev
 `--cacheInterval`. The guard is **version-level and OS-agnostic**: it covers Flatcar, Fedora CoreOS,
 Debian netinst, Talos and the netboot.xyz tools alike, not only Tails. Only the re-download is
 suppressed; the verdict and its `verify_err` stay recorded and API-exposed throughout, and a
-transient failure heals on the first attempt after the window. Debian **DVD** targets are the one
-exception — they are dispatched before this loop and the guard never runs for them, a pre-existing
-gap tracked as [jacaudi/booty#77](https://github.com/jacaudi/booty/issues/77).
+transient failure heals on the first attempt after the window. Debian **DVD** targets are dispatched
+before that loop and so never reach the version-level guard, but they are bounded by the **same
+one-hour window** through a separate mechanism ([#77](https://github.com/jacaudi/booty/issues/77)): a
+refused DVD set leaves a marker in its version directory, and a tick inside the window **downloads
+nothing** — it still makes the small upstream request that resolves the current point release, but
+no ISO bytes move. Unlike the version-level guard, a DVD refusal records **no** `verify_err` and
+stays invisible in the Cache view — the reason is logged, not stored.
 
 ### Tails is now checksum-verified (#76)
 
