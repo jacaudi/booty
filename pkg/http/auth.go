@@ -18,16 +18,18 @@ const TokenHeader = "X-Booty-Token"
 // a matching X-Booty-Token header or a valid session cookie, and nothing else.
 //
 // It is installed once on the group rather than per-operation on purpose: a
-// route added to any registrar later inherits the gate automatically, which is
-// the failure mode a per-route list exists to have and this one does not.
+// route added to any registrar later inherits the gate automatically instead
+// of silently escaping it, which is the failure mode a per-route list would
+// otherwise require a maintainer to remember to guard against.
 //
 // disabled is the --noAuth escape hatch: a pass-through, logged loudly at
 // startup by the caller.
 func authMiddleware(api huma.API, store *auth.Store, disabled bool) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		// A nil store means no Auth was wired. Only tests construct APIDeps
-		// that way; StartHTTP refuses to start without one unless --noAuth is
-		// set, so a production nil can never reach here silently.
+		// that way today. Task 4 adds that refusal to StartHTTP (a nil store
+		// without --noAuth fails startup); until then this is a test-only
+		// affordance, not a production guarantee.
 		if disabled || store == nil || authorized(store, ctx) {
 			next(ctx)
 			return
@@ -40,11 +42,14 @@ func authMiddleware(api huma.API, store *auth.Store, disabled bool) func(huma.Co
 }
 
 func authorized(store *auth.Store, ctx huma.Context) bool {
-	// Fail closed when no usable token is installed. This guard is what stops
-	// the cookie path from being an AUTHENTICATION BYPASS: the cookie key is
-	// derived from the token, so a token-less store would otherwise verify
-	// against a key computable from this repo's source. Store.Key returns
-	// ok=false in exactly that state -- never treat a zero key as a fallback.
+	// Fail closed when no usable token is installed. Store.Key already
+	// returns ok=false for this identical state (both read the same
+	// atomic credential pointer), and newCredential's ErrEmptyToken makes an
+	// installed-but-empty token unreachable to begin with -- so this check is
+	// defence in depth, not the sole thing standing between a token-less
+	// store and a forged cookie. It earns its place by making the fail-closed
+	// intent explicit at the top of the function, for a reader who has not
+	// traced Key()'s nil branch.
 	if !store.HasToken() {
 		return false
 	}
@@ -133,7 +138,16 @@ func requestIsTLS(r *http.Request) bool {
 
 // handleLogout clears the session cookie. There is no server-side state to
 // revoke: the cookie is self-verifying, so logout is purely client-side.
+//
+// The method check matters once Task 4 mounts this on the base mux: SameSite
+// governs whether cookies are SENT on a request, not whether a Set-Cookie on
+// the RESPONSE is honored, so without this guard a cross-site
+// <img src="http://booty/logout"> would clear a visitor's session cookie.
 func handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.CookieName,
 		Value:    "",

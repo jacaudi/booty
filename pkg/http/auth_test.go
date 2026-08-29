@@ -373,6 +373,21 @@ func TestLogoutClearsTheCookie(t *testing.T) {
 	}
 }
 
+// TestLogoutRejectsAGetRequest closes a forced-logout nuisance: once Task 4
+// mounts /logout on the base mux, an unguarded GET handler means a cross-site
+// <img src="http://booty/logout"> clears the victim's session cookie.
+// SameSite governs whether cookies are SENT on a request, not whether a
+// Set-Cookie on the RESPONSE is honored, so SameSite=Strict does not cover
+// this -- the handler itself must reject the method, exactly as handleLogin
+// already does.
+func TestLogoutRejectsAGetRequest(t *testing.T) {
+	rr := httptest.NewRecorder()
+	handleLogout(rr, httptest.NewRequest(http.MethodGet, "/logout", nil))
+	if rr.Code != 405 {
+		t.Fatalf("GET /logout = %d, want 405", rr.Code)
+	}
+}
+
 // TestTokenFileIsNotServedOverData is the regression guard for the allowlist
 // interaction: <dataDir>/api-token sits outside cache/ and public/, so it is
 // unreachable by construction. This asserts that; it adds no rule.
