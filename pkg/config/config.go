@@ -54,6 +54,8 @@ const (
 	CatalogFile            = "catalogFile"
 	NetbootxyzEndpointsURL = "netbootxyzEndpointsURL"
 	NetbootxyzAssetBase    = "netbootxyzAssetBase"
+	ApiToken               = "apiToken"
+	NoAuth                 = "noAuth"
 )
 
 // DefaultTalosSchematic is the Image Factory's "vanilla" (no-extensions)
@@ -101,6 +103,12 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(HardwareMap, "hardware.json")
 
 	viper.BindEnv(DatabasePath, "DATABASE_PATH")
+
+	// 12-Factor III: the credential belongs in the environment, not in argv.
+	// --apiToken works but is visible in `ps` and `docker inspect`; this gives
+	// operators BOOTY_API_TOKEN, matching the IGNITION_FILE / HARDWARE_MAP /
+	// DATABASE_PATH precedent already in this function.
+	viper.BindEnv(ApiToken, "BOOTY_API_TOKEN")
 }
 
 // DownloadStaged streams the body at rawURL into <destDir>/<base>.partial (base

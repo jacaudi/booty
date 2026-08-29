@@ -20,7 +20,18 @@ import (
 // StartHTTP starts the HTTP server in a background goroutine and returns it so
 // the caller can Shutdown() it during graceful shutdown. Signal handling and
 // the ordered shutdown live with the caller; this function only starts serving.
-func StartHTTP(deps APIDeps) *http.Server {
+//
+// It refuses to start when deps.Auth is nil and deps.NoAuth is false: that
+// combination means no credential was wired at all, and authMiddleware passes
+// a nil store through unconditionally (so pre-existing in-process tests keep
+// working) -- so this refusal is the only place a silent-open deployment is
+// caught. Returning an error rather than calling os.Exit keeps that refusal
+// testable.
+func StartHTTP(deps APIDeps) (*http.Server, error) {
+	if deps.Auth == nil && !deps.NoAuth {
+		return nil, errors.New("http: no Auth token store and --noAuth not set; refusing to start unauthenticated")
+	}
+
 	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
 	slog.Info("starting HTTP server", "addr", port)
 	// Create a mux for routing incoming requests
@@ -39,6 +50,8 @@ func StartHTTP(deps APIDeps) *http.Server {
 	myHandler.HandleFunc("/booty.json", handleDataRequest)
 	myHandler.HandleFunc("/info", handleInfoRequest)
 	myHandler.HandleFunc("/healthz", handleHealthz)
+	myHandler.HandleFunc("/login", handleLogin(deps.Auth))
+	myHandler.HandleFunc("/logout", handleLogout)
 	myHandler.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(viper.GetString(config.DataDir))))
 	uiFS, err := web.DistFS()
 	if err != nil {
@@ -66,7 +79,7 @@ func StartHTTP(deps APIDeps) *http.Server {
 	}()
 	slog.Info("server started")
 
-	return s
+	return s, nil
 }
 
 // dataFileHandler serves files under dataDir, restricted to the subtrees in

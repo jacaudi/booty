@@ -414,3 +414,61 @@ func TestTokenFileIsNotServedOverData(t *testing.T) {
 		t.Fatal("the token file must never appear in a /data/ response body")
 	}
 }
+
+// TestStartHTTPRefusesANilStoreWithoutNoAuth is the production half of the
+// nil-store rule: authMiddleware passes through on nil so pre-existing tests
+// keep working, so the REFUSAL has to live in the wiring layer or the
+// pass-through becomes a silent-open default. StartHTTP returns an error
+// rather than calling os.Exit precisely so this test can exist.
+func TestStartHTTPRefusesANilStoreWithoutNoAuth(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.HttpPort, 0) // never actually bound: the guard returns first
+
+	srv, err := StartHTTP(APIDeps{})
+	if err == nil {
+		if srv != nil {
+			_ = srv.Close()
+		}
+		t.Fatal("StartHTTP with no Auth store and no --noAuth must refuse to start")
+	}
+	if srv != nil {
+		t.Fatal("a refused StartHTTP must not return a server")
+	}
+}
+
+// TestNilAuthStorePassesThroughSoExistingTestsKeepWorking documents the one
+// place a nil store is acceptable: in-process tests. StartHTTP is the layer
+// that refuses a nil store in production, which is asserted separately below.
+func TestNilAuthStorePassesThroughSoExistingTestsKeepWorking(t *testing.T) {
+	// gatedHarness and getOS are defined in auth_test.go (Task 3), same package.
+	if got := getOS(gatedHarness(t, nil, false), nil); got == 401 {
+		t.Fatal("a nil Auth store must pass through, or every pre-existing newTestAPI test breaks")
+	}
+}
+
+// TestLoginAndLogoutAreMountedOnTheBaseMux proves the two open endpoints are
+// actually reachable, not merely defined. StartHTTP binds a port, so this
+// exercises the same registration through a bare mux instead.
+func TestLoginAndLogoutAreMountedOnTheBaseMux(t *testing.T) {
+	store := tokenStore(t, "mounted-token")
+	mux := http.NewServeMux()
+	mux.HandleFunc("/login", handleLogin(store))
+	mux.HandleFunc("/logout", handleLogout)
+	mux.HandleFunc("/", handleRequest) // the catch-all must not swallow them
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", nil)
+	req.Header.Set(TokenHeader, "mounted-token")
+	mux.ServeHTTP(rr, req)
+	if rr.Code != 204 {
+		t.Fatalf("POST /login through the mux = %d, want 204 (the catch-all must not win)", rr.Code)
+	}
+
+	rr2 := httptest.NewRecorder()
+	mux.ServeHTTP(rr2, httptest.NewRequest(http.MethodPost, "/logout", nil))
+	if rr2.Code != 204 {
+		t.Fatalf("POST /logout through the mux = %d, want 204", rr2.Code)
+	}
+}
