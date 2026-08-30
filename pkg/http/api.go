@@ -36,10 +36,17 @@ func RegisterAPI(mux *http.ServeMux, deps APIDeps) huma.API {
 // registrar call here, siblings untouched (No-Wall).
 func registerOperations(api huma.API, deps APIDeps) {
 	grp := huma.NewGroup(api, "/api/v1")
-	// ONE gate for the whole surface. Installed before any registrar so every
-	// operation below inherits it, including operations added later — that
-	// automatic inheritance is the reason the gate lives on the group and not
-	// on a per-route list someone must remember to extend.
+	// ONE gate for the whole surface. huma.Register captures the group's
+	// middleware chain (Group.Middlewares(), a snapshot of the slice
+	// UseMiddleware appends to) at THAT CALL's registration time, not
+	// lazily — so this UseMiddleware call must run before every registrar
+	// below it in this function, not merely "somewhere in the file". A
+	// registrar invoked above this line would register its operations
+	// ungated with no compile-time signal. TestEveryRegisteredOperationIsGated
+	// (auth_test.go) is what actually enforces the invariant: it walks every
+	// operation in the built OpenAPI document and asserts each one 401s
+	// uncredentialed, so a registrar moved above this line, or a new one
+	// added without being called from here at all, fails that test.
 	grp.UseMiddleware(authMiddleware(api, deps.Auth, deps.NoAuth))
 	registerCatalog(grp)          // Task 5
 	registerTargets(grp, deps)    // Task 6
@@ -49,5 +56,5 @@ func registerOperations(api huma.API, deps APIDeps) {
 	registerRoles(grp, deps)      // P4 T9
 	registerSchematics(grp, deps) // P5 T8
 	registerClusters(grp, deps)   // P6 T13
-	registerInfo(grp)             // D5: replaces the retired base-mux GET /info
+	registerInfo(grp)             // replaces the retired base-mux GET /info
 }

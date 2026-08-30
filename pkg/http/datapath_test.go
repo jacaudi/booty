@@ -52,6 +52,7 @@ func TestResolveWithinDataDirRejectsEscapes(t *testing.T) {
 		"../../etc/passwd",
 		"..",
 		"../",
+		"config/..",
 		"config/../../etc/passwd",
 		"/etc/passwd",
 		"/",
@@ -92,14 +93,33 @@ func TestResolveWithinDataDirRejectsASiblingPrefix(t *testing.T) {
 
 // TestResolveWithinDataDirRejectsASymlinkEscape covers the case template.ParseFiles
 // would otherwise follow: a symlink INSIDE dataDir whose target is outside it.
+//
+// The target is deliberately RELATIVE (".." segments up to a sibling
+// directory, resolved relative to the symlink's own directory), not
+// absolute: a relative target is the more common real-world shape (e.g. a
+// config tree symlinked in from a sibling checkout), and $GOROOT's
+// path/filepath/symlink.go shows walkSymlinks resolves relative targets by
+// walking them lexically from the link's directory, exactly like an absolute
+// one -- but nothing here pinned that until now. An absolute-target symlink
+// remains implicitly covered: this test's own construction is one no-op
+// EvalSymlinks call away from being absolute, and resolveWithinDataDir does
+// not special-case either form.
 func TestResolveWithinDataDirRejectsASymlinkEscape(t *testing.T) {
 	dir := withDataDir(t)
-	outside := filepath.Join(t.TempDir(), "outside.txt")
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, "outside.txt")
 	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(dir, "escape.yaml")
-	if err := os.Symlink(outside, link); err != nil {
+	relTarget, err := filepath.Rel(dir, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.IsAbs(relTarget) {
+		t.Fatalf("precondition: symlink target %q must be relative", relTarget)
+	}
+	if err := os.Symlink(relTarget, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 

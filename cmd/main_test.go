@@ -85,9 +85,12 @@ func TestResolveServerHTTPPort(t *testing.T) {
 	}
 }
 
-// TestHandleHUPReloadsAndFailsSafe covers design section 12's "SIGHUP re-read"
-// requirement without delivering a real signal to the test process:
-// watchSIGHUP's body is factored into handleHUP for exactly this reason.
+// TestHandleHUPReloadsAndFailsSafe covers the SIGHUP re-read requirement --
+// a rotated-on-disk token takes effect without a process restart, and a
+// blank or unreadable file must fail safe rather than dropping booty into an
+// unauthenticatable state -- without delivering a real signal to the test
+// process: watchSIGHUP's body is factored into handleHUP for exactly this
+// reason.
 func TestHandleHUPReloadsAndFailsSafe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), auth.TokenFileName)
 	store := auth.NewStore(path)

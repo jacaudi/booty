@@ -32,9 +32,9 @@ type BootyInfo struct {
 }
 
 // registerInfo mounts GET /info on the /api/v1 group. It is gated like the
-// rest of the surface (design D1, plan P7): the open /version.txt and
-// /version.json endpoints, and /healthz, already expose versions if a
-// pre-login value is ever wanted.
+// rest of the surface -- a pre-login caller is not left with nothing, since
+// the open /version.txt and /version.json endpoints, and /healthz, already
+// expose versions.
 func registerInfo(api huma.API) {
 	huma.Register(api, huma.Operation{
 		OperationID: "get-info", Method: http.MethodGet, Path: "/info",
