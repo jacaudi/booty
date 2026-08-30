@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Descriptions, Typography } from 'antd'
+import { request } from '../api/client'
 
 interface Info {
   booty?: { version?: string; timestamp?: string }
@@ -8,9 +9,11 @@ interface Info {
 export default function AboutView() {
   const [info, setInfo] = useState<Info>({})
   useEffect(() => {
-    fetch('/info')
-      .then((r) => r.json())
-      .then(setInfo)
+    // /api/v1/info is gated, so this MUST go through request(): a raw
+    // fetch('/info') would take its 401 outside the login interceptor and the
+    // view would silently render "unknown" forever.
+    request<Info>('/info')
+      .then((body) => setInfo(body ?? {}))
       .catch(() => setInfo({}))
   }, [])
   return (

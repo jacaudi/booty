@@ -10,7 +10,7 @@ describe('configs api client', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ configs }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await expect(listConfigs()).resolves.toEqual(configs)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/configs', undefined)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/configs', expect.objectContaining({ credentials: 'same-origin' }))
   })
 
   it('createConfig POSTs name/kind/source', async () => {

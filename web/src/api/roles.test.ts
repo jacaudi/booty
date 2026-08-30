@@ -9,7 +9,7 @@ describe('roles api client', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ roles }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await expect(listRoles()).resolves.toEqual(roles)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/roles', undefined)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/roles', expect.objectContaining({ credentials: 'same-origin' }))
   })
 
   it('createRole POSTs name + optional defaultConfigId', async () => {

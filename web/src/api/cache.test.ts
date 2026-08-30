@@ -9,48 +9,51 @@ describe('cache api client', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ entries }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await expect(listCache()).resolves.toEqual(entries)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache', undefined)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache', expect.objectContaining({ credentials: 'same-origin' }))
   })
 
   it('listCache with no filter GETs bare /cache', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ entries: [] }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await listCache()
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache', undefined)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache', expect.objectContaining({ credentials: 'same-origin' }))
   })
 
   it('listCache maps os/state/pinned to the query string', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ entries: [] }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await listCache({ os: 'talos', state: 'archived', pinned: true })
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache?os=talos&state=archived&pinned=true', undefined)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/cache?os=talos&state=archived&pinned=true',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
   })
 
   it('listCache omits empty filter fields', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ entries: [] }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await listCache({ os: 'talos' })
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache?os=talos', undefined)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache?os=talos', expect.objectContaining({ credentials: 'same-origin' }))
   })
 
   it('pinCache POSTs the id path', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await pinCache(7)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache/7/pin', { method: 'POST' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache/7/pin', expect.objectContaining({ method: 'POST' }))
   })
 
   it('reverifyCacheEntry POSTs to the reverify path', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await reverifyCacheEntry(7)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache/7/reverify', { method: 'POST' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache/7/reverify', expect.objectContaining({ method: 'POST' }))
   })
 
   it('scanCache POSTs /cache/scan and returns the summary', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ scanned: 3, updated: 3, orphans: 1 }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await expect(scanCache()).resolves.toEqual({ scanned: 3, updated: 3, orphans: 1 })
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache/scan', { method: 'POST' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/cache/scan', expect.objectContaining({ method: 'POST' }))
   })
 })

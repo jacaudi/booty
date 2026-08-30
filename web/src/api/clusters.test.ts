@@ -9,7 +9,7 @@ describe('clusters api client', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ clusters }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
     await expect(listClusters()).resolves.toEqual(clusters)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/clusters', undefined)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/clusters', expect.objectContaining({ credentials: 'same-origin' }))
   })
 
   it('createCluster POSTs the pinned inputs', async () => {
