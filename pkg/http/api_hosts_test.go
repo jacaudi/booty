@@ -479,6 +479,54 @@ func TestCreateHostAllowsAnOmittedOS(t *testing.T) {
 	}
 }
 
+// TestCreateHostOSValidationMatchesTheBootPathVocabulary is the regression
+// guard for a fix to the fix: create-host originally validated os with the
+// SAME bare ostype.Lookup create-target uses, but that registry has no
+// "coreos" entry -- only "fedora-coreos" (pkg/ostype/ignition.go). The boot
+// path has always accepted "coreos": resolve.go's osFamily canonicalizes via
+// cache.CacheNameToCanonical before looking up, which is the single source of
+// the "coreos" <-> "fedora-coreos" bridge. Validating with the bare lookup
+// made create-host STRICTER than its own consumer, so {"os":"coreos"} -- a
+// value booty uses in its own vocabulary (GET /api/v1/info's "coreos" key,
+// --coreosArchitecture, the CLI's own description) and one the retired
+// POST /register accepted unvalidated -- regressed from working to a 422.
+// The validator must match the consumer (osFamily), not a different one
+// (ostype.Lookup) that happens to be nearby.
+func TestCreateHostOSValidationMatchesTheBootPathVocabulary(t *testing.T) {
+	cases := []struct {
+		name string
+		mac  string
+		os   string
+		want int
+	}{
+		{name: "coreos (boot-path short name) creates", mac: "aa:bb:cc:dd:ee:20", os: "coreos", want: 201},
+		{name: "fedora-coreos (canonical spelling) creates", mac: "aa:bb:cc:dd:ee:21", os: "fedora-coreos", want: 201},
+		{name: "flatcar (control) creates", mac: "aa:bb:cc:dd:ee:22", os: "flatcar", want: 201},
+		{name: "talso (typo) is rejected", mac: "aa:bb:cc:dd:ee:23", os: "talso", want: 422},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestAPI(t, hostsTestSetup(t))
+			resp := api.Post("/api/v1/hosts", map[string]any{"mac": tc.mac, "os": tc.os})
+			if resp.Code != tc.want {
+				t.Fatalf("POST os=%q = %d, want %d (body %s)", tc.os, resp.Code, tc.want, resp.Body.String())
+			}
+			if tc.want == 422 && !strings.Contains(strings.ToLower(resp.Body.String()), "os") {
+				t.Fatalf("the 422 must name the os field: %s", resp.Body.String())
+			}
+		})
+	}
+
+	// os stays optional even with the validator swapped.
+	t.Run("no os still creates", func(t *testing.T) {
+		api := newTestAPI(t, hostsTestSetup(t))
+		resp := api.Post("/api/v1/hosts", map[string]any{"mac": "aa:bb:cc:dd:ee:24"})
+		if resp.Code != 201 {
+			t.Fatalf("POST with no os = %d, want 201 (body %s)", resp.Code, resp.Body.String())
+		}
+	})
+}
+
 // TestCreateHostRejectsAnIgnitionFileField is the P2 guarantee: the create DTO
 // deliberately has no ignitionFile, so a client cannot reintroduce the
 // path-traversal writer that POST /register was.

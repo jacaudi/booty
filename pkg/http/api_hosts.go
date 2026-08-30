@@ -10,7 +10,6 @@ import (
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
-	"github.com/jeefy/booty/pkg/ostype"
 )
 
 type listHostsOutput struct {
@@ -155,12 +154,20 @@ func registerHosts(api huma.API, deps APIDeps) {
 		Body   *hardware.Host
 	}, error) {
 		// OS is optional, but when supplied it must be a real, known OS --
-		// the same validator create-target uses two files over
-		// (api_targets.go:106-108). Unvalidated, a typo (e.g. "talso" for
-		// "talos") was written straight into assigned_os by approve-host and
-		// only discovered at netboot time.
+		// unvalidated, a typo (e.g. "talso" for "talos") was written straight
+		// into assigned_os by approve-host and only discovered at netboot
+		// time. Validate with osFamily (resolve.go), NOT the bare
+		// ostype.Lookup create-target uses: this value flows to osFamily on
+		// the BOOT path (resolveConfig -> osFamily(host.OS)), which
+		// canonicalizes via cache.CacheNameToCanonical before looking up --
+		// the single bridge between booty's short boot vocabulary ("coreos")
+		// and ostype's canonical taxonomy ("fedora-coreos"). Validating with
+		// the bare lookup instead would reject "coreos", a value that has
+		// always booted successfully and that booty uses in its own
+		// vocabulary elsewhere (GET /api/v1/info's "coreos" key,
+		// --coreosArchitecture) -- stricter than the consumer it feeds.
 		if in.Body.OS != "" {
-			if _, ok := ostype.Lookup(in.Body.OS); !ok {
+			if _, ok := osFamily(in.Body.OS); !ok {
 				return nil, huma.Error422UnprocessableEntity("unknown OS " + in.Body.OS)
 			}
 		}
