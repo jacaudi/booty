@@ -18,12 +18,16 @@ import (
 )
 
 // baseMux builds the plain (non-Huma) HTTP surface: the boot-config
-// endpoints (ignition/machineconfig/preseed/hosts/register), the open
-// /login and /logout endpoints, the UI, and the /data/ artifact server. It
-// is the single source of the base-mux routes, so a test asserting a route
-// is (or, once Task 6 retires some, is NOT) mounted exercises the exact same
-// registration StartHTTP uses instead of a hand-built stand-in mux that
-// could silently drift from it.
+// endpoints (ignition/machineconfig/preseed), the open /login and /logout
+// endpoints, the UI, and the /data/ artifact server. It is the single source
+// of the base-mux routes, so a test asserting a route is (or, per D5, is NOT)
+// mounted exercises the exact same registration StartHTTP uses instead of a
+// hand-built stand-in mux that could silently drift from it.
+//
+// /hosts, /register, /unregister, /booty.json and /info were retired here by
+// Task 6 (D5): they are superseded by the gated /api/v1 surface (POST
+// /api/v1/hosts, DELETE /api/v1/hosts/{mac}, GET /api/v1/hosts's unknown
+// field, GET /api/v1/info).
 func baseMux(deps APIDeps) *http.ServeMux {
 	myHandler := http.NewServeMux()
 
@@ -34,11 +38,6 @@ func baseMux(deps APIDeps) *http.ServeMux {
 	myHandler.HandleFunc("/preseed", handlePreseedRequest(deps.Store))
 	myHandler.HandleFunc("/version.txt", handleVersionRequest)
 	myHandler.HandleFunc("/version.json", handleVersionRequest)
-	myHandler.HandleFunc("/hosts", handleHostsRequest)
-	myHandler.HandleFunc("/register", handleRegistrationRequest)
-	myHandler.HandleFunc("/unregister", handleUnregistrationRequest)
-	myHandler.HandleFunc("/booty.json", handleDataRequest)
-	myHandler.HandleFunc("/info", handleInfoRequest)
 	myHandler.HandleFunc("/healthz", handleHealthz)
 	myHandler.HandleFunc("/login", handleLogin(deps.Auth))
 	myHandler.HandleFunc("/logout", handleLogout)

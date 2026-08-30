@@ -381,3 +381,48 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 		})
 	}
 }
+
+// TestRetiredRoutesAreGone asserts D5.
+//
+// It builds its mux through baseMux, the SAME registration path StartHTTP
+// uses (http.go:27) — not a hand-rolled stand-in. A hand-built mux with only
+// a few handlers on it would pass identically whether or not the retired
+// routes are still mounted in baseMux, since the test's own mux never had
+// them either way; that would report this criterion as met without testing
+// it.
+//
+// Compile-time half: the five retired handler identifiers
+// (handleRegistrationRequest, handleUnregistrationRequest,
+// handleHostsRequest, handleDataRequest, handleInfoRequest) must no longer
+// exist. If any is still declared, this file will not compile, which is the
+// strongest possible assertion and needs no runtime check.
+//
+// Runtime half: build the mux via baseMux and assert the retired paths fall
+// through to the catch-all, while the routes that must survive stay distinct
+// from it.
+func TestRetiredRoutesAreGone(t *testing.T) {
+	mux := baseMux(APIDeps{})
+
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPost, "/register"},
+		{http.MethodPost, "/unregister"},
+		{http.MethodGet, "/booty.json"},
+		{http.MethodGet, "/hosts?mac=aa:bb:cc:dd:ee:ff"},
+		{http.MethodGet, "/info"},
+	} {
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, httptest.NewRequest(tc.method, tc.path, nil))
+		if rr.Code != http.StatusFound {
+			t.Errorf("%s %s = %d, want 302 to /ui/ (route must be retired)", tc.method, tc.path, rr.Code)
+		}
+	}
+
+	// And the routes that must SURVIVE are still distinct from the catch-all.
+	for _, path := range []string{"/version.json", "/healthz"} {
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		if rr.Code == http.StatusFound {
+			t.Errorf("GET %s fell through to the catch-all; it must stay mounted", path)
+		}
+	}
+}

@@ -273,11 +273,11 @@ func registerClusters(api huma.API, deps APIDeps) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-cluster", Method: http.MethodDelete, Path: "/clusters/{id}",
-		Summary: "Delete a cluster (disabled until auth)", Tags: []string{"clusters"},
+		Summary: "Delete a cluster (not implemented)", Tags: []string{"clusters"},
 	}, func(ctx context.Context, _ *struct {
 		ID int64 `path:"id"`
 	}) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 
 	registerClusterMembers(api, deps) // Task 14 (import + add/remove member)

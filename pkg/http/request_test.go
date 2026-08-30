@@ -45,18 +45,3 @@ func TestHandleVersionRequest_SourcedFromCache(t *testing.T) {
 		t.Errorf("/version.json body = %q", jb)
 	}
 }
-
-func TestHandleInfoRequest_SourcedFromCache(t *testing.T) {
-	viper.Reset()
-	t.Cleanup(viper.Reset)
-	viper.Set(config.DataDir, t.TempDir())
-	viper.Set(config.FlatcarArchitecture, "amd64")
-	viper.Set(config.CoreOSArchitecture, "x86_64")
-	seedCache(t, "flatcar", "-", "amd64", "3815.2.0")
-
-	rr := httptest.NewRecorder()
-	handleInfoRequest(rr, httptest.NewRequest(http.MethodGet, "/info", nil))
-	if !strings.Contains(rr.Body.String(), `"flatcar":{"version":"3815.2.0"}`) {
-		t.Errorf("/info body = %q", rr.Body.String())
-	}
-}

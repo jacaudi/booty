@@ -308,11 +308,11 @@ func registerConfigs(api huma.API, deps APIDeps) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-config", Method: http.MethodDelete, Path: "/configs/{id}",
-		Summary: "Delete a config (disabled until auth)", Tags: []string{"configs"},
+		Summary: "Delete a config (not implemented)", Tags: []string{"configs"},
 	}, func(ctx context.Context, _ *struct {
 		ID int64 `path:"id"`
 	}) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 }
 

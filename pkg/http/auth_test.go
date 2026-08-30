@@ -204,10 +204,12 @@ func TestEveryRegisteredOperationIsGated(t *testing.T) {
 			checked++
 		}
 	}
-	// 45 pre-existing operations today. Task 6 adds create-host and get-info;
-	// raise this guard to 47 in that task.
-	if checked < 45 {
-		t.Fatalf("only %d operations enumerated, want >= 45; the walk matched too little", checked)
+	// 47 operations today: the 45 pre-existing ones plus Task 6's create-host
+	// and get-info. If this count drops below 47, those two new operations
+	// are not registered on the gated group -- a real bug, not a guard to
+	// loosen.
+	if checked < 47 {
+		t.Fatalf("only %d operations enumerated, want >= 47; the walk matched too little", checked)
 	}
 }
 

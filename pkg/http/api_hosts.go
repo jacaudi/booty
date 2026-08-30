@@ -15,6 +15,10 @@ import (
 type listHostsOutput struct {
 	Body struct {
 		Hosts []*hardware.Host `json:"hosts"`
+		// Unknown carries MACs booty has seen but that are not registered.
+		// Retiring GET /booty.json removes the only other surface for them
+		// (plan R7), so this is what makes the supersession real.
+		Unknown []string `json:"unknown"`
 	}
 }
 
@@ -110,7 +114,93 @@ func registerHosts(api huma.API, deps APIDeps) {
 			}
 			out.Body.Hosts = append(out.Body.Hosts, h)
 		}
+		// []string{} and NOT nil: a nil slice marshals to JSON null, and the
+		// UI flatMaps array fields — a null survives as an element and reaches
+		// the views. Same footgun as authoringKindsForFamily in render.go.
+		out.Body.Unknown = hardware.ListUnknownHosts()
+		if out.Body.Unknown == nil {
+			out.Body.Unknown = []string{}
+		}
 		return out, nil
+	})
+
+	// POST /hosts — D5's replacement for the retired POST /register.
+	//
+	// The DTO is TIGHTENED, not the verbatim hardware.Host: it carries exactly
+	// the fields README documented for /register (mac, hostname, os, and the
+	// optional Talos schematic). IgnitionFile is deliberately ABSENT — it was
+	// the only request-controlled input to the template.ParseFiles read in
+	// ignition.go, and omitting it removes that writer at the source rather
+	// than only containing it (pkg/http/datapath.go does the containment half).
+	// huma defaults to additionalProperties:false, so a client that sends
+	// ignitionFile anyway gets a 422 naming the field.
+	//
+	// Upsert, not create-only: PUT /hosts/{mac} is still an unimplemented stub,
+	// so a 409-on-exists would leave no way to change a host's OS at all.
+	huma.Register(api, huma.Operation{
+		OperationID: "create-host", Method: http.MethodPost, Path: "/hosts",
+		Summary: "Create or update a host", Tags: []string{"hosts"},
+		DefaultStatus: http.StatusCreated,
+	}, func(ctx context.Context, in *struct {
+		Body struct {
+			MAC       string `json:"mac" required:"true" doc:"Host MAC address"`
+			Hostname  string `json:"hostname,omitzero"`
+			OS        string `json:"os,omitzero" doc:"flatcar, coreos, talos, ..."`
+			Schematic string `json:"schematic,omitzero" doc:"Talos Image Factory schematic ID"`
+		}
+	}) (*struct {
+		Status int
+		Body   *hardware.Host
+	}, error) {
+		existing, err := hardware.GetMacAddress(in.Body.MAC)
+		switch {
+		case err == nil:
+			// update path
+		case errors.Is(err, hardware.ErrNotFound):
+			existing = nil
+		default:
+			// GetMacAddress also returns a NormalizeMAC validation error for a
+			// malformed MAC (hardware/mac.go:264-267). That is a CLIENT error,
+			// and every sibling handler reports it as 422 (api_hosts.go:135,
+			// 197, 236) — mapping it to 500 would be a lie about whose fault
+			// it is.
+			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		}
+
+		// READ-MODIFY-WRITE, and this is load-bearing. db.UpsertHost
+		// (pkg/db/host.go:75-94) overwrites hostname, ip, booted,
+		// ignition_file, os, do_install and schematic from the incoming row on
+		// conflict. Building a fresh Host from the DTO would therefore BLANK
+		// the host's IP, last-boot marker, one-shot-install flag, and any
+		// operator-set ignition_file on every update. Start from the stored
+		// row and overlay only what the request actually supplied.
+		merged := hardware.Host{MAC: in.Body.MAC}
+		status := http.StatusCreated
+		if existing != nil {
+			merged = *existing
+			status = http.StatusOK
+		}
+		if in.Body.Hostname != "" {
+			merged.Hostname = in.Body.Hostname
+		}
+		if in.Body.OS != "" {
+			merged.OS = in.Body.OS
+		}
+		if in.Body.Schematic != "" {
+			merged.Schematic = in.Body.Schematic
+		}
+
+		if err := hardware.WriteMacAddress(in.Body.MAC, merged); err != nil {
+			return nil, huma.Error500InternalServerError("write host", err)
+		}
+		created, err := hardware.GetMacAddress(in.Body.MAC)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get created host", err)
+		}
+		return &struct {
+			Status int
+			Body   *hardware.Host
+		}{Status: status, Body: created}, nil
 	})
 
 	// POST /hosts/{mac}/approve — approve + assign to the host's own OS.
@@ -248,21 +338,39 @@ func registerHosts(api huma.API, deps APIDeps) {
 		return &struct{ Body *hardware.Host }{Body: updated}, nil
 	})
 
-	// PUT/DELETE /hosts/{mac} — wired-but-403 until auth.
+	// PUT /hosts/{mac} — wired-but-not-implemented.
 	huma.Register(api, huma.Operation{
 		OperationID: "put-host", Method: http.MethodPut, Path: "/hosts/{mac}",
-		Summary: "Edit a host (disabled until auth)", Tags: []string{"hosts"},
+		Summary: "Edit a host (not implemented)", Tags: []string{"hosts"},
 	}, func(ctx context.Context, _ *struct {
 		MAC string `path:"mac"`
 	}) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
+
+	// DELETE /hosts/{mac} — implemented, unlike the other destructive stubs.
+	// D5 retires POST /unregister on the grounds that this supersedes it, so
+	// leaving it a 403 would delete the capability outright (plan R7). It is
+	// also the cheapest of the eight by far: hardware.RemoveMacAddress
+	// (hardware/mac.go:316) over db.DeleteHost (db/host.go:96) already exists
+	// and is already tested, with no cascade semantics to design.
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-host", Method: http.MethodDelete, Path: "/hosts/{mac}",
-		Summary: "Delete a host (disabled until auth)", Tags: []string{"hosts"},
-	}, func(ctx context.Context, _ *struct {
+		Summary: "Delete a host", Tags: []string{"hosts"},
+		DefaultStatus: http.StatusNoContent,
+	}, func(ctx context.Context, in *struct {
 		MAC string `path:"mac"`
 	}) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		// RemoveMacAddress is idempotent, so check existence first to give a
+		// truthful 404 rather than a 204 for a MAC that was never there.
+		if _, err := hardware.GetMacAddress(in.MAC); errors.Is(err, hardware.ErrNotFound) {
+			return nil, huma.Error404NotFound("host not found")
+		} else if err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		}
+		if err := hardware.RemoveMacAddress(in.MAC); err != nil {
+			return nil, huma.Error500InternalServerError("delete host", err)
+		}
+		return nil, nil
 	})
 }

@@ -49,4 +49,5 @@ func registerOperations(api huma.API, deps APIDeps) {
 	registerRoles(grp, deps)      // P4 T9
 	registerSchematics(grp, deps) // P5 T8
 	registerClusters(grp, deps)   // P6 T13
+	registerInfo(grp)             // D5: replaces the retired base-mux GET /info
 }

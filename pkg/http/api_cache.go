@@ -224,8 +224,8 @@ func registerCache(api huma.API, deps APIDeps) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-cache", Method: http.MethodDelete, Path: "/cache/{id}",
-		Summary: "Delete a cached version (disabled until auth)", Tags: []string{"cache"},
+		Summary: "Delete a cached version (not implemented)", Tags: []string{"cache"},
 	}, func(ctx context.Context, _ *struct{ ID string `path:"id"` }) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 }

@@ -193,11 +193,11 @@ func registerTargets(api huma.API, deps APIDeps) {
 	// DELETE /targets/{id} — wired-but-403 until authentication lands (P10).
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-target", Method: http.MethodDelete, Path: "/targets/{id}",
-		Summary: "Delete a cache target (disabled until auth)", Tags: []string{"targets"},
+		Summary: "Delete a cache target (not implemented)", Tags: []string{"targets"},
 	}, func(ctx context.Context, _ *struct {
 		ID int64 `path:"id"`
 	}) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 
 	// POST /targets/{id}/versions — manual version pin; OPEN.
@@ -275,11 +275,11 @@ func registerTargets(api huma.API, deps APIDeps) {
 	// DELETE /targets/{id}/versions/{v} — wired-but-403 until auth (P10).
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-target-version", Method: http.MethodDelete, Path: "/targets/{id}/versions/{v}",
-		Summary: "Delete a target version (disabled until auth)", Tags: []string{"targets"},
+		Summary: "Delete a target version (not implemented)", Tags: []string{"targets"},
 	}, func(ctx context.Context, _ *struct {
 		ID int64  `path:"id"`
 		V  string `path:"v"`
 	}) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 }

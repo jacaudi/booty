@@ -342,3 +342,31 @@ func TestGetData_IncludesRegisteredAndUnknown(t *testing.T) {
 		t.Errorf("unknown host missing from GetData; got %+v", bd.UnknownHosts)
 	}
 }
+
+func TestListUnknownHostsReturnsSeenButUnregisteredMACs(t *testing.T) {
+	setupTempDB(t)
+
+	// A miss on GetMacAddress is what records an unknown host (mac.go:282).
+	if _, err := GetMacAddress("aa:bb:cc:00:00:aa"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("precondition: want ErrNotFound, got %v", err)
+	}
+	if _, err := GetMacAddress("aa:bb:cc:00:00:bb"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("precondition: want ErrNotFound, got %v", err)
+	}
+
+	got := ListUnknownHosts()
+	if len(got) != 2 {
+		t.Fatalf("ListUnknownHosts() = %v, want 2 entries", got)
+	}
+	if got[0] > got[1] {
+		t.Fatalf("ListUnknownHosts() must be sorted for a stable API response, got %v", got)
+	}
+
+	// Registering one clears it (mac.go clearUnknown).
+	if err := WriteMacAddress("aa:bb:cc:00:00:aa", Host{MAC: "aa:bb:cc:00:00:aa", OS: "flatcar"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ListUnknownHosts(); len(got) != 1 {
+		t.Fatalf("after registering one, ListUnknownHosts() = %v, want 1 entry", got)
+	}
+}

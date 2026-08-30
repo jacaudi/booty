@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -226,6 +227,17 @@ func fromDBHost(d db.Host) *Host {
 		ConfigID: d.ConfigID,
 		ClusterID: d.ClusterID, MachineType: d.MachineType, NodeConfigID: d.NodeConfigID,
 	}
+}
+
+// ListUnknownHosts returns the sorted MACs of machines booty has seen but that
+// are not registered. They live only in the in-memory unknownHosts map
+// (populated by trackUnknown on a GetMacAddress miss) and are never persisted,
+// so ListHosts cannot surface them — which is why GET /api/v1/hosts needs this
+// to genuinely supersede the retired GET /booty.json.
+func ListUnknownHosts() []string {
+	unknownMu.Lock()
+	defer unknownMu.Unlock()
+	return slices.Sorted(maps.Keys(unknownHosts))
 }
 
 // GetData returns the JSON-marshaled BootyData (registered + unknown hosts).
