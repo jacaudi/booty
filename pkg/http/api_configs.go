@@ -40,8 +40,9 @@ func toConfigListDTO(r db.ConfigListRow) ConfigDTO {
 	return ConfigDTO{ID: r.ID, Name: r.Name, Kind: r.Kind, ActiveRevision: r.ActiveRevision, RevisionCount: r.RevisionCount, UpdatedAt: r.UpdatedAt, DerivedSchematicID: r.DerivedSchematicID}
 }
 
-// registerConfigs mounts /configs on the /api/v1 group. Mutations are OPEN in
-// the trust window; DELETE is wired-but-403 until auth (P10).
+// registerConfigs mounts /configs on the /api/v1 group. Every operation here
+// requires a credential like the rest of /api/v1; DELETE is wired but not
+// implemented yet, and returns 403 regardless of credential.
 func registerConfigs(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "list-configs", Method: http.MethodGet, Path: "/configs",

@@ -45,9 +45,9 @@ func TestApproveHostSetsAssigned(t *testing.T) {
 }
 
 // TestDeleteHostRemovesTheHost REPLACES the pre-existing TestDeleteHostIs403
-// (api_hosts_test.go:47). delete-host stops being a stub in this task, per R7:
-// D5 retires POST /unregister on the grounds that this endpoint supersedes it,
-// and that has to be true or host deletion disappears entirely.
+// (api_hosts_test.go:47). delete-host stops being a stub in this task:
+// POST /unregister was retired on the grounds that this endpoint supersedes
+// it, and that has to be true or host deletion disappears entirely.
 func TestDeleteHostRemovesTheHost(t *testing.T) {
 	api := newTestAPI(t, hostsTestSetup(t))
 	const mac = "aa:bb:cc:dd:ee:04"
@@ -558,7 +558,7 @@ func TestCreateHostRejectsAnIgnitionFileField(t *testing.T) {
 	}
 }
 
-// TestListHostsIncludesUnknownHosts is the R7 guarantee that GET /api/v1/hosts
+// TestListHostsIncludesUnknownHosts guards the guarantee that GET /api/v1/hosts
 // genuinely supersedes the retired GET /booty.json. Unknown hosts live only in
 // an in-memory map (hardware/mac.go:50, trackUnknown at :509) and nothing ever
 // writes them to the DB, so ListHosts alone cannot surface them.

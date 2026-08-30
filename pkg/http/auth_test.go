@@ -246,7 +246,7 @@ func TestOpenAdapterLevelRoutesStayOpen(t *testing.T) {
 		{"/api/v1/openapi-3.0.json", 200},
 		{"/api/v1/openapi-3.0.yaml", 200},
 		{"/schemas/Host.json", 200},
-		{"/api/v1/openapi", 404}, // the bare path does NOT exist (plan section 0 R2)
+		{"/api/v1/openapi", 404}, // the bare path (no extension) does NOT exist
 		{"/api/v1/os", 401},
 	} {
 		rr := httptest.NewRecorder()

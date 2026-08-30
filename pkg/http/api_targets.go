@@ -48,8 +48,9 @@ func toTargetDTO(t db.Target) TargetDTO {
 }
 
 // registerTargets mounts the /targets and /targets/{id}/versions endpoints on
-// the /api/v1 group. POST and PATCH are open during the trust window (P10 adds
-// auth). DELETE endpoints are wired but return 403 until authentication lands.
+// the /api/v1 group. Every operation here requires a credential like the rest
+// of /api/v1. DELETE endpoints are wired but not implemented yet, and return
+// 403 regardless of credential.
 func registerTargets(api huma.API, deps APIDeps) {
 	trigger := deps.Trigger
 	if trigger == nil {
@@ -190,7 +191,7 @@ func registerTargets(api huma.API, deps APIDeps) {
 		return &struct{ Body TargetDTO }{Body: toTargetDTO(*updated)}, nil
 	})
 
-	// DELETE /targets/{id} — wired-but-403 until authentication lands (P10).
+	// DELETE /targets/{id} — wired but not implemented yet: 403 regardless of credential.
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-target", Method: http.MethodDelete, Path: "/targets/{id}",
 		Summary: "Delete a cache target (not implemented)", Tags: []string{"targets"},
@@ -272,7 +273,7 @@ func registerTargets(api huma.API, deps APIDeps) {
 		return nil, nil
 	})
 
-	// DELETE /targets/{id}/versions/{v} — wired-but-403 until auth (P10).
+	// DELETE /targets/{id}/versions/{v} — wired but not implemented yet: 403 regardless of credential.
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-target-version", Method: http.MethodDelete, Path: "/targets/{id}/versions/{v}",
 		Summary: "Delete a target version (not implemented)", Tags: []string{"targets"},

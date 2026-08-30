@@ -125,7 +125,9 @@ func registerHosts(api huma.API, deps APIDeps) {
 		return out, nil
 	})
 
-	// POST /hosts — D5's replacement for the retired POST /register.
+	// POST /hosts — the replacement for the retired POST /register (the old
+	// endpoint is superseded by this one, under the authenticated /api/v1
+	// surface).
 	//
 	// The DTO is TIGHTENED, not the verbatim hardware.Host: it carries exactly
 	// the fields README documented for /register (mac, hostname, os, and the

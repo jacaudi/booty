@@ -382,7 +382,9 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 	}
 }
 
-// TestRetiredRoutesAreGone asserts D5.
+// TestRetiredRoutesAreGone asserts that the five legacy base-mux routes
+// (POST /register, POST /unregister, GET /hosts?mac=, GET /booty.json, and
+// GET /info) are gone -- superseded by the gated /api/v1 surface.
 //
 // It builds its mux through baseMux, the SAME registration path StartHTTP
 // uses (http.go:27) — not a hand-rolled stand-in. A hand-built mux with only

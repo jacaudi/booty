@@ -56,8 +56,9 @@ type listCacheOutput struct {
 	}
 }
 
-// registerCache mounts /cache on the /api/v1 group. GET/pin/unpin/scan are open
-// during the trust window; DELETE is wired but returns 403 until authentication lands (P10).
+// registerCache mounts /cache on the /api/v1 group. Every operation here
+// requires a credential like the rest of /api/v1; DELETE is wired but not
+// implemented yet, and returns 403 regardless of credential.
 func registerCache(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "list-cache", Method: http.MethodGet, Path: "/cache",

@@ -273,6 +273,6 @@ func TestDeleteClusterForbidden(t *testing.T) {
 		"name": "del", "endpoint": "https://e:6443", "talosVersion": "v1.13.5", "k8sVersion": "v1.34.0",
 	})
 	if resp := api.Delete("/api/v1/clusters/1"); resp.Code != 403 {
-		t.Fatalf("delete = %d, want 403 (until P10)", resp.Code)
+		t.Fatalf("delete = %d, want 403 (wired but not implemented yet)", resp.Code)
 	}
 }
