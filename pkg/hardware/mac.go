@@ -268,6 +268,35 @@ func GetData() ([]byte, error) {
 	return out, nil
 }
 
+// HasHost reports whether mac is a registered host, WITHOUT the trackUnknown
+// side effect GetMacAddress has on a miss. Callers that only need an
+// existence check (delete-host, approve-host, bind-host, menu-host) must use
+// this instead of GetMacAddress: reusing GetMacAddress purely as a gate meant
+// a single mistyped/absent MAC permanently added itself to
+// ListUnknownHosts, surfacing as a phantom machine in the operator's Hosts
+// view. A malformed/empty MAC still returns a validation error, matching
+// GetMacAddress and NormalizeMAC.
+func HasHost(mac string) (bool, error) {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return false, err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		_, gerr := st.GetHost(key)
+		if errors.Is(gerr, sql.ErrNoRows) {
+			return sql.ErrNoRows
+		}
+		return gerr
+	})
+	if !had || errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("hardware: has host %s: %w", key, err)
+	}
+	return true, nil
+}
+
 // GetMacAddress returns a fresh *Host for the canonicalized mac, or ErrNotFound.
 // On a miss the canonical MAC is tracked in the pending list. Unlike the old
 // map-backed store, the returned *Host does NOT alias shared state, so callers

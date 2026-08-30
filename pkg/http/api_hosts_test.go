@@ -66,6 +66,22 @@ func TestDeleteHostRemovesTheHost(t *testing.T) {
 	}
 }
 
+// TestDeleteHostAbsentMACDoesNotPolluteUnknownHosts is the regression guard
+// for the phantom-machine bug: DELETE on an absent MAC used to call
+// hardware.GetMacAddress purely as an existence check, whose miss path calls
+// trackUnknown -- so one mistyped MAC would permanently appear in the
+// operator's Hosts view (unknown array) until a later exact-match lookup or
+// a restart. A 404 must never have that side effect.
+func TestDeleteHostAbsentMACDoesNotPolluteUnknownHosts(t *testing.T) {
+	api := newTestAPI(t, hostsTestSetup(t))
+	if resp := api.Delete("/api/v1/hosts/de:ad:be:ef:00:01"); resp.Code != 404 {
+		t.Fatalf("DELETE absent host = %d, want 404", resp.Code)
+	}
+	if got := hardware.ListUnknownHosts(); len(got) != 0 {
+		t.Fatalf("a 404 from delete-host must not add the MAC to ListUnknownHosts, got %v", got)
+	}
+}
+
 func TestMenuHostSetsMenuMode(t *testing.T) {
 	deps := hostsTestSetup(t)
 	api := newTestAPI(t, deps)
@@ -427,6 +443,42 @@ func TestCreateHostRejectsAnInvalidMAC(t *testing.T) {
 	}
 }
 
+// TestCreateHostRejectsAnUnknownOS closes the input-validation gap on the
+// field create-target already validates two files over (api_targets.go:106-
+// 108, via ostype.Lookup): before this fix, {"os":"talso"} (a typo of
+// "talos") returned 201 and was written straight into assigned_os, so the
+// operator only discovered the typo at netboot time. os is OPTIONAL, so an
+// empty/omitted value must still be accepted -- the control case below
+// proves that and also that a genuinely valid OS still creates the host.
+func TestCreateHostRejectsAnUnknownOS(t *testing.T) {
+	api := newTestAPI(t, hostsTestSetup(t))
+
+	resp := api.Post("/api/v1/hosts", map[string]any{"mac": "aa:bb:cc:dd:ee:10", "os": "talso"})
+	if resp.Code != 422 {
+		t.Fatalf("POST with an unknown os = %d, want 422 (body %s)", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(resp.Body.String()), "os") {
+		t.Fatalf("the 422 must name the os field: %s", resp.Body.String())
+	}
+
+	// Control: a genuinely valid OS must still create the host.
+	control := api.Post("/api/v1/hosts", map[string]any{"mac": "aa:bb:cc:dd:ee:11", "os": "talos"})
+	if control.Code != 201 {
+		t.Fatalf("POST with a valid os = %d, want 201 (body %s)", control.Code, control.Body.String())
+	}
+}
+
+// TestCreateHostAllowsAnOmittedOS proves os stays optional: the validation
+// added for the unknown-OS case above must not reject an absent one.
+func TestCreateHostAllowsAnOmittedOS(t *testing.T) {
+	api := newTestAPI(t, hostsTestSetup(t))
+
+	resp := api.Post("/api/v1/hosts", map[string]any{"mac": "aa:bb:cc:dd:ee:12"})
+	if resp.Code != 201 {
+		t.Fatalf("POST with no os = %d, want 201 (body %s)", resp.Code, resp.Body.String())
+	}
+}
+
 // TestCreateHostRejectsAnIgnitionFileField is the P2 guarantee: the create DTO
 // deliberately has no ignitionFile, so a client cannot reintroduce the
 // path-traversal writer that POST /register was.
@@ -486,5 +538,28 @@ func TestListHostsIncludesUnknownHosts(t *testing.T) {
 	}
 	if !strings.Contains(body, `"unknown"`) {
 		t.Errorf("the listing must carry an \"unknown\" field: %s", body)
+	}
+}
+
+// TestListHostsUnknownIsEmptyArrayNotNull guards the nil-slice footgun
+// api_hosts.go's list-hosts handler works around: hardware.ListUnknownHosts
+// calls slices.Sorted over a possibly-empty map, which returns a nil slice,
+// and a nil slice marshals to JSON null -- which the UI's flatMap would then
+// surface AS AN ELEMENT of the unknown list, not as an empty list. With no
+// unknown hosts recorded, the listing must carry "unknown":[], never
+// "unknown":null.
+func TestListHostsUnknownIsEmptyArrayNotNull(t *testing.T) {
+	api := newTestAPI(t, hostsTestSetup(t))
+
+	resp := api.Get("/api/v1/hosts")
+	if resp.Code != 200 {
+		t.Fatalf("list = %d, want 200", resp.Code)
+	}
+	body := resp.Body.String()
+	if !strings.Contains(body, `"unknown":[]`) {
+		t.Errorf(`listing with no unknown hosts must carry "unknown":[], got: %s`, body)
+	}
+	if strings.Contains(body, `"unknown":null`) {
+		t.Errorf(`listing must never carry "unknown":null: %s`, body)
 	}
 }

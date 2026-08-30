@@ -10,14 +10,16 @@ import (
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/ostype"
 )
 
 type listHostsOutput struct {
 	Body struct {
 		Hosts []*hardware.Host `json:"hosts"`
 		// Unknown carries MACs booty has seen but that are not registered.
-		// Retiring GET /booty.json removes the only other surface for them
-		// (plan R7), so this is what makes the supersession real.
+		// Retiring GET /booty.json removes the only other surface for
+		// them, so this field is what makes that supersession real rather
+		// than a loss of visibility into unregistered hosts.
 		Unknown []string `json:"unknown"`
 	}
 }
@@ -152,6 +154,17 @@ func registerHosts(api huma.API, deps APIDeps) {
 		Status int
 		Body   *hardware.Host
 	}, error) {
+		// OS is optional, but when supplied it must be a real, known OS --
+		// the same validator create-target uses two files over
+		// (api_targets.go:106-108). Unvalidated, a typo (e.g. "talso" for
+		// "talos") was written straight into assigned_os by approve-host and
+		// only discovered at netboot time.
+		if in.Body.OS != "" {
+			if _, ok := ostype.Lookup(in.Body.OS); !ok {
+				return nil, huma.Error422UnprocessableEntity("unknown OS " + in.Body.OS)
+			}
+		}
+
 		existing, err := hardware.GetMacAddress(in.Body.MAC)
 		switch {
 		case err == nil:
@@ -217,12 +230,21 @@ func registerHosts(api huma.API, deps APIDeps) {
 			RoleIDs  *[]int64 `json:"roleIds,omitempty"`
 		}
 	}) (*struct{ Body *hardware.Host }, error) {
-		h, err := hardware.GetMacAddress(in.MAC)
-		if errors.Is(err, hardware.ErrNotFound) {
-			return nil, huma.Error404NotFound("host not found")
-		}
+		// HasHost, not GetMacAddress, so a mistyped/absent MAC does not
+		// permanently pollute ListUnknownHosts via GetMacAddress's miss-side
+		// trackUnknown call. h is then fetched below only once the host is
+		// known to exist, which hits the found path (clearUnknown), not the
+		// miss path.
+		exists, err := hardware.HasHost(in.MAC)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		}
+		if !exists {
+			return nil, huma.Error404NotFound("host not found")
+		}
+		h, err := hardware.GetMacAddress(in.MAC)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get host", err)
 		}
 		hasBinding := in.Body != nil && (in.Body.ConfigID != nil || in.Body.RoleIDs != nil)
 		// Validate a requested binding BEFORE approving/assigning: a validation
@@ -279,12 +301,17 @@ func registerHosts(api huma.API, deps APIDeps) {
 			RoleIDs  *[]int64 `json:"roleIds,omitempty"`
 		}
 	}) (*struct{ Body *hardware.Host }, error) {
-		h, err := hardware.GetMacAddress(in.MAC)
-		if errors.Is(err, hardware.ErrNotFound) {
-			return nil, huma.Error404NotFound("host not found")
-		}
+		// HasHost, not GetMacAddress: see the identical comment on approve-host.
+		exists, err := hardware.HasHost(in.MAC)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		}
+		if !exists {
+			return nil, huma.Error404NotFound("host not found")
+		}
+		h, err := hardware.GetMacAddress(in.MAC)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get host", err)
 		}
 		if in.Body != nil {
 			if err := bindHostConfigRoles(deps.Store, h, in.Body.ConfigID, in.Body.RoleIDs); err != nil {
@@ -320,10 +347,11 @@ func registerHosts(api huma.API, deps APIDeps) {
 	}, func(ctx context.Context, in *struct {
 		MAC string `path:"mac"`
 	}) (*struct{ Body *hardware.Host }, error) {
-		if _, err := hardware.GetMacAddress(in.MAC); errors.Is(err, hardware.ErrNotFound) {
-			return nil, huma.Error404NotFound("host not found")
-		} else if err != nil {
+		// HasHost, not GetMacAddress: see the identical comment on approve-host.
+		if exists, err := hardware.HasHost(in.MAC); err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		} else if !exists {
+			return nil, huma.Error404NotFound("host not found")
 		}
 		if err := hardware.Approve(in.MAC); err != nil {
 			return nil, huma.Error500InternalServerError("approve", err)
@@ -349,9 +377,10 @@ func registerHosts(api huma.API, deps APIDeps) {
 	})
 
 	// DELETE /hosts/{mac} — implemented, unlike the other destructive stubs.
-	// D5 retires POST /unregister on the grounds that this supersedes it, so
-	// leaving it a 403 would delete the capability outright (plan R7). It is
-	// also the cheapest of the eight by far: hardware.RemoveMacAddress
+	// POST /unregister was retired on the grounds that this endpoint
+	// supersedes it, so leaving THIS one a 403 too would delete host
+	// deletion as a capability entirely, not just relocate it. It is also
+	// the cheapest of the eight by far: hardware.RemoveMacAddress
 	// (hardware/mac.go:316) over db.DeleteHost (db/host.go:96) already exists
 	// and is already tested, with no cascade semantics to design.
 	huma.Register(api, huma.Operation{
@@ -363,10 +392,13 @@ func registerHosts(api huma.API, deps APIDeps) {
 	}) (*struct{}, error) {
 		// RemoveMacAddress is idempotent, so check existence first to give a
 		// truthful 404 rather than a 204 for a MAC that was never there.
-		if _, err := hardware.GetMacAddress(in.MAC); errors.Is(err, hardware.ErrNotFound) {
-			return nil, huma.Error404NotFound("host not found")
-		} else if err != nil {
+		// HasHost, not GetMacAddress: see the identical comment on approve-host
+		// -- a mistyped MAC here must not permanently add itself to
+		// ListUnknownHosts.
+		if exists, err := hardware.HasHost(in.MAC); err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		} else if !exists {
+			return nil, huma.Error404NotFound("host not found")
 		}
 		if err := hardware.RemoveMacAddress(in.MAC); err != nil {
 			return nil, huma.Error500InternalServerError("delete host", err)
