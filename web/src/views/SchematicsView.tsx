@@ -122,7 +122,7 @@ export default function SchematicsView() {
       title: 'Actions',
       key: 'actions',
       render: () => (
-        <Tooltip title="available after authentication (P10)">
+        <Tooltip title="this destructive endpoint is not implemented yet">
           <Button size="small" danger disabled>Delete</Button>
         </Tooltip>
       ),

@@ -116,7 +116,7 @@ describe('CacheView', () => {
     expect(header).toHaveAttribute('aria-expanded', 'false')
   })
 
-  it('the detail Delete button is disabled (403 until P10)', async () => {
+  it('the detail Delete button is disabled (not implemented yet)', async () => {
     vi.mocked(api.listCache).mockResolvedValue([entry({ id: 5, version: 'v1.9.0' })])
     render(<CacheView />)
     await waitFor(() => screen.getByText('v1.9.0'))

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { approveHost, bindSchematic, listHosts, login, logout, onUnauthorized, request, revokeHost, setMenuMode } from './client'
+import { approveHost, bindSchematic, listHosts, login, onUnauthorized, request, revokeHost, setMenuMode } from './client'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -124,14 +124,6 @@ describe('auth in the request layer', () => {
   it('login rejects on a bad token', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })))
     await expect(login('wrong')).rejects.toThrow()
-  })
-
-  it('logout POSTs /logout', async () => {
-    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    await logout()
-    expect(fetchMock).toHaveBeenCalledWith('/logout', expect.objectContaining({ method: 'POST' }))
   })
 
   it('reports a 401 exactly once per failed call, so the gate does not thrash', async () => {

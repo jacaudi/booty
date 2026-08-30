@@ -75,7 +75,7 @@ describe('SchematicsView list screen', () => {
     expect(client.bindSchematic).not.toHaveBeenCalled()
   })
 
-  it('renders a disabled Delete button (available after authentication (P10))', async () => {
+  it('renders a disabled Delete button (not implemented yet)', async () => {
     vi.mocked(configs.listConfigs).mockResolvedValue([cfg({ id: 1, name: 'iscsi' })])
     vi.mocked(configs.getConfig).mockResolvedValue(detail({ id: 1 }))
     renderView()

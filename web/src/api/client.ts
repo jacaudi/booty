@@ -31,8 +31,15 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T | 
   return text ? (JSON.parse(text) as T) : undefined
 }
 
-// login and logout live on the base mux, OUTSIDE the /api/v1 prefix, so they
-// bypass request() the same way health.ts bypasses it for /healthz.
+// login lives on the base mux, OUTSIDE the /api/v1 prefix, so it bypasses
+// request() the same way health.ts bypasses it for /healthz.
+//
+// There is no client-side logout() here: POST /logout is a real, tested
+// server endpoint (pkg/http/auth_test.go), useful to scripts, but nothing in
+// the UI currently offers a logout control -- the only prior caller of a
+// client logout() was its own test. See docs/CONFIGURATION.md's
+// Authentication section for the endpoint; a UI logout control is a
+// follow-up, not implemented here.
 export async function login(token: string): Promise<void> {
   const res = await fetch('/login', {
     method: 'POST',
@@ -41,10 +48,6 @@ export async function login(token: string): Promise<void> {
     body: JSON.stringify({ token }),
   })
   if (!res.ok) throw new Error(`login failed: ${res.status}`)
-}
-
-export async function logout(): Promise<void> {
-  await fetch('/logout', { method: 'POST', credentials: 'same-origin' })
 }
 
 export async function listHosts(): Promise<Host[]> {
