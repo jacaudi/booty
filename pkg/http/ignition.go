@@ -104,7 +104,16 @@ func handleIgnitionRequest(store *db.Store) http.HandlerFunc {
 			}
 			templateData.Hostname = host.Hostname
 		}
-		t, err := template.ParseFiles(fmt.Sprintf("%s/%s", viper.GetString(config.DataDir), ignitionFile))
+		ignitionPath, err := resolveWithinDataDir(ignitionFile)
+		if err != nil {
+			// The name is host- or operator-supplied, so a bad value is a
+			// configuration fault, not a server fault -- but the status stays
+			// 500 to match the surrounding handler and to avoid telling an
+			// unauthenticated boot client which names exist.
+			writeError(w, http.StatusInternalServerError, "ignition template unavailable", err)
+			return
+		}
+		t, err := template.ParseFiles(ignitionPath)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "ignition template unavailable", err)
 			return

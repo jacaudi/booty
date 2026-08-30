@@ -3,7 +3,6 @@ package http
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -109,7 +108,11 @@ func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 			}
 		}
 
-		path := fmt.Sprintf("%s/%s", viper.GetString(config.DataDir), viper.GetString(config.TalosConfigFile))
+		path, err := resolveWithinDataDir(viper.GetString(config.TalosConfigFile))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "machineconfig template unavailable", err)
+			return
+		}
 		t, err := template.ParseFiles(path)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "machineconfig template unavailable", err)

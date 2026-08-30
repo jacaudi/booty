@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/j-keck/arping"
 	"github.com/jeefy/booty/pkg/cache"
@@ -48,7 +47,11 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 		}
 
 		// Rung 4: server-default file.
-		path := filepath.Join(viper.GetString(config.DataDir), viper.GetString(config.PreseedFile))
+		path, err := resolveWithinDataDir(viper.GetString(config.PreseedFile))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "preseed template unavailable", err)
+			return
+		}
 		src, err := os.ReadFile(path)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "preseed template unavailable", err)
