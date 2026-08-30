@@ -156,8 +156,9 @@ raw host state.
 The `/api/v1` management surface — hosts, cache, catalog, configs, roles, schematics, clusters — is
 **authenticated by default**. Every operation on it returns `401` without a credential; the boot-facing
 and read-only endpoints (`/ignition.json`, `/machineconfig`, `/preseed`, `/version.*`, `/healthz`,
-`/data/cache/**`, `/data/public/**`, `/ui/**`, `/api/v1/docs`, and the OpenAPI/schema documents) stay
-open, since machines booting for the first time have no way to present one.
+`/data/cache/**`, `/data/public/**`, `/ui/**`, `/`, `/api/v1/docs`, the OpenAPI/schema documents, and
+`/login`/`/logout` themselves) stay open, since machines booting for the first time — and a browser
+fetching the login page — have no credential to present yet.
 
 **Finding the token.** On first run booty generates a 32-byte random token, writes it to
 `<dataDir>/api-token` (mode `0600`), and logs it **exactly once**:

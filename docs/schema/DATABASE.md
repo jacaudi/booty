@@ -30,14 +30,15 @@ all under `--dataDir`. This documents their shape.
 | `DoInstall` | bool | One-shot install flag; flipped to `false` when the host first fetches `booty.ipxe`. |
 | `Schematic` | string | Talos only — per-host Image Factory schematic ID. |
 
-A host record is created/updated via `POST /register` and removed via `POST /unregister` (see
-[API.md](API.md)).
+A host record is created/updated via `POST /api/v1/hosts` (an upsert: `201` on create, `200` on
+update) and removed via `DELETE /api/v1/hosts/{mac}` (see [API.md](API.md)). `POST /register` and
+`POST /unregister` are retired; both are superseded by these `/api/v1` operations.
 
 ### Unknown hosts
 
 MACs that contact booty (via TFTP or `/ignition.json`) without a matching record are tracked
-**in memory only** (never persisted) and surfaced under the `unknownHosts` key of `/booty.json` so
-the UI can prompt for registration. They disappear on restart or once registered.
+**in memory only** (never persisted) and surfaced under the `unknown` array of `GET /api/v1/hosts`
+so the UI can prompt for registration. They disappear on restart or once registered.
 
 ---
 
@@ -144,12 +145,12 @@ P1c; remaining columns keep their defaults):
 | `do_install` | INTEGER | One-shot install flag. |
 | `schematic` | TEXT | Talos per-host schematic ID. |
 | `approved` | INTEGER | **Active (P1c).** `1` = approved to boot; `0` = holding pattern. |
-| `boot_mode` | TEXT | **Active (P1c).** `assigned` = boot the assigned target; `menu` = deferred (holds until P10). |
+| `boot_mode` | TEXT | **Active (P1c).** `assigned` = boot the assigned target; `menu` = serve the interactive boot menu instead. Persists until explicitly changed — `POST /hosts/{mac}/approve` sets it back to `assigned`, `POST /hosts/{mac}/menu` sets it to `menu` again. |
 | `assigned_os`/`assigned_arch`/`assigned_params` | TEXT | **Active (P1c).** Target (OS, arch, params) the host boots when `boot_mode='assigned'`. |
 | `uuid`/`serial` | TEXT | Scanned on every host read; not yet populated by booty (hardware identity, reserved for a future slice). |
 | `first_seen`/`last_seen` | TEXT | Reserved: timestamps (not yet surfaced). |
-| `config_id` | INTEGER (nullable) | **P4.** Explicit per-host config binding — precedence rung 1 (see [CONFIGURATION.md](../CONFIGURATION.md)). `NULL` = no explicit binding. Plain nullable column, not a DB-level foreign key (SQLite's `ALTER TABLE ADD COLUMN` can't portably carry one); referential cleanup lands with P10 — `DELETE /configs` is `403` until then, so no dangling `config_id` can be created. Set via `POST /hosts/{mac}/approve` or `/bind`. |
-| `cluster_id` | INTEGER (nullable) → `clusters(id)` | **P6.** The cluster this host is a member of. `NULL` = not a member; a host is in **at most one** cluster. Plain nullable column (same not-a-DB-FK rationale as `config_id`); referential cleanup lands with P10. Set via `POST /clusters/{id}/members`, cleared via `DELETE /clusters/{id}/members/{mac}`. |
+| `config_id` | INTEGER (nullable) | **P4.** Explicit per-host config binding — precedence rung 1 (see [CONFIGURATION.md](../CONFIGURATION.md)). `NULL` = no explicit binding. Plain nullable column, not a DB-level foreign key (SQLite's `ALTER TABLE ADD COLUMN` can't portably carry one); referential cleanup waits for `DELETE /api/v1/configs/{id}` to be implemented (currently wired but `403` regardless of credential), so no dangling `config_id` can be created today. Set via `POST /hosts/{mac}/approve` or `/bind`. |
+| `cluster_id` | INTEGER (nullable) → `clusters(id)` | **P6.** The cluster this host is a member of. `NULL` = not a member; a host is in **at most one** cluster. Plain nullable column (same not-a-DB-FK rationale as `config_id`); referential cleanup waits the same way, on `DELETE /api/v1/clusters/{id}`. Set via `POST /clusters/{id}/members`, cleared via `DELETE /clusters/{id}/members/{mac}`. |
 | `machine_type` | TEXT (nullable) | **P6.** `controlplane` \| `worker` \| `NULL` (not a member). Written alongside `cluster_id`. |
 | `node_config_id` | INTEGER (nullable) → `cluster_node_configs(id)` | **P6.** The member's currently-active frozen revision. Serving's top rung (see [API.md](API.md#clusters-p6)): a host with `node_config_id` set is served that revision's bytes verbatim, ahead of every P4 resolve rung. |
 
@@ -313,8 +314,10 @@ materialize-and-freeze). Deliberately a **separate, encrypted** store from P4's 
 Superseded frozen revisions are **not pruned** on re-bind — each re-bind
 (`POST /clusters/{id}/members` naming an existing member) appends a new row, and encrypted blobs
 accumulate. This mirrors P4's `config_revisions` (unbounded until `--configRevisionsKeep` prunes);
-deletion-driven pruning for `cluster_node_configs` waits for P10. `DELETE /clusters/{id}/members/{mac}`
-does prune eagerly: it removes every frozen revision the mac holds for that cluster.
+deletion-driven pruning for `cluster_node_configs` waits for `DELETE /clusters/{id}` to be
+implemented (it is wired but currently `403` regardless of credential). `DELETE
+/clusters/{id}/members/{mac}` does prune eagerly, today: it removes every frozen revision the mac
+holds for that cluster.
 
 **`kind` vs family `ConfigKind` (§3.1).** `configs.kind` is the dialect an operator *authors*
 (`butane`, `machineconfig`, `debianconfig`); each OS family separately declares a `ConfigKind` — the

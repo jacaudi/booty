@@ -17,28 +17,31 @@ Served on `--httpPort` (default `8080`).
 | `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. | YAML (`text/yaml`) |
 | `GET` | `/version.txt` | Current cached versions, env-var format. | `FLATCAR_VERSION=…\nCOREOS_VERSION=…\n` |
 | `GET` | `/version.json` | Current cached versions, JSON. | `{"flatcar":"…","coreos":"…"}` |
-| `GET` | `/info` | Aggregated version + build info. | `{"flatcar":{…},"coreos":{…},"booty":{…}}` |
-| `GET` | `/hosts?mac=<MAC>` | Look up one registered host by MAC (required). | Host JSON, or `400`/`404` |
-| `GET` | `/booty.json` | All registered hosts and all in-memory unknown hosts. | `{"hosts":{…},"unknownHosts":{…}}` |
-| `POST` | `/register` | Register/update a MAC → host mapping. Body: a Host JSON object (see [DATABASE.md](DATABASE.md)). | `OK` / `500` |
-| `POST` | `/unregister` | Remove a MAC mapping (idempotent). Body: a Host JSON object (MAC required). | `OK` / `500` |
+| `GET` | `/healthz` | Liveness probe. | `200` |
+| `POST` | `/login` | Exchange the API token for a session cookie. Body `{"token"}`, or the token in `X-Booty-Token` — see the Authentication note under Management API below. | `204` / `401` |
+| `POST` | `/logout` | Clear the session cookie. Requires a **valid session cookie already be presented** — this is what closes a cross-site forced-logout vector (a forged cross-site `POST` carries no cookie of its own under `SameSite=Strict`, so it has nothing to present). A request with no cookie, or an invalid one, gets `401` with no `Set-Cookie` emitted. | `204` / `401` / `405` |
 | `GET` | `/data/<path>` | Static file server over **`<dataDir>/cache/` and `<dataDir>/public/` only** — boot artifacts and operator-published assets. Everything else under `--dataDir` (the database, `config/` templates, `catalog.yaml`), every directory listing, and in-flight `.partial`/`.download` files return `404`. | file / `404` |
 | `GET` | `/ui/<path>` | The embedded web UI. | asset / `404` |
-
-**Register example:**
-
-```bash
-curl -X POST http://localhost:8080/register \
-  -H 'Content-Type: application/json' \
-  -d '{"mac":"aa:bb:cc:dd:ee:ff","hostname":"node1","os":"talos","schematic":"<id>"}'
-```
 
 MACs are canonicalized (lowercase, colon-delimited) on write and on lookup, so any common format is
 accepted.
 
-> **As of P1b:** `/version.txt`, `/version.json`, and `/info` report the **newest cached** Flatcar /
-> CoreOS version (derived from the `cache/` directory), not internal `Current*` state. The response
-> shapes are unchanged — this is a source change only.
+> **As of P1b:** `/version.txt` and `/version.json` report the **newest cached** Flatcar / CoreOS
+> version (derived from the `cache/` directory), not internal `Current*` state. The response shapes
+> are unchanged — this is a source change only.
+
+**Retired routes.** `GET /info`, `GET /hosts?mac=<MAC>`, `GET /booty.json`, `POST /register`, and
+`POST /unregister` are no longer mounted. Each falls through to the catch-all `/` handler like any
+other unrecognized path: `302 → /ui/`, not `404`. Their successors are all under the authenticated
+`/api/v1` surface — see Management API below:
+
+| Retired | Successor |
+|---------|-----------|
+| `GET /info` | `GET /api/v1/info` |
+| `GET /hosts?mac=<MAC>` | `GET /api/v1/hosts` (filter client-side, or see the `unknown` array below) |
+| `GET /booty.json` | `GET /api/v1/hosts` (`hosts` + `unknown` fields) |
+| `POST /register` | `POST /api/v1/hosts` (create/update; see below) |
+| `POST /unregister` | `DELETE /api/v1/hosts/{mac}` |
 
 ---
 
@@ -88,12 +91,20 @@ whose vendor class identifier begins with `PXEClient`.
 The versioned operator API, mounted under `/api/v1` on the same `--httpPort`. It does not affect
 the boot contract above. All endpoints speak JSON.
 
-> **Trust window (design §2.10) — read this first.** Mutating `POST` and `PATCH` endpoints are
-> **OPEN** (no authentication required). Destructive endpoints (`DELETE`, and `PUT /api/v1/hosts/{mac}`)
-> return `403 Forbidden` — this is an
-> **API-shape device** that reserves destructive operations for the auth layer; it is **not** a
-> security control. The entire pre-auth window assumes a **trusted LAN**. Authentication lands in
-> P10 and will gate all mutating operations uniformly at that point.
+> **Authentication — read this first.** Every operation under `/api/v1` requires a credential —
+> `GET`, `POST`, `PATCH`, `PUT`, and `DELETE` alike. There are two forms: an `X-Booty-Token:
+> <token>` header (scripts, `curl`), or the session cookie the web UI obtains once via `POST
+> /login` and then sends automatically. Either is accepted; neither present or valid returns `401`.
+> `--noAuth` disables the gate entirely for trusted-network debugging. See
+> [CONFIGURATION.md](../CONFIGURATION.md#authentication) for the full token lifecycle (generation,
+> `booty token print`/`rotate`, `SIGHUP` reload, `--apiToken`/`BOOTY_API_TOKEN`).
+>
+> Separately, and regardless of credential: seven destructive operations (six `DELETE`s plus `PUT
+> /api/v1/hosts/{mac}`) are wired but **not implemented yet** and always return `403`. This is an
+> **API-shape placeholder**, not an authorization decision — an authenticated caller gets the same
+> `403` an unauthenticated one would have. `DELETE /api/v1/hosts/{mac}` is the one exception: it is
+> implemented (`404` on an absent MAC, `204` on success) and requires a credential like every other
+> operation here.
 
 ### OpenAPI & docs
 
@@ -128,12 +139,12 @@ Cache targets represent an (OS, arch, params) tuple that the reconciler discover
 |--------|------|---------|----------|
 | `GET` | `/api/v1/targets` | List all targets. | `{"targets":[…]}` |
 | `GET` | `/api/v1/targets/{id}` | Get one target. | target JSON / `404` |
-| `POST` | `/api/v1/targets` | Create a target. Async — the new target's `cached` versions are `false` until the reconciler completes its next pass. **OPEN.** | `201` target JSON |
-| `PATCH` | `/api/v1/targets/{id}` | Partial update: `enabled`, `retainN`, `mode`. **OPEN.** | target JSON / `404` |
-| `DELETE` | `/api/v1/targets/{id}` | **403 until auth (P10).** | `403` |
-| `POST` | `/api/v1/targets/{id}/versions` | Pin a manual version on a target. Triggers async cache. **OPEN.** | `201` |
-| `DELETE` | `/api/v1/targets/{id}/versions/{v}` | **403 until auth (P10).** | `403` |
-| `POST` | `/api/v1/targets/{id}/promote-dvd` | **Debian only.** Promote an already-**enabled netinst** target to `dvd` mode. Body: `{"dvdCount"?}` (`minimum:0`; `<=0` coerces to `1`). Records the promote intent and enqueues an async reconcile — never downloads inline; the reconciler stages the DVD tree and flips `sourceMode` to `dvd` on success. `422` if `os != "debian"` or `arch != "amd64"` (DVD images are amd64-only); `409` if `sourceMode != "netinst"` (already `dvd`, or a promote is already in progress); `404` if the target doesn't exist. Does **not** apply to a seeded-disabled `dvd`-mode target (already `sourceMode: dvd`) — enable that one via `catalog.yaml` instead, see [CONFIGURATION.md](../CONFIGURATION.md). **OPEN.** | `200` / `404` / `409` / `422` |
+| `POST` | `/api/v1/targets` | Create a target. Async — the new target's `cached` versions are `false` until the reconciler completes its next pass. | `201` target JSON |
+| `PATCH` | `/api/v1/targets/{id}` | Partial update: `enabled`, `retainN`, `mode`. | target JSON / `404` |
+| `DELETE` | `/api/v1/targets/{id}` | **Wired but not implemented yet: `403` regardless of credential.** | `403` |
+| `POST` | `/api/v1/targets/{id}/versions` | Pin a manual version on a target. Triggers async cache. | `201` |
+| `DELETE` | `/api/v1/targets/{id}/versions/{v}` | **Wired but not implemented yet: `403` regardless of credential.** | `403` |
+| `POST` | `/api/v1/targets/{id}/promote-dvd` | **Debian only.** Promote an already-**enabled netinst** target to `dvd` mode. Body: `{"dvdCount"?}` (`minimum:0`; `<=0` coerces to `1`). Records the promote intent and enqueues an async reconcile — never downloads inline; the reconciler stages the DVD tree and flips `sourceMode` to `dvd` on success. `422` if `os != "debian"` or `arch != "amd64"` (DVD images are amd64-only); `409` if `sourceMode != "netinst"` (already `dvd`, or a promote is already in progress); `404` if the target doesn't exist. Does **not** apply to a seeded-disabled `dvd`-mode target (already `sourceMode: dvd`) — enable that one via `catalog.yaml` instead, see [CONFIGURATION.md](../CONFIGURATION.md). | `200` / `404` / `409` / `422` |
 
 **`TargetDTO`:**
 
@@ -224,13 +235,13 @@ the config's active pointer. See [DATABASE.md](DATABASE.md) for the table shapes
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/api/v1/configs` | List configs (name, kind, active revision number, revision count). | `{"configs":[…]}` |
-| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`schematic`\|`taloscluster`\|`debianconfig`). Renderable kinds validate by rendering `source` against stub vars — a bad config surfaces the fatal report in the `422` body. `schematic` and `taloscluster` validate differently — see "Schematic configs" below and [Clusters](#clusters-p6). The first revision is recorded and made active. **OPEN.** | `201` config JSON |
+| `POST` | `/api/v1/configs` | Create a config. Body: `{"name","kind","source"}` (`kind`: `butane`\|`machineconfig`\|`schematic`\|`taloscluster`\|`debianconfig`). Renderable kinds validate by rendering `source` against stub vars — a bad config surfaces the fatal report in the `422` body. `schematic` and `taloscluster` validate differently — see "Schematic configs" below and [Clusters](#clusters-p6). The first revision is recorded and made active. | `201` config JSON |
 | `GET` | `/api/v1/configs/{id}` | Get a config's identity plus its active revision's decoded source. | config JSON `+source` / `404` |
-| `PUT` | `/api/v1/configs/{id}` | Append a new immutable revision from `{"source"}` and make it active. Same per-kind validation as create. On success, also prunes older revisions per `--configRevisionsKeep` (the active revision is always kept — see [CONFIGURATION.md](../CONFIGURATION.md)). **OPEN.** | config JSON / `404` |
-| `POST` | `/api/v1/configs/{id}/preview` | Render the config's **active revision**. Body: `{"mac"?}`. **Subsumes `/validate`** — omit `mac` to validate against stub vars only (report-only: a bad Butane config returns its fatal report in the `200` body, never a `5xx`); pass `mac` to render against a real host's vars (the same vars the boot path would use). **`schematic`- and `taloscluster`-kind configs return `422`** (`"<kind> configs are not renderable"`) — see below. **OPEN.** | `{"rendered","contentType","report"}` |
+| `PUT` | `/api/v1/configs/{id}` | Append a new immutable revision from `{"source"}` and make it active. Same per-kind validation as create. On success, also prunes older revisions per `--configRevisionsKeep` (the active revision is always kept — see [CONFIGURATION.md](../CONFIGURATION.md)). | config JSON / `404` |
+| `POST` | `/api/v1/configs/{id}/preview` | Render the config's **active revision**. Body: `{"mac"?}`. **Subsumes `/validate`** — omit `mac` to validate against stub vars only (report-only: a bad Butane config returns its fatal report in the `200` body, never a `5xx`); pass `mac` to render against a real host's vars (the same vars the boot path would use). **`schematic`- and `taloscluster`-kind configs return `422`** (`"<kind> configs are not renderable"`) — see below. | `{"rendered","contentType","report"}` |
 | `GET` | `/api/v1/configs/{id}/revisions` | List a config's revisions, newest first, each flagged `active`. | `{"revisions":[…]}` |
-| `POST` | `/api/v1/configs/{id}/rollback` | Move the active pointer to an existing revision (`{"revision"}`, validated to belong to this config). A pointer move — no content is copied, no new revision is created; for a schematic config this re-points at that revision's already-stored ID, no Factory rebuild. **OPEN.** | config JSON / `422` |
-| `DELETE` | `/api/v1/configs/{id}` | **403 until auth (P10).** Covers schematic-kind configs too — none can be deleted out from under a host binding. | `403` |
+| `POST` | `/api/v1/configs/{id}/rollback` | Move the active pointer to an existing revision (`{"revision"}`, validated to belong to this config). A pointer move — no content is copied, no new revision is created; for a schematic config this re-points at that revision's already-stored ID, no Factory rebuild. | config JSON / `422` |
+| `DELETE` | `/api/v1/configs/{id}` | **Wired but not implemented yet: `403` regardless of credential.** Covers schematic-kind configs too — none can be deleted out from under a host binding. | `403` |
 
 **`ConfigDTO`:**
 
@@ -294,9 +305,9 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/api/v1/roles` | List roles with bound-host count. | `{"roles":[…]}` |
-| `POST` | `/api/v1/roles` | Create a role. Body: `{"name","defaultConfigId"?}`. **OPEN.** | `201` role JSON |
-| `PUT` | `/api/v1/roles/{id}` | Update `name` and/or `defaultConfigId`; omitted fields are left unchanged. There is no way to *clear* a set `defaultConfigId` in P4. **OPEN.** | role JSON / `404` |
-| `DELETE` | `/api/v1/roles/{id}` | **403 until auth (P10).** | `403` |
+| `POST` | `/api/v1/roles` | Create a role. Body: `{"name","defaultConfigId"?}`. | `201` role JSON |
+| `PUT` | `/api/v1/roles/{id}` | Update `name` and/or `defaultConfigId`; omitted fields are left unchanged. There is no way to *clear* a set `defaultConfigId` in P4. | role JSON / `404` |
+| `DELETE` | `/api/v1/roles/{id}` | **Wired but not implemented yet: `403` regardless of credential.** | `403` |
 
 **`RoleDTO`:**
 
@@ -311,14 +322,15 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
-| `GET` | `/api/v1/hosts` | List known hosts. Optional `?approved=true\|false` filter. | `{"hosts":[…]}` |
-| `POST` | `/api/v1/hosts/{mac}/approve` | Approve a host. If the host has a non-empty `os` field, also sets `boot_mode='assigned'` and `assigned_os=os` (plus `schematic` param for Talos), making the host immediately boot-ready once its target's versions are cached. **P4:** the body is now optional and extended to `{"configId"?, "roleIds"?[]}` — an empty/omitted body is byte-identical to pre-P4 approve; a present `configId`/`roleIds` is validated and bound in the same call (see the family-match rule below). **OPEN.** | host JSON / `404` / `422` |
-| `POST` | `/api/v1/hosts/{mac}/bind` | **P4.** Rebind `{"configId"?, "roleIds"?[]}` on an already-approved host without changing its approval state. Same validation as `approve`'s binding. **OPEN.** | host JSON / `404` / `422` |
-| `POST` | `/api/v1/hosts/{mac}/schematic` | **P5.** Bind a Talos schematic to a host. Body: `{"configId"?, "schematic"?}` — **exactly one** of the two, `422` otherwise. See "Schematic binding" below. **OPEN.** | host JSON / `404` / `422` |
-| `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). **OPEN.** | `204` |
-| `POST` | `/api/v1/hosts/{mac}/menu` | Approve (if needed) and put the host into interactive boot-menu mode (`boot_mode='menu'`). Does **not** route through `SetAssignment`; `approved_os` is unchanged. **OPEN.** `404` if MAC is unknown. | host JSON / `404` |
-| `PUT` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
-| `DELETE` | `/api/v1/hosts/{mac}` | **403 until auth (P10).** | `403` |
+| `GET` | `/api/v1/hosts` | List known hosts, plus an `unknown` array of MACs booty has seen (TFTP or `/ignition.json`) but that are not registered — see [DATABASE.md](DATABASE.md#unknown-hosts). Optional `?approved=true\|false` filter (applies to `hosts` only). `unknown` is always an array, `[]` when empty, never `null`. | `{"hosts":[…],"unknown":[…]}` |
+| `POST` | `/api/v1/hosts` | Create or update a host (upsert, keyed by `mac`). Body: `{"mac","hostname"?,"os"?,"schematic"?}`. `os`, when present, must be a registered OS (`ostype.Lookup`; same `"unknown OS <os>"` `422` as `POST /api/v1/targets`) — it is optional, so an absent/empty value is accepted. `ignitionFile` is deliberately not an accepted field (huma rejects unknown properties with `422`): it was the only request-controlled input to the Ignition template reader, and omitting it removes that writer at the source. A read-modify-write on update: unsupplied fields (and any operator-set `ignitionFile`) are preserved from the existing row, never blanked. | `201` (create) / `200` (update) host JSON / `422` |
+| `POST` | `/api/v1/hosts/{mac}/approve` | Approve a host. If the host has a non-empty `os` field, also sets `boot_mode='assigned'` and `assigned_os=os` (plus `schematic` param for Talos), making the host immediately boot-ready once its target's versions are cached. **P4:** the body is now optional and extended to `{"configId"?, "roleIds"?[]}` — an empty/omitted body is byte-identical to pre-P4 approve; a present `configId`/`roleIds` is validated and bound in the same call (see the family-match rule below). | host JSON / `404` / `422` |
+| `POST` | `/api/v1/hosts/{mac}/bind` | **P4.** Rebind `{"configId"?, "roleIds"?[]}` on an already-approved host without changing its approval state. Same validation as `approve`'s binding. | host JSON / `404` / `422` |
+| `POST` | `/api/v1/hosts/{mac}/schematic` | **P5.** Bind a Talos schematic to a host. Body: `{"configId"?, "schematic"?}` — **exactly one** of the two, `422` otherwise. See "Schematic binding" below. | host JSON / `404` / `422` |
+| `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). | `204` |
+| `POST` | `/api/v1/hosts/{mac}/menu` | Approve (if needed) and put the host into interactive boot-menu mode (`boot_mode='menu'`). Does **not** route through `SetAssignment`; `approved_os` is unchanged. `404` if MAC is unknown. | host JSON / `404` |
+| `PUT` | `/api/v1/hosts/{mac}` | **Wired but not implemented yet: `403` regardless of credential.** | `403` |
+| `DELETE` | `/api/v1/hosts/{mac}` | Delete a host. `RemoveMacAddress` is idempotent, so existence is checked first to give a truthful `404` for a MAC that was never registered rather than a `204`. | `204` / `404` |
 
 > **Family-match validation (P4).** Both `approve` and `bind` validate a present `configId` against
 > the host's OS family before writing it: the config's `kind` must be one the family accepts —
@@ -358,9 +370,9 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 > The management UI (`web/`, served at `/ui/`) consumes these hosts endpoints:
 > `GET /api/v1/hosts`, `POST /api/v1/hosts/{mac}/approve`,
 > `POST /api/v1/hosts/{mac}/revoke`, `POST /api/v1/hosts/{mac}/menu`,
-> `POST /api/v1/hosts/{mac}/schematic`.
-> `PUT`/`DELETE /api/v1/hosts/{mac}` are wired but return 403 until auth (P10),
-> so the UI exposes no edit/delete actions.
+> `POST /api/v1/hosts/{mac}/schematic`. `PUT /api/v1/hosts/{mac}` is wired but not implemented
+> (`403`), so the UI exposes no edit action. `DELETE /api/v1/hosts/{mac}` is implemented, but the
+> UI does not yet offer a delete affordance for hosts — that is a UI gap, not a `403`.
 
 ### Clusters (P6)
 
@@ -374,14 +386,14 @@ secrets model.
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/api/v1/clusters` | List clusters with derived members. | `{"clusters":[…]}` |
-| `POST` | `/api/v1/clusters` | Create a cluster (greenfield): mints and encrypts a fresh secrets bundle pinned to `talosVersion`'s contract. **Fail-closed** without `--secretsKey` (`422`). **OPEN.** | `201` cluster JSON |
+| `POST` | `/api/v1/clusters` | Create a cluster (greenfield): mints and encrypts a fresh secrets bundle pinned to `talosVersion`'s contract. **Fail-closed** without `--secretsKey` (`422`). | `201` cluster JSON |
 | `GET` | `/api/v1/clusters/{id}` | Get a cluster (with derived members). | cluster JSON / `404` |
-| `PUT` | `/api/v1/clusters/{id}` | Update a cluster's pinned inputs (`endpoint`, `talosVersion`, `k8sVersion`, `specConfigId`). Does **not** regenerate any member's frozen config — see "Re-bind lifecycle" below. **OPEN.** | cluster JSON / `404` / `422` |
-| `POST` | `/api/v1/clusters/import` | Adopt an existing cluster from an uploaded `controlplane.yaml`: reconstructs the secrets bundle, endpoint, and pinned versions, and freezes the uploaded bytes verbatim for the named control-plane host. Requires a **controlplane.yaml** — a worker config is rejected (`422`; it lacks the CA keys to reconstruct the secrets bundle). **Fail-closed** without `--secretsKey` (`422`). **OPEN.** | `201` cluster JSON |
-| `POST` | `/api/v1/clusters/{id}/members` | Add a host to a cluster, or **re-bind** an existing member (see "Re-bind lifecycle" below). Generates, freezes, and pre-caches the member's machineconfig and binds the host. **Fail-closed** without `--secretsKey` (`422`). **OPEN.** | cluster JSON / `404` / `422` |
-| `DELETE` | `/api/v1/clusters/{id}/members/{mac}` | Remove a host from a cluster: clears its membership columns (reverting to pre-P6 precedence) and prunes its frozen revisions. Stops provisioning only — does **not** touch etcd/Kubernetes (see [CONFIGURATION.md](../CONFIGURATION.md#talos-cluster-authoring-p6)). **OPEN.** | cluster JSON / `404` / `422` |
-| `POST` | `/api/v1/clusters/{id}/export` | Export the cluster's secrets bundle as `secrets.yaml`. **Fail-closed** without `--secretsKey` (`422`). **OPEN.** | `{"secretsYaml":"…"}` |
-| `DELETE` | `/api/v1/clusters/{id}` | **403 until auth (P10).** | `403` |
+| `PUT` | `/api/v1/clusters/{id}` | Update a cluster's pinned inputs (`endpoint`, `talosVersion`, `k8sVersion`, `specConfigId`). Does **not** regenerate any member's frozen config — see "Re-bind lifecycle" below. | cluster JSON / `404` / `422` |
+| `POST` | `/api/v1/clusters/import` | Adopt an existing cluster from an uploaded `controlplane.yaml`: reconstructs the secrets bundle, endpoint, and pinned versions, and freezes the uploaded bytes verbatim for the named control-plane host. Requires a **controlplane.yaml** — a worker config is rejected (`422`; it lacks the CA keys to reconstruct the secrets bundle). **Fail-closed** without `--secretsKey` (`422`). | `201` cluster JSON |
+| `POST` | `/api/v1/clusters/{id}/members` | Add a host to a cluster, or **re-bind** an existing member (see "Re-bind lifecycle" below). Generates, freezes, and pre-caches the member's machineconfig and binds the host. **Fail-closed** without `--secretsKey` (`422`). | cluster JSON / `404` / `422` |
+| `DELETE` | `/api/v1/clusters/{id}/members/{mac}` | Remove a host from a cluster: clears its membership columns (reverting to pre-P6 precedence) and prunes its frozen revisions. Stops provisioning only — does **not** touch etcd/Kubernetes (see [CONFIGURATION.md](../CONFIGURATION.md#talos-cluster-authoring-p6)). | cluster JSON / `404` / `422` |
+| `POST` | `/api/v1/clusters/{id}/export` | Export the cluster's secrets bundle as `secrets.yaml`. **Fail-closed** without `--secretsKey` (`422`). | `{"secretsYaml":"…"}` |
+| `DELETE` | `/api/v1/clusters/{id}` | **Wired but not implemented yet: `403` regardless of credential.** | `403` |
 
 **`ClusterDTO`:**
 
@@ -457,11 +469,11 @@ Cache inventory: the set of on-disk boot artifacts tracked in `cache_entries`. A
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/api/v1/cache` | List cache inventory. Optional filters: `os`, `arch`, `state` (`in-cycle`\|`archived`), `pinned` (`true`\|`false`). | `{"entries":[…]}` |
-| `POST` | `/api/v1/cache/{id}/pin` | Pin a cached version (exempt from eviction). **OPEN.** | cache entry JSON / `404` |
-| `POST` | `/api/v1/cache/{id}/unpin` | Unpin a cached version (eligible for eviction again). **OPEN.** | cache entry JSON / `404` |
-| `POST` | `/api/v1/cache/scan` | Reconcile the cache inventory to disk: recomputes sizes, repairs missing `cache_entries` rows, and counts on-disk version dirs with no matching `target_version`. **OPEN.** | `{"scanned":N,"updated":N,"orphans":N}` |
-| `POST` | `/api/v1/cache/{id}/reverify` | Re-run artifact verification for a cached version and re-record `verified`/`verify_err`. Recomputes the verdict from the on-disk final files (SHA256 re-hashed, `.sig` re-fetched and re-checked) — **non-destructive**: never evicts, moves, or deletes bytes regardless of outcome. Ignores `--signaturePolicy off` (an explicit operator ask always verifies). For an OS whose artifact list is fetched from upstream (Fedora CoreOS, and netboot.xyz tools since #76), a transient upstream failure returns **500**; a version superseded upstream returns a clean no-verdict, not an error. If some of the version's declared material is not on disk to examine (deleted, evicted, or mid-re-download) and nothing that **is** on disk failed, the endpoint answers **200** and records **no** verdict — a previously recorded failure and its `verify_err` are left intact, and a standing `verified: true` is withdrawn to `null`. A passing sibling is not enough to affirm a version whose declared material is missing, which is why that case records nothing either. A real mismatch on material that **is** present is different: it is durable knowledge, and it is still recorded as `verified: false`, overwriting `verify_err`, even when a sibling artifact is absent. **OPEN.** | cache entry JSON / `404` / `500` |
-| `DELETE` | `/api/v1/cache/{id}` | **403 until auth (P10).** | `403` |
+| `POST` | `/api/v1/cache/{id}/pin` | Pin a cached version (exempt from eviction). | cache entry JSON / `404` |
+| `POST` | `/api/v1/cache/{id}/unpin` | Unpin a cached version (eligible for eviction again). | cache entry JSON / `404` |
+| `POST` | `/api/v1/cache/scan` | Reconcile the cache inventory to disk: recomputes sizes, repairs missing `cache_entries` rows, and counts on-disk version dirs with no matching `target_version`. | `{"scanned":N,"updated":N,"orphans":N}` |
+| `POST` | `/api/v1/cache/{id}/reverify` | Re-run artifact verification for a cached version and re-record `verified`/`verify_err`. Recomputes the verdict from the on-disk final files (SHA256 re-hashed, `.sig` re-fetched and re-checked) — **non-destructive**: never evicts, moves, or deletes bytes regardless of outcome. Ignores `--signaturePolicy off` (an explicit operator ask always verifies). For an OS whose artifact list is fetched from upstream (Fedora CoreOS, and netboot.xyz tools since #76), a transient upstream failure returns **500**; a version superseded upstream returns a clean no-verdict, not an error. If some of the version's declared material is not on disk to examine (deleted, evicted, or mid-re-download) and nothing that **is** on disk failed, the endpoint answers **200** and records **no** verdict — a previously recorded failure and its `verify_err` are left intact, and a standing `verified: true` is withdrawn to `null`. A passing sibling is not enough to affirm a version whose declared material is missing, which is why that case records nothing either. A real mismatch on material that **is** present is different: it is durable knowledge, and it is still recorded as `verified: false`, overwriting `verify_err`, even when a sibling artifact is absent. | cache entry JSON / `404` / `500` |
+| `DELETE` | `/api/v1/cache/{id}` | **Wired but not implemented yet: `403` regardless of credential.** | `403` |
 
 **Cache entry JSON** (`CacheEntryDTO`):
 
@@ -488,7 +500,7 @@ Cache inventory: the set of on-disk boot artifacts tracked in `cache_entries`. A
 > `GET /api/v1/cache`, `POST /api/v1/cache/{id}/pin`, `POST /api/v1/cache/{id}/unpin`,
 > `POST /api/v1/cache/scan`, `POST /api/v1/cache/{id}/reverify` (the Cache view's per-row
 > Reverify action + the three-state Verified column). `DELETE /api/v1/cache/{id}` is wired
-> but returns 403 until auth (P10).
+> but not implemented yet (`403` regardless of credential).
 
 ### Boot dispatch (P1c)
 
@@ -507,8 +519,8 @@ receives the holding script regardless of the tuple). Malformed, unknown, or unc
 back to holding; arbitrary files are never served through this path. Operator-facing detail lives in
 [BOOT-MENU.md](../BOOT-MENU.md).
 
-> **As of P1c:** `/booty.json` (the UI payload) now **additively** carries host approval and
-> assignment state for each registered host: `approved` (bool), `bootMode` (string),
+> **As of P1c:** the host payload (originally `/booty.json`, now `GET /api/v1/hosts`) carries host
+> approval and assignment state for each registered host: `approved` (bool), `bootMode` (string),
 > `assignedOS`, `assignedArch`, `assignedParams` (strings). Fields are omitted when zero-valued.
 > The response shape for existing fields is unchanged.
 
