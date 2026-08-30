@@ -191,6 +191,83 @@ func TestRotateChangesTokenKeyAndFile(t *testing.T) {
 	}
 }
 
+// TestRotateFixesPreExistingWrongPermissions guards the requirement that
+// surviving finding #4's atomic-write fix does not regress: rotating over an
+// operator-created wide-open file must still end at 0600. writeToken now
+// achieves this by writing a fresh 0600 temp file and renaming it over the
+// target (os.CreateTemp's default mode), rather than os.WriteFile followed by
+// a Chmod -- so this also proves the Chmod removal did not lose the guarantee.
+func TestRotateFixesPreExistingWrongPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), TokenFileName)
+	if err := os.WriteFile(path, []byte("preexisting"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore(path)
+	if _, err := s.Rotate(); err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("token file mode after Rotate over a 0644 file = %o, want 0600", perm)
+	}
+}
+
+// TestWriteTokenLeavesNoStrayTempFilesOnSuccess guards the atomic-write
+// mechanics: writeToken creates a temp file in the same directory and renames
+// it over the target. A successful Rename must leave nothing else behind.
+func TestWriteTokenLeavesNoStrayTempFilesOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, TokenFileName)
+	s := NewStore(path)
+	if _, err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Rotate(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != TokenFileName {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("dir after Load+Rotate = %v, want only %q (no leftover temp file)", names, TokenFileName)
+	}
+}
+
+// TestWriteTokenCleansUpTempFileOnRenameFailure exercises writeToken's error
+// path directly: forcing the terminal os.Rename to fail (by making the
+// target a pre-existing directory, so renaming a regular file onto it is
+// rejected) must still leave the parent directory free of the temp file --
+// otherwise a repeatedly-failing write would leak a temp file per attempt.
+func TestWriteTokenCleansUpTempFileOnRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, TokenFileName)
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeToken(path, "some-token"); err == nil {
+		t.Fatal("writeToken over a pre-existing directory must fail, not silently succeed")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != TokenFileName || !entries[0].IsDir() {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("dir after a failed writeToken = %v, want only the untouched directory %q (no leftover temp file)", names, TokenFileName)
+	}
+}
+
 func TestReloadPicksUpAnExternallyRewrittenFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), TokenFileName)
 	s := NewStore(path)

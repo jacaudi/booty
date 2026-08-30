@@ -20,14 +20,15 @@ import (
 // baseMux builds the plain (non-Huma) HTTP surface: the boot-config
 // endpoints (ignition/machineconfig/preseed), the open /login and /logout
 // endpoints, the UI, and the /data/ artifact server. It is the single source
-// of the base-mux routes, so a test asserting a route is (or, per D5, is NOT)
-// mounted exercises the exact same registration StartHTTP uses instead of a
-// hand-built stand-in mux that could silently drift from it.
+// of the base-mux routes, so a test asserting a route is mounted (or
+// deliberately retired and no longer mounted) exercises the exact same
+// registration StartHTTP uses instead of a hand-built stand-in mux that
+// could silently drift from it.
 //
-// /hosts, /register, /unregister, /booty.json and /info were retired here by
-// Task 6 (D5): they are superseded by the gated /api/v1 surface (POST
-// /api/v1/hosts, DELETE /api/v1/hosts/{mac}, GET /api/v1/hosts's unknown
-// field, GET /api/v1/info).
+// /hosts, /register, /unregister, /booty.json and /info were retired here:
+// they are superseded by the gated /api/v1 surface (POST /api/v1/hosts,
+// DELETE /api/v1/hosts/{mac}, GET /api/v1/hosts's unknown field, GET
+// /api/v1/info).
 func baseMux(deps APIDeps) *http.ServeMux {
 	myHandler := http.NewServeMux()
 
@@ -40,7 +41,7 @@ func baseMux(deps APIDeps) *http.ServeMux {
 	myHandler.HandleFunc("/version.json", handleVersionRequest)
 	myHandler.HandleFunc("/healthz", handleHealthz)
 	myHandler.HandleFunc("/login", handleLogin(deps.Auth))
-	myHandler.HandleFunc("/logout", handleLogout)
+	myHandler.HandleFunc("/logout", handleLogout(deps.Auth))
 	myHandler.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(viper.GetString(config.DataDir))))
 	uiFS, err := web.DistFS()
 	if err != nil {

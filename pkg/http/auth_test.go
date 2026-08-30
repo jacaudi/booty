@@ -185,10 +185,21 @@ func TestEveryRegisteredOperationIsGated(t *testing.T) {
 			continue
 		}
 		// huma.PathItem has NO Operations() accessor -- it exposes one field
-		// per method (openapi.go:1037-1090). Enumerate the five booty uses.
+		// per method (openapi.go:1037-1090: Get, Put, Post, Delete, Options,
+		// Head, Patch, Trace). Enumerate all eight, not just the five booty
+		// currently uses, so a future operation registered on a method this
+		// walk does not know about cannot silently escape the gate the same
+		// way a hand-written path list could.
+		//
+		// This walk still has one blind spot it cannot close by construction:
+		// Group.DocumentOperation (huma's group.go) skips any operation with
+		// Hidden set before adding it to the OpenAPI document, so a hidden
+		// operation would never appear in api.OpenAPI().Paths for this loop
+		// to find in the first place. booty registers nothing Hidden today.
 		for method, op := range map[string]*huma.Operation{
 			http.MethodGet: item.Get, http.MethodPut: item.Put, http.MethodPost: item.Post,
 			http.MethodDelete: item.Delete, http.MethodPatch: item.Patch,
+			http.MethodOptions: item.Options, http.MethodHead: item.Head, http.MethodTrace: item.Trace,
 		} {
 			if op == nil {
 				continue
@@ -358,11 +369,15 @@ func TestLoginWithNoTokenStoreRefuses(t *testing.T) {
 }
 
 func TestLogoutClearsTheCookie(t *testing.T) {
+	store := tokenStore(t, "logout-token")
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: liveCookie(t, store, time.Now().Add(time.Hour))})
+
 	rr := httptest.NewRecorder()
-	handleLogout(rr, httptest.NewRequest(http.MethodPost, "/logout", nil))
+	handleLogout(store)(rr, req)
 
 	if rr.Code != 204 {
-		t.Fatalf("POST /logout = %d, want 204", rr.Code)
+		t.Fatalf("POST /logout with a valid session = %d, want 204 (body %s)", rr.Code, rr.Body.String())
 	}
 	var cleared bool
 	for _, c := range rr.Result().Cookies() {
@@ -383,10 +398,70 @@ func TestLogoutClearsTheCookie(t *testing.T) {
 // this -- the handler itself must reject the method, exactly as handleLogin
 // already does.
 func TestLogoutRejectsAGetRequest(t *testing.T) {
+	store := tokenStore(t, "logout-token")
 	rr := httptest.NewRecorder()
-	handleLogout(rr, httptest.NewRequest(http.MethodGet, "/logout", nil))
+	handleLogout(store)(rr, httptest.NewRequest(http.MethodGet, "/logout", nil))
 	if rr.Code != 405 {
 		t.Fatalf("GET /logout = %d, want 405", rr.Code)
+	}
+}
+
+// TestLogoutRequiresAValidSessionCookie is the regression guard for finding
+// #10: the method guard alone still let a cross-site AUTO-SUBMITTING
+// <form method="POST" action="http://booty/logout"> clear a visitor's
+// session -- SameSite governs whether the browser SENDS a cookie on the
+// request, not whether the server honors a Set-Cookie on the response, and a
+// simple cross-origin POST needs no CORS preflight. Requiring the caller
+// already hold a valid session cookie closes this completely: under
+// SameSite=Strict a cross-site request can never carry the victim's cookie
+// to attach to the forged one, so there is nothing for the attacker to
+// present. No cookie, and a forged/expired one, must both be refused with NO
+// clearing Set-Cookie emitted -- emitting one at all would still let an
+// attacker use logout as an oracle.
+func TestLogoutRequiresAValidSessionCookie(t *testing.T) {
+	store := tokenStore(t, "logout-token")
+
+	cases := []struct {
+		name   string
+		mutate func(r *http.Request)
+	}{
+		{name: "no cookie", mutate: nil},
+		{name: "forged cookie", mutate: func(r *http.Request) {
+			r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: auth.IssueCookieValue([32]byte{}, time.Now().Add(time.Hour))})
+		}},
+		{name: "expired cookie", mutate: func(r *http.Request) {
+			r.AddCookie(&http.Cookie{Name: auth.CookieName, Value: liveCookie(t, store, time.Now().Add(-time.Hour))})
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+			if tc.mutate != nil {
+				tc.mutate(req)
+			}
+			rr := httptest.NewRecorder()
+			handleLogout(store)(rr, req)
+			if rr.Code != 401 {
+				t.Fatalf("POST /logout (%s) = %d, want 401", tc.name, rr.Code)
+			}
+			for _, c := range rr.Result().Cookies() {
+				if c.Name == auth.CookieName {
+					t.Fatalf("POST /logout (%s) must not emit a clearing Set-Cookie, got %+v", tc.name, c)
+				}
+			}
+		})
+	}
+}
+
+// TestLogoutRejectsUnderANilStore mirrors handleLogin's nil-store guard
+// (TestLoginWithNoTokenStoreRefuses): under --noAuth, deps.Auth is nil, and a
+// session cookie can never be verified against nothing, so logout must
+// refuse rather than dereference.
+func TestLogoutRejectsUnderANilStore(t *testing.T) {
+	rr := httptest.NewRecorder()
+	handleLogout(nil)(rr, httptest.NewRequest(http.MethodPost, "/logout", nil))
+	if rr.Code != 401 {
+		t.Fatalf("logout against a nil store = %d, want 401 (and no panic)", rr.Code)
 	}
 }
 
@@ -468,8 +543,14 @@ func TestLoginAndLogoutAreMountedOnTheBaseMux(t *testing.T) {
 		t.Fatalf("POST /login through baseMux = %d, want 204 (the catch-all must not win)", rr.Code)
 	}
 
+	// logout now requires the session cookie login just issued (finding #10):
+	// carry it forward exactly as a browser would.
+	logoutReq := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	for _, c := range rr.Result().Cookies() {
+		logoutReq.AddCookie(c)
+	}
 	rr2 := httptest.NewRecorder()
-	mux.ServeHTTP(rr2, httptest.NewRequest(http.MethodPost, "/logout", nil))
+	mux.ServeHTTP(rr2, logoutReq)
 	if rr2.Code != 204 {
 		t.Fatalf("POST /logout through baseMux = %d, want 204", rr2.Code)
 	}

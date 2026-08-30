@@ -158,8 +158,8 @@ operator-created) makes it a no-op.
 cache target for the built ID — windowed by `--talosRetainMinors`, the same as the default catalog's
 Talos target — and triggers an async reconcile pass, so boot assets pre-fetch instead of waiting for a host
 to request them. Schematic-derived targets are **not** pruned when their owning config is deleted:
-`DELETE /api/v1/configs/{id}` is `403` until auth (P10) anyway, so this is over-caching only, not a
-dangling reference.
+`DELETE /api/v1/configs/{id}` is wired but not implemented yet (`403` regardless of credential), so
+this is over-caching only, not a dangling reference.
 
 ## Talos cluster authoring (P6)
 
@@ -198,8 +198,9 @@ cluster version); a manual pin can also be created directly via
 `POST /api/v1/targets/{id}/versions` (see [schema/API.md](schema/API.md#targets)).
 
 Auto-created manual pins are **not** removed when a member is removed (the `DELETE` version endpoint
-is `403` until authentication lands, P10), so they accumulate — the same pre-P10 posture as
-superseded frozen node-config revisions; both are cleaned up when deletes are enabled.
+is wired but not implemented yet, `403` regardless of credential), so they accumulate — the same
+posture as superseded frozen node-config revisions; both are cleaned up once that delete is
+implemented.
 
 ### Deferred orchestration (D5)
 
@@ -459,9 +460,9 @@ that closes this hole** — recommend `strict` for production.
 admitted under `warn`: the reconciler's idempotency skip guard leaves settled (`cached=1`, files
 present) versions in place and does not re-verify them. The recourse is
 `POST /api/v1/cache/{id}/reverify`, which re-checks the version under the current policy and re-records
-`verified=0` so the operator can **see** it; removal is then a manual decision (`DELETE` is `403`
-until auth lands in P10). One qualification: if the version's declared material is no longer on
-disk — deleted, evicted, or mid-re-download — reverify records **nothing**, because there is nothing
+`verified=0` so the operator can **see** it; removal is then a manual decision (`DELETE` is wired but
+not implemented yet, `403` regardless of credential). One qualification: if the version's declared
+material is no longer on disk — deleted, evicted, or mid-re-download — reverify records **nothing**, because there is nothing
 to judge. A previously recorded `verified=0` and its reason survive untouched (that is the point:
 they are the only record of *why* the bytes were refused), and a standing `verified=1` is withdrawn
 to "no verdict" rather than left asserting something about bytes that are gone.
@@ -544,6 +545,13 @@ credential to present yet.
   generates a 32-byte random token, writes it to `<dataDir>/api-token` at mode `0600`, and logs it
   **exactly once** — `docker logs booty | grep token` (or the equivalent `journalctl` query) is how an
   operator recovers it after that first line scrolls away.
+- **A blank `<dataDir>/api-token` refuses startup** (`auth: token file ... is blank: auth: token is
+  empty`) rather than installing an empty token, which would make the cookie-signing key publicly
+  derivable. booty itself never leaves the file in this state — writes go to a temp file that is
+  renamed over it only once complete — but an empty file can still land there some other way (a
+  manual `truncate`/`> api-token`, a botched restore, a volume-mount artifact). If you hit it: delete
+  `<dataDir>/api-token` and restart — booty generates and logs a new token exactly once, as on first
+  run.
 - **`booty token print --dataDir=<dir>`** re-reads the token from disk at any time.
 - **`booty token rotate --yes --dataDir=<dir>`** generates and persists a new token. `--yes` is
   mandatory: rotating invalidates every outstanding UI session cookie, because the cookie's signing key

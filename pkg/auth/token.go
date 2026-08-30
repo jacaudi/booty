@@ -12,7 +12,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 )
@@ -105,7 +107,7 @@ func (s *Store) Load() (generated bool, err error) {
 		s.cur.Store(cred)
 		return false, nil
 	}
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, fs.ErrNotExist) {
 		return false, fmt.Errorf("auth: read token %s: %w", s.path, err)
 	}
 	tok, err := generateToken()
@@ -210,15 +212,45 @@ func generateToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// writeToken creates the file with 0600 from the outset. os.WriteFile applies
-// perm only on creation, so an existing file keeps its mode; Chmod afterwards
-// makes rotation over a pre-existing wrong-moded file correct too.
-func writeToken(path, tok string) error {
-	if err := os.WriteFile(path, []byte(tok), 0o600); err != nil {
+// writeToken writes tok to path atomically: a temp file in the SAME
+// directory (so the terminal rename is same-filesystem and therefore atomic)
+// is written, fsync'd, and closed, then renamed over path. os.WriteFile's
+// truncate-then-write is not atomic -- a short write (e.g. ENOSPC) leaves a
+// truncated, non-blank token on disk that Load would accept on the next
+// start, installing a credential nobody knows. os.CreateTemp's default mode
+// is already 0600, so unlike the old os.WriteFile+Chmod pair there is no
+// window where a fresh write is briefly wider than 0600, and no separate
+// Chmod is needed: Rename replaces path's directory entry (and its mode)
+// outright.
+func writeToken(path, tok string) (err error) {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return fmt.Errorf("auth: write token %s: %w", path, err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("auth: chmod token %s: %w", path, err)
+	tmpPath := tmp.Name()
+	defer func() {
+		// A successful Rename below leaves nothing at tmpPath, so this is a
+		// no-op on the success path; on any error path it discards the
+		// partial temp file rather than leaking it.
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, werr := tmp.WriteString(tok); werr != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("auth: write token %s: %w", path, werr)
+	}
+	if serr := tmp.Sync(); serr != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("auth: write token %s: %w", path, serr)
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		return fmt.Errorf("auth: write token %s: %w", path, cerr)
+	}
+	if rerr := os.Rename(tmpPath, path); rerr != nil {
+		return fmt.Errorf("auth: write token %s: %w", path, rerr)
 	}
 	return nil
 }

@@ -340,13 +340,18 @@ func run(cmd *cobra.Command, argv []string) error {
 		// startup, never open the API (12-Factor III -- a misconfigured
 		// service should not start).
 		if err := tokenStore.SetExplicit(viper.GetString(config.ApiToken)); err != nil {
-			return fmt.Errorf("auth: --apiToken/BOOTY_API_TOKEN: %w", err)
+			// err already carries auth's own "auth: " prefix (it is always
+			// auth.ErrEmptyToken here); do not add a second one.
+			return fmt.Errorf("--apiToken/BOOTY_API_TOKEN: %w", err)
 		}
 		slog.Info("API token loaded from an explicit override", "token", tokenStore.Token())
 	default:
 		generated, err := tokenStore.Load()
 		if err != nil {
-			return fmt.Errorf("auth: %w", err)
+			// Load's own errors are already prefixed "auth: " (e.g. "auth:
+			// token file ... is blank: auth: token is empty"); wrapping with
+			// another "auth: " here produced a doubled "auth: auth: " prefix.
+			return err
 		}
 		if generated {
 			// The ONLY place the token is ever printed in full. Secret.String

@@ -11,32 +11,40 @@ import (
 )
 
 // TokenHeader is the credential header external and programmatic clients send.
-// The browser UI uses the session cookie instead (D2).
+// The browser UI uses the session cookie instead.
 const TokenHeader = "X-Booty-Token"
 
 // authMiddleware gates every operation on the /api/v1 group. It accepts EITHER
 // a matching X-Booty-Token header or a valid session cookie, and nothing else.
 //
-// It is installed once on the group rather than per-operation on purpose: a
-// route added to any registrar later inherits the gate automatically instead
-// of silently escaping it, which is the failure mode a per-route list would
-// otherwise require a maintainer to remember to guard against.
+// It is installed once on the group (via grp.UseMiddleware in
+// registerOperations, pkg/http/api.go) rather than per-operation, so a new
+// registrar does not need its own copy of this check -- it only needs to be
+// called from registerOperations AFTER UseMiddleware runs, which is a
+// positional requirement, not an automatic one: huma.Register snapshots the
+// group's middleware chain at each call's own registration time (see the
+// comment on grp.UseMiddleware in api.go). What actually catches a registrar
+// that escapes the gate -- whether by being called too early, or not being
+// called from registerOperations at all -- is
+// TestEveryRegisteredOperationIsGated (auth_test.go), which walks every
+// operation in the built OpenAPI document rather than trusting placement.
 //
 // disabled is the --noAuth escape hatch: a pass-through, logged loudly at
 // startup by the caller.
 func authMiddleware(api huma.API, store *auth.Store, disabled bool) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		// A nil store means no Auth was wired. Only tests construct APIDeps
-		// that way today. Task 4 adds that refusal to StartHTTP (a nil store
-		// without --noAuth fails startup); until then this is a test-only
+		// that way: StartHTTP (pkg/http/http.go) refuses to start with a nil
+		// store unless --noAuth is set, so this pass-through is a test-only
 		// affordance, not a production guarantee.
 		if disabled || store == nil || authorized(store, ctx) {
 			next(ctx)
 			return
 		}
-		// huma renders this as application/problem+json, so the JSON
-		// content-type requirement of design section 9 is satisfied here
-		// without a hand-written body.
+		// huma renders this as application/problem+json, which is what
+		// every other error response on the /api/v1 surface already sends,
+		// so no hand-written body is needed to keep this response consistent
+		// with the rest of the API.
 		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "missing or invalid credential")
 	}
 }
@@ -110,8 +118,10 @@ func handleLogin(store *auth.Store) http.HandlerFunc {
 			SameSite: http.SameSiteStrictMode,
 			// Secure only when the BROWSER's connection is TLS. booty is
 			// usually plain HTTP on a LAN, where a Secure cookie would never
-			// be sent at all -- the cleartext consequence is documented for
-			// operators (design section 2). But the standard hardening path is
+			// be sent at all -- the cleartext consequence (the cookie and the
+			// X-Booty-Token header both travel the LAN in plaintext without
+			// TLS) is documented for operators in docs/CONFIGURATION.md's
+			// Authentication section. But the standard hardening path is
 			// a TLS-terminating proxy forwarding plain HTTP to booty, so
 			// r.TLS alone would wrongly issue a non-Secure cookie for an HTTPS
 			// session. Honour X-Forwarded-Proto too.
@@ -139,24 +149,55 @@ func requestIsTLS(r *http.Request) bool {
 // handleLogout clears the session cookie. There is no server-side state to
 // revoke: the cookie is self-verifying, so logout is purely client-side.
 //
-// The method check matters once Task 4 mounts this on the base mux: SameSite
-// governs whether cookies are SENT on a request, not whether a Set-Cookie on
-// the RESPONSE is honored, so without this guard a cross-site
-// <img src="http://booty/logout"> would clear a visitor's session cookie.
-func handleLogout(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
+// The method check alone is not enough once this is mounted on the base mux:
+// SameSite governs whether cookies are SENT on a request, not whether a
+// Set-Cookie on the RESPONSE is honored, so a plain method guard still lets a
+// cross-site AUTO-SUBMITTING <form method="POST" action="http://booty/logout">
+// clear a visitor's session -- that is a simple cross-origin POST, which
+// needs no CORS preflight. Requiring the caller already hold a VALID session
+// cookie closes this completely: under SameSite=Strict a cross-site request
+// can never carry the victim's cookie for the forged form to ride along
+// with, so there is no credential for an attacker to present.
+func handleLogout(store *auth.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
+			return
+		}
+		if store == nil || !hasValidSessionCookie(store, r) {
+			writeJSONError(w, http.StatusUnauthorized, "missing or invalid session")
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     auth.CookieName,
+			Value:    "",
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+			MaxAge:   -1,
+		})
+		w.WriteHeader(http.StatusNoContent)
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     auth.CookieName,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   -1,
-	})
-	w.WriteHeader(http.StatusNoContent)
+}
+
+// hasValidSessionCookie reports whether r carries a session cookie that
+// verifies against store's live key. This is the plain net/http counterpart
+// of authorized's cookie branch (authorized also accepts the X-Booty-Token
+// header; logout deliberately does not, since the whole point is proving the
+// caller already holds a session a cross-site request could not have sent).
+func hasValidSessionCookie(store *auth.Store, r *http.Request) bool {
+	if !store.HasToken() {
+		return false
+	}
+	c, err := r.Cookie(auth.CookieName)
+	if err != nil || c == nil {
+		return false
+	}
+	key, ok := store.Key()
+	if !ok {
+		return false
+	}
+	return auth.VerifyCookieValue(key, c.Value, time.Now())
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {

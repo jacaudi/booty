@@ -86,6 +86,8 @@ the web UI obtains once via `POST /login` and then sends automatically. The toke
 `<dataDir>/api-token` (mode `0600`) and is logged exactly once on first run — `docker logs booty | grep
 token`. See the top-level [`README.md`](../README.md#authentication) for the full token lifecycle
 (`booty token print` / `rotate`, `SIGHUP` reload, `--apiToken`/`BOOTY_API_TOKEN`, `--noAuth`).
+If the container crash-loops on `auth: token file ... is blank`, delete `<dataDir>/api-token` and
+restart the container — booty mints and logs a fresh token exactly once, as on first run.
 
 **Cleartext caveat — read this before assuming the token protects you on the wire.** This Compose
 stack serves plain HTTP by default. With the cookie's `Secure` flag off (which it is, on plain HTTP),
