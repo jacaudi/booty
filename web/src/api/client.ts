@@ -2,8 +2,25 @@ import type { Host } from './types'
 
 const BASE = '/api/v1'
 
+// unauthorizedHandler is set once by LoginGate. request() is the single choke
+// point every view goes through, so a 401 anywhere surfaces the login prompt
+// with no per-call token handling. AboutView is the one view that historically
+// bypassed this with a raw fetch; it was moved onto request() in the same
+// change that gated /info.
+let unauthorizedHandler: (() => void) | undefined
+
+export function onUnauthorized(handler: () => void): void {
+  unauthorizedHandler = handler
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T | undefined> {
-  const res = await fetch(`${BASE}${path}`, init)
+  // same-origin so the httpOnly session cookie rides along; the token itself
+  // is never held in JS, localStorage, or sessionStorage.
+  const res = await fetch(`${BASE}${path}`, { ...init, credentials: 'same-origin' })
+  if (res.status === 401) {
+    unauthorizedHandler?.()
+    throw new Error(`${init?.method ?? 'GET'} ${path} failed: 401`)
+  }
   if (!res.ok) {
     const body = (await res.text()).trim()
     const base = `${init?.method ?? 'GET'} ${path} failed: ${res.status}`
@@ -12,6 +29,25 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T | 
   if (res.status === 204) return undefined
   const text = await res.text()
   return text ? (JSON.parse(text) as T) : undefined
+}
+
+// login lives on the base mux, OUTSIDE the /api/v1 prefix, so it bypasses
+// request() the same way health.ts bypasses it for /healthz.
+//
+// There is no client-side logout() here: POST /logout is a real, tested
+// server endpoint (pkg/http/auth_test.go), useful to scripts, but nothing in
+// the UI currently offers a logout control -- the only prior caller of a
+// client logout() was its own test. See docs/CONFIGURATION.md's
+// Authentication section for the endpoint; a UI logout control is a
+// follow-up, not implemented here.
+export async function login(token: string): Promise<void> {
+  const res = await fetch('/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  })
+  if (!res.ok) throw new Error(`login failed: ${res.status}`)
 }
 
 export async function listHosts(): Promise<Host[]> {

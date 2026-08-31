@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -228,6 +229,17 @@ func fromDBHost(d db.Host) *Host {
 	}
 }
 
+// ListUnknownHosts returns the sorted MACs of machines booty has seen but that
+// are not registered. They live only in the in-memory unknownHosts map
+// (populated by trackUnknown on a GetMacAddress miss) and are never persisted,
+// so ListHosts cannot surface them — which is why GET /api/v1/hosts needs this
+// to genuinely supersede the retired GET /booty.json.
+func ListUnknownHosts() []string {
+	unknownMu.Lock()
+	defer unknownMu.Unlock()
+	return slices.Sorted(maps.Keys(unknownHosts))
+}
+
 // GetData returns the JSON-marshaled BootyData (registered + unknown hosts).
 func GetData() ([]byte, error) {
 	hosts := map[string]*Host{}
@@ -254,6 +266,35 @@ func GetData() ([]byte, error) {
 		return nil, fmt.Errorf("hardware: marshal: %w", err)
 	}
 	return out, nil
+}
+
+// HasHost reports whether mac is a registered host, WITHOUT the trackUnknown
+// side effect GetMacAddress has on a miss. Callers that only need an
+// existence check (delete-host, approve-host, bind-host, menu-host) must use
+// this instead of GetMacAddress: reusing GetMacAddress purely as a gate meant
+// a single mistyped/absent MAC permanently added itself to
+// ListUnknownHosts, surfacing as a phantom machine in the operator's Hosts
+// view. A malformed/empty MAC still returns a validation error, matching
+// GetMacAddress and NormalizeMAC.
+func HasHost(mac string) (bool, error) {
+	key, err := NormalizeMAC(mac)
+	if err != nil {
+		return false, err
+	}
+	had, err := withRLockedStore(func(st *db.Store) error {
+		_, gerr := st.GetHost(key)
+		if errors.Is(gerr, sql.ErrNoRows) {
+			return sql.ErrNoRows
+		}
+		return gerr
+	})
+	if !had || errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("hardware: has host %s: %w", key, err)
+	}
+	return true, nil
 }
 
 // GetMacAddress returns a fresh *Host for the canonicalized mac, or ErrNotFound.

@@ -56,8 +56,9 @@ type listCacheOutput struct {
 	}
 }
 
-// registerCache mounts /cache on the /api/v1 group. GET/pin/unpin/scan are open
-// during the trust window; DELETE is wired but returns 403 until authentication lands (P10).
+// registerCache mounts /cache on the /api/v1 group. Every operation here
+// requires a credential like the rest of /api/v1; DELETE is wired but not
+// implemented yet, and returns 403 regardless of credential.
 func registerCache(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "list-cache", Method: http.MethodGet, Path: "/cache",
@@ -224,8 +225,8 @@ func registerCache(api huma.API, deps APIDeps) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-cache", Method: http.MethodDelete, Path: "/cache/{id}",
-		Summary: "Delete a cached version (disabled until auth)", Tags: []string{"cache"},
+		Summary: "Delete a cached version (not implemented)", Tags: []string{"cache"},
 	}, func(ctx context.Context, _ *struct{ ID string `path:"id"` }) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 }

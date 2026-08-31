@@ -127,11 +127,14 @@ options, or booty's `--proxyDHCPEnabled`.
 
    (Or build it yourself — see *Building from source* below.)
 
-3. **Register a machine** so it boots an OS instead of the holding loop:
+3. **Register a machine** so it boots an OS instead of the holding loop. This is a management-plane
+   call, so it needs the API token — see [*Authentication*](#authentication) below for where to find
+   it:
 
    ```bash
-   curl -X POST http://localhost:8080/register \
+   curl -X POST http://localhost:8080/api/v1/hosts \
      -H 'Content-Type: application/json' \
+     -H "X-Booty-Token: $BOOTY_TOKEN" \
      -d '{"mac":"aa:bb:cc:dd:ee:ff","hostname":"node1","os":"talos"}'
    ```
 
@@ -143,10 +146,56 @@ options, or booty's `--proxyDHCPEnabled`.
    -p 4011:4011/udp` and add `--cap-add=NET_BIND_SERVICE`). Network-boot the machine: it caches on
    first run and comes up on the assigned OS.
 
-Visit **`http://localhost:8080/ui/`** for the web UI, or **`/booty.json`** for the raw host +
-version state.
+Visit **`http://localhost:8080/ui/`** for the web UI, or `GET /api/v1/hosts` (credentialed) for the
+raw host state.
 
 ---
+
+## Authentication
+
+The `/api/v1` management surface — hosts, cache, catalog, configs, roles, schematics, clusters — is
+**authenticated by default**. Every operation on it returns `401` without a credential; the boot-facing
+and read-only endpoints (`/ignition.json`, `/machineconfig`, `/preseed`, `/version.*`, `/healthz`,
+`/data/cache/**`, `/data/public/**`, `/ui/**`, `/`, `/api/v1/docs`, the OpenAPI/schema documents, and
+`/login`/`/logout` themselves) stay open, since machines booting for the first time — and a browser
+fetching the login page — have no credential to present yet.
+
+**Finding the token.** On first run booty generates a 32-byte random token, writes it to
+`<dataDir>/api-token` (mode `0600`), and logs it **exactly once**:
+
+```bash
+docker logs booty | grep token
+```
+
+After that first log line the token is never printed again — `booty token print --dataDir=/data`
+reads it back from the file at any time, and `booty token rotate --yes --dataDir=/data` generates and
+persists a new one (`--yes` is required because rotating invalidates every outstanding UI session; the
+cookie's signing key is derived from the token).
+
+**Sending it.** Two credential forms:
+
+- **`X-Booty-Token: <token>`** header — for `curl`, scripts, and other programmatic clients.
+- **A session cookie** — the web UI prompts for the token once, then `POST /login` exchanges it for an
+  httpOnly, `SameSite=Strict` cookie the browser sends automatically thereafter. `POST /logout` clears
+  it.
+
+**Reload without a restart.** `SIGHUP` re-reads `<dataDir>/api-token`, so rotating the file on disk
+(or restarting after `booty token rotate`) doesn't require bouncing the process — *except* when the
+token came from `--apiToken` or `BOOTY_API_TOKEN` (below), in which case a `SIGHUP` logs that there is
+nothing to reload and leaves the explicit token in place.
+
+**Supplying an explicit token.** `--apiToken` or the `BOOTY_API_TOKEN` environment variable installs a
+token you choose instead of the generated one; it is **never written to disk**. Prefer the environment
+variable — a `--apiToken` flag value is visible in `ps` and `docker inspect`, an env var is not. If you
+supply your own token, make it long and random (e.g. `openssl rand -base64 32`): a session cookie is a
+known-plaintext payload plus an HMAC over it with an unstretched key derivation, so a weak
+operator-chosen token plus one leaked cookie is an offline guessing target at roughly two hashes per
+guess. booty's own generated token (32 random bytes) is already sized correctly; the risk is only in a
+hand-picked replacement.
+
+**Disabling auth.** `--noAuth` turns the gate off entirely, for trusted-network debugging only. Under
+`--noAuth`, no `<dataDir>/api-token` file is created — `booty token print` reports no token exists
+until booty is run once *without* `--noAuth`, or until `booty token rotate --yes` creates one directly.
 
 ## Management UI
 
@@ -169,12 +218,15 @@ Building the UI is part of the container build; see
 
 ## Inspecting state
 
-A few read-only endpoints let you see what booty is doing:
+A few endpoints let you see what booty is doing. `/api/v1` calls need the token; `version.json` does
+not:
 
 ```bash
-curl http://localhost:8080/info          # cached OS versions + booty build info
-curl http://localhost:8080/booty.json    # all registered hosts + unknown (unregistered) hosts
-curl 'http://localhost:8080/hosts?mac=aa:bb:cc:dd:ee:ff'   # one host by MAC
+curl -H "X-Booty-Token: $BOOTY_TOKEN" http://localhost:8080/api/v1/info   # versions + build info
+curl -H "X-Booty-Token: $BOOTY_TOKEN" http://localhost:8080/api/v1/hosts  # all known hosts, plus an
+                                                                            # "unknown" array of seen-
+                                                                            # but-unregistered MACs
+curl http://localhost:8080/version.json                                   # OS versions, no auth
 ```
 
 The web UI at `/ui/` presents the same host and version information, and lets you add, edit, and
@@ -183,10 +235,10 @@ remove hosts.
 ## Concepts
 
 - **Registered vs. unknown hosts.** booty only boots machines it knows. A machine is *registered* by
-  mapping its MAC to an OS (via `POST /register` or the web UI). A machine whose MAC isn't
-  registered is an *unknown host*: it's served a reboot-loop config and listed under `unknownHosts`
-  in `/booty.json` until you register it. This prevents a stray machine from booting into something
-  unintended.
+  mapping its MAC to an OS (via `POST /api/v1/hosts` or the web UI). A machine whose MAC isn't
+  registered is an *unknown host*: it's served a reboot-loop config and listed in the `unknown` array
+  of `GET /api/v1/hosts` until you register it. This prevents a stray machine from booting into
+  something unintended.
 - **One-shot install.** A host can carry a `DoInstall` flag. The first time it fetches `booty.ipxe`,
   booty flips the flag off — so you can boot an installer once, then fall through to booting from
   disk on subsequent network boots.

@@ -40,8 +40,9 @@ func toConfigListDTO(r db.ConfigListRow) ConfigDTO {
 	return ConfigDTO{ID: r.ID, Name: r.Name, Kind: r.Kind, ActiveRevision: r.ActiveRevision, RevisionCount: r.RevisionCount, UpdatedAt: r.UpdatedAt, DerivedSchematicID: r.DerivedSchematicID}
 }
 
-// registerConfigs mounts /configs on the /api/v1 group. Mutations are OPEN in
-// the trust window; DELETE is wired-but-403 until auth (P10).
+// registerConfigs mounts /configs on the /api/v1 group. Every operation here
+// requires a credential like the rest of /api/v1; DELETE is wired but not
+// implemented yet, and returns 403 regardless of credential.
 func registerConfigs(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "list-configs", Method: http.MethodGet, Path: "/configs",
@@ -308,11 +309,11 @@ func registerConfigs(api huma.API, deps APIDeps) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-config", Method: http.MethodDelete, Path: "/configs/{id}",
-		Summary: "Delete a config (disabled until auth)", Tags: []string{"configs"},
+		Summary: "Delete a config (not implemented)", Tags: []string{"configs"},
 	}, func(ctx context.Context, _ *struct {
 		ID int64 `path:"id"`
 	}) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 }
 

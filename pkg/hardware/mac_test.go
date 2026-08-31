@@ -131,6 +131,45 @@ func TestGetMacAddress_TracksMissAsUnknownHost(t *testing.T) {
 	}
 }
 
+// TestHasHost_DoesNotTrackMissAsUnknownHost is the regression guard for the
+// delete-host phantom-unknown bug: a plain existence check must not call
+// trackUnknown, or a mistyped MAC (404) permanently pollutes the operator's
+// Hosts view via ListUnknownHosts.
+func TestHasHost_DoesNotTrackMissAsUnknownHost(t *testing.T) {
+	setupTempDB(t)
+	exists, err := HasHost("aa:bb:cc:dd:ee:ff")
+	if err != nil {
+		t.Fatalf("HasHost: %v", err)
+	}
+	if exists {
+		t.Fatal("HasHost: exists = true, want false")
+	}
+	if got := ListUnknownHosts(); len(got) != 0 {
+		t.Fatalf("HasHost must not track a miss as unknown, got %v", got)
+	}
+}
+
+func TestHasHost_ReportsExistingHost(t *testing.T) {
+	setupTempDB(t)
+	if err := WriteMacAddress("aa:bb:cc:dd:ee:01", Host{MAC: "aa:bb:cc:dd:ee:01"}); err != nil {
+		t.Fatal(err)
+	}
+	exists, err := HasHost("aa:bb:cc:dd:ee:01")
+	if err != nil {
+		t.Fatalf("HasHost: %v", err)
+	}
+	if !exists {
+		t.Fatal("HasHost: exists = false, want true")
+	}
+}
+
+func TestHasHost_MalformedMACReturnsError(t *testing.T) {
+	setupTempDB(t)
+	if _, err := HasHost("not-a-mac"); err == nil {
+		t.Fatal("HasHost with malformed MAC: err = nil, want error")
+	}
+}
+
 func TestWriteMacAddress_PersistsAcrossReload(t *testing.T) {
 	dir := setupTempDB(t)
 	if err := WriteMacAddress("aa:bb:cc:dd:ee:ff", Host{MAC: "aa:bb:cc:dd:ee:ff", Hostname: "node-01"}); err != nil {
@@ -340,5 +379,33 @@ func TestGetData_IncludesRegisteredAndUnknown(t *testing.T) {
 	}
 	if _, ok := bd.UnknownHosts["11:22:33:44:55:66"]; !ok {
 		t.Errorf("unknown host missing from GetData; got %+v", bd.UnknownHosts)
+	}
+}
+
+func TestListUnknownHostsReturnsSeenButUnregisteredMACs(t *testing.T) {
+	setupTempDB(t)
+
+	// A miss on GetMacAddress is what records an unknown host (mac.go:282).
+	if _, err := GetMacAddress("aa:bb:cc:00:00:aa"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("precondition: want ErrNotFound, got %v", err)
+	}
+	if _, err := GetMacAddress("aa:bb:cc:00:00:bb"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("precondition: want ErrNotFound, got %v", err)
+	}
+
+	got := ListUnknownHosts()
+	if len(got) != 2 {
+		t.Fatalf("ListUnknownHosts() = %v, want 2 entries", got)
+	}
+	if got[0] > got[1] {
+		t.Fatalf("ListUnknownHosts() must be sorted for a stable API response, got %v", got)
+	}
+
+	// Registering one clears it (mac.go clearUnknown).
+	if err := WriteMacAddress("aa:bb:cc:00:00:aa", Host{MAC: "aa:bb:cc:00:00:aa", OS: "flatcar"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ListUnknownHosts(); len(got) != 1 {
+		t.Fatalf("after registering one, ListUnknownHosts() = %v, want 1 entry", got)
 	}
 }

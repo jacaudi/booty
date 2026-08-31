@@ -73,16 +73,50 @@ This volume survives container restarts and image upgrades. Back it up if
 you want to preserve host approvals, cluster configuration, or avoid
 re-downloading cached images after a rebuild.
 
-## Security posture — trusted LAN only
+## Security posture — token-authenticated, trusted LAN only
 
-booty does not yet have authentication (tracked in #21/#5). The
-resource-deletion endpoints (delete host/cluster/config/target/cache/role)
-return 403 until auth lands, but **every other mutating call is open** —
-host approval, config/cluster/cache edits, cluster-member removal — as are
-`/register` (host self-registration) and `/data/` (served artifacts), to any
-client that can reach the container. **Do not expose booty to the public
-internet or an untrusted network** — run it only on a trusted home/lab LAN,
-and keep it off any network segment you don't control.
+The `/api/v1` management surface — host registration (`POST /api/v1/hosts`), approval, config/cluster/
+cache edits, cluster-member removal, and everything else under `/api/v1` — now requires a credential.
+Seven resource-deletion endpoints (cluster/config/target/cache/role/target-version, plus editing a
+host) still return `403`, unauthenticated or not, because they are wired but not yet implemented;
+`DELETE /api/v1/hosts/{mac}` is implemented and credentialed like the rest.
+
+**Credential.** Two forms: an `X-Booty-Token: <token>` header (scripts, `curl`), or a session cookie
+the web UI obtains once via `POST /login` and then sends automatically. The token itself lives at
+`<dataDir>/api-token` (mode `0600`) and is logged exactly once on first run — `docker logs booty | grep
+token`. See the top-level [`README.md`](../README.md#authentication) for the full token lifecycle
+(`booty token print` / `rotate`, `SIGHUP` reload, `--apiToken`/`BOOTY_API_TOKEN`, `--noAuth`).
+If the container crash-loops on `auth: token file ... is blank`, delete `<dataDir>/api-token` and
+restart the container — booty mints and logs a fresh token exactly once, as on first run.
+
+**Cleartext caveat — read this before assuming the token protects you on the wire.** This Compose
+stack serves plain HTTP by default. With the cookie's `Secure` flag off (which it is, on plain HTTP),
+**both the session cookie and the `X-Booty-Token` header travel the LAN in cleartext.** `HttpOnly` and
+`SameSite=Strict` defend the cookie against XSS and cross-site request forgery — they do **not**
+defend against anyone capturing packets on the same LAN segment. Token auth raises the bar against
+casual and programmatic unauthorized access (a stray client, a misconfigured script, a scan), not
+against an attacker who can already sniff your network traffic. Terminating TLS in front of booty
+(directly, or via a reverse proxy — booty honors `X-Forwarded-Proto`) flips the cookie's `Secure` flag
+on and encrypts both credential forms in transit.
+
+**`/data/` serving surface.** Only `<dataDir>/cache/` (boot artifacts) and `<dataDir>/public/`
+(operator-published assets fetched by booted nodes) are served under `/data/`; everything else under
+`/data`, including `<dataDir>/config/` and the SQLite database, answers `404`.
+
+**Upgrading an existing deploy.** On the first restart with this version, booty mints a new token, logs
+it once, and starts enforcing the gate:
+
+1. `docker logs booty | grep token` — capture the token before it scrolls out of the log.
+2. Open the UI at `/ui/` and paste the token in when prompted; it is exchanged for a session cookie and
+   you won't be asked again on that browser.
+3. Update any external script or automation that called the old open endpoints to send
+   `X-Booty-Token: <token>`.
+4. If anything still calls `POST /register`, migrate it to `POST /api/v1/hosts` (same fields, plus the
+   token header) — the old route is gone.
+
+**Do not expose booty to the public internet or an untrusted network.** Token auth narrows who can act
+without a credential; it does not make booty safe to expose past your LAN boundary. Run it only on a
+trusted home/lab LAN, and keep it off any network segment you don't control.
 
 ## Known follow-up: container healthcheck
 

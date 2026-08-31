@@ -39,6 +39,8 @@ config file.
 | `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | Pass-1 ARM64 iPXE binary name. |
 | `--preseedFile` | `config/preseed.cfg` | Debian preseed template, relative to `--dataDir` — the rung-4 server-default fallback for hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
 | `--configRevisionsKeep` | `10` | Number of newest config revisions to retain per config, applied after every `PUT /configs/{id}`. The currently-active revision is always kept, even if it falls outside the newest-N window. |
+| `--apiToken` | `""` (unset — auto-generated on first run) | Explicit API token (also settable via `BOOTY_API_TOKEN`, see [below](#environment-variables)); overrides `<dataDir>/api-token` and is **never persisted** to disk. Prefer the environment variable over the flag: a flag value is visible in `ps` and `docker inspect`. See [Authentication](#authentication). |
+| `--noAuth` | `false` | Disable **all** `/api/v1` authentication — every management operation becomes reachable with no credential. Trusted-network debugging only; never set this on a network you don't fully control. See [Authentication](#authentication). |
 
 > **Cache targets are catalog-declared, not flag-seeded.** As of the declarative catalog feature,
 > which OS/version cache targets booty maintains is resolved once at startup from `catalog.yaml`
@@ -156,8 +158,8 @@ operator-created) makes it a no-op.
 cache target for the built ID — windowed by `--talosRetainMinors`, the same as the default catalog's
 Talos target — and triggers an async reconcile pass, so boot assets pre-fetch instead of waiting for a host
 to request them. Schematic-derived targets are **not** pruned when their owning config is deleted:
-`DELETE /api/v1/configs/{id}` is `403` until auth (P10) anyway, so this is over-caching only, not a
-dangling reference.
+`DELETE /api/v1/configs/{id}` is wired but not implemented yet (`403` regardless of credential), so
+this is over-caching only, not a dangling reference.
 
 ## Talos cluster authoring (P6)
 
@@ -196,8 +198,9 @@ cluster version); a manual pin can also be created directly via
 `POST /api/v1/targets/{id}/versions` (see [schema/API.md](schema/API.md#targets)).
 
 Auto-created manual pins are **not** removed when a member is removed (the `DELETE` version endpoint
-is `403` until authentication lands, P10), so they accumulate — the same pre-P10 posture as
-superseded frozen node-config revisions; both are cleaned up when deletes are enabled.
+is wired but not implemented yet, `403` regardless of credential), so they accumulate — the same
+posture as superseded frozen node-config revisions; both are cleaned up once that delete is
+implemented.
 
 ### Deferred orchestration (D5)
 
@@ -457,9 +460,9 @@ that closes this hole** — recommend `strict` for production.
 admitted under `warn`: the reconciler's idempotency skip guard leaves settled (`cached=1`, files
 present) versions in place and does not re-verify them. The recourse is
 `POST /api/v1/cache/{id}/reverify`, which re-checks the version under the current policy and re-records
-`verified=0` so the operator can **see** it; removal is then a manual decision (`DELETE` is `403`
-until auth lands in P10). One qualification: if the version's declared material is no longer on
-disk — deleted, evicted, or mid-re-download — reverify records **nothing**, because there is nothing
+`verified=0` so the operator can **see** it; removal is then a manual decision (`DELETE` is wired but
+not implemented yet, `403` regardless of credential). One qualification: if the version's declared
+material is no longer on disk — deleted, evicted, or mid-re-download — reverify records **nothing**, because there is nothing
 to judge. A previously recorded `verified=0` and its reason survive untouched (that is the point:
 they are the only record of *why* the bytes were refused), and a standing `verified=1` is withdrawn
 to "no verdict" rather than left asserting something about bytes that are gone.
@@ -526,6 +529,95 @@ Until that release ships, an expired/rotated key makes Flatcar verification fail
 caching** (a provisioning outage fixable only by a code release), while under `warn` the version
 still **lands** with `verified=0`.
 
+## Authentication
+
+The `/api/v1` management surface (targets, catalog, hosts, cache, configs, roles, schematics,
+clusters) is gated by a single shared API token, **on by default**. Every operation in that group
+returns `401` with no credential; the boot-facing and read-only surface — `/ignition.json`,
+`/machineconfig`, `/preseed`, `/version.txt`, `/version.json`, `/healthz`, `/data/cache/**`,
+`/data/public/**`, `/ui/**`, `/`, `/api/v1/docs`, the OpenAPI/schema documents, and `/login`/`/logout`
+themselves — stays open, since a booting machine or a browser fetching the login page has no
+credential to present yet.
+
+**Token lifecycle.**
+
+- **First run.** With no `--apiToken`/`BOOTY_API_TOKEN` and no existing `<dataDir>/api-token`, booty
+  generates a 32-byte random token, writes it to `<dataDir>/api-token` at mode `0600`, and logs it
+  **exactly once** — `docker logs booty | grep token` (or the equivalent `journalctl` query) is how an
+  operator recovers it after that first line scrolls away.
+- **A blank `<dataDir>/api-token` refuses startup** (`auth: token file ... is blank: auth: token is
+  empty`) rather than installing an empty token, which would make the cookie-signing key publicly
+  derivable. booty itself never leaves the file in this state — writes go to a temp file that is
+  renamed over it only once complete — but an empty file can still land there some other way (a
+  manual `truncate`/`> api-token`, a botched restore, a volume-mount artifact). If you hit it: delete
+  `<dataDir>/api-token` and restart — booty generates and logs a new token exactly once, as on first
+  run.
+- **`booty token print --dataDir=<dir>`** re-reads the token from disk at any time.
+- **`booty token rotate --yes --dataDir=<dir>`** generates and persists a new token. `--yes` is
+  mandatory: rotating invalidates every outstanding UI session cookie, because the cookie's signing key
+  is derived from the token.
+- **`SIGHUP`** re-reads `<dataDir>/api-token`, so a token replaced on disk (or rotated via the command
+  above) takes effect without a process restart — a failed reload (missing/unreadable file) is logged
+  and the previous token stays live, so a bad `SIGHUP` cannot lock an operator out. `SIGHUP` is a no-op,
+  logged, when the token came from `--apiToken`/`BOOTY_API_TOKEN` (below): reloading from the file in
+  that case would silently replace an explicit credential with whatever is on disk.
+- **`--apiToken` / `BOOTY_API_TOKEN`** installs an explicit token instead of the generated one, and it
+  is **never written to `<dataDir>/api-token`**. Prefer the environment variable — a `--apiToken` flag
+  value is visible in `ps` and `docker inspect`, an environment variable is not. An explicit token must
+  be non-blank; `--apiToken " "` refuses startup rather than silently opening the API. If you choose
+  your own token rather than using the generated one, make it long and random (`openssl rand -base64
+  32` or similar) — the session cookie is a known-plaintext value plus an HMAC computed with a single,
+  unstretched key derivation, so a weak hand-picked token combined with one leaked cookie is crackable
+  offline at roughly two hashes per guess. The auto-generated token (32 random bytes) is already sized
+  correctly against this.
+- **`--noAuth`** disables the gate entirely — every `/api/v1` operation becomes reachable with no
+  credential. Intended for trusted-network debugging only. Under `--noAuth`, `<dataDir>/api-token` is
+  never created (booty must not mint a credential nobody asked for), so `booty token print` reports no
+  token exists until booty is run once without `--noAuth`, or until `booty token rotate --yes` creates
+  one directly.
+- **`StartHTTP` refuses to start** with no token store wired and `--noAuth` unset — a silently
+  unauthenticated deployment is treated as a startup failure, not a warning.
+
+**Sending the credential.** Programmatic clients (scripts, `curl`) send `X-Booty-Token: <token>` on
+every request. The web UI instead exchanges the token once via `POST /login` for an httpOnly,
+`SameSite=Strict` session cookie, which the browser then attaches automatically; `POST /logout` clears
+it. `authMiddleware` accepts either form — whichever is present and valid.
+
+**Cleartext caveat.** booty is normally served over plain HTTP on a LAN. With the cookie's `Secure`
+flag off (the case on plain HTTP), both the session cookie and the `X-Booty-Token` header travel the
+network in cleartext. `HttpOnly` and `SameSite` defend against XSS and cross-site request forgery, not
+against packet capture — token auth raises the bar against casual and programmatic unauthorized access,
+not against an attacker who can already sniff the LAN. Running booty behind TLS (directly, or via a
+reverse proxy — booty honors `X-Forwarded-Proto`) flips the cookie's `Secure` flag on and encrypts both
+credential forms.
+
+### Breaking changes for operators upgrading
+
+Three behaviors changed for operators upgrading past this release. All three are silent until they
+bite — read them before upgrading a fleet, not after a boot outage:
+
+1. **`IGNITION_FILE`, `--talosConfigFile`, and `--preseedFile` must now resolve *inside* `--dataDir`,
+   symlinks included.** The resolver (`resolveWithinDataDir`) calls
+   `EvalSymlinks` and re-checks containment on the result, so a deployment that symlinks
+   `<dataDir>/config` (or an individual template) out to a mount **outside** `dataDir` — a common
+   pattern for keeping templates on a separate read-only volume — will start returning `500` on every
+   `/ignition.json`, `/machineconfig`, and `/preseed` request. That is a fleet-wide boot outage, and one
+   that shows up only in the field, never in CI. **Fix:** bind-mount the target directly under
+   `dataDir` instead of symlinking to it from outside.
+2. **These same three path settings must be relative to `dataDir`; a leading `/` is now an error.**
+   The old file-join silently absorbed a leading slash (`preseedFile: /config/preseed.cfg` resolved to
+   `<dataDir>/config/preseed.cfg` and worked); the new resolver rejects any absolute path outright. The
+   shipped defaults (`config/ignition.yaml`, `config/machineconfig.yaml`, `config/preseed.cfg`) are
+   already relative and unaffected — this only bites an operator who wrote a leading `/` in their own
+   override, and it fails the same way as (1): a `500` on the affected boot-config endpoint with no
+   obvious cause from the error alone.
+3. **`POST /register`, `POST /unregister`, `GET /hosts?mac=`, `GET /booty.json`, and `GET /info` are
+   retired.** Their replacements are `POST /api/v1/hosts` (create/update, credentialed),
+   `DELETE /api/v1/hosts/{mac}` (credentialed), `GET /api/v1/hosts` (credentialed — carries the
+   registered hosts plus an `unknown` array of seen-but-unregistered MACs, replacing `booty.json`'s
+   `unknownHosts`), and `GET /api/v1/info` (credentialed). Any external script or automation calling the
+   old routes must be updated to call the new ones with an `X-Booty-Token` header or a session cookie.
+
 ## Environment variables
 
 In addition to the auto-bound flag env vars, a few settings are read directly from the environment:
@@ -535,6 +627,7 @@ In addition to the auto-bound flag env vars, a few settings are read directly fr
 | `IGNITION_FILE` | `config/ignition.yaml` | Butane/Ignition template path, relative to `--dataDir`. |
 | `HARDWARE_MAP` | `hardware.json` | Host-database filename, relative to `--dataDir`. |
 | `DATABASE_PATH` | `<dataDir>/booty.db` | SQLite database path (control-plane + host state). |
+| `BOOTY_API_TOKEN` | unset | Explicit API token — the environment-variable form of `--apiToken` (see [Authentication](#authentication)). Preferred over the flag: not visible in `ps`/`docker inspect`. |
 
 ## Network ports
 

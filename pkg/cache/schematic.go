@@ -20,8 +20,8 @@ import (
 //
 // ponytail: schematic-derived rows inherit the host-derived behavior noted in
 // reconcileHostSchematics — NOT pruned when the schematic config is later
-// deleted (DELETE is 403 until P10 anyway); a stale target only over-caches
-// (SGE M4).
+// deleted (DELETE /api/v1/configs/{id} is wired but not implemented yet, 403
+// regardless of credential, anyway); a stale target only over-caches (SGE M4).
 func EnsureSchematicTarget(store *db.Store, schematic string) error {
 	if err := ValidatePathParam(schematic); err != nil {
 		return fmt.Errorf("cache: schematic target: %w", err)

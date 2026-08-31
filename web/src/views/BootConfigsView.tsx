@@ -204,7 +204,7 @@ function ConfigsTab() {
           <Button size="small" loading={validating === c.id} onClick={() => validate(c)}>
             Validate
           </Button>
-          <Tooltip title="available after authentication (P10)">
+          <Tooltip title="this destructive endpoint is not implemented yet">
             <Button size="small" danger disabled>Delete</Button>
           </Tooltip>
         </Space>
@@ -443,7 +443,7 @@ function RolesTab() {
       render: (_, r) => (
         <Space>
           <Button size="small" onClick={() => openEdit(r)}>Edit</Button>
-          <Tooltip title="available after authentication (P10)">
+          <Tooltip title="this destructive endpoint is not implemented yet">
             <Button size="small" danger disabled>Delete</Button>
           </Tooltip>
         </Space>

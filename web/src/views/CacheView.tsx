@@ -381,7 +381,7 @@ export default function CacheView() {
                   <Button onClick={() => act(() => pinCache(selected.id), `Pinned ${selected.version}`)}>Pin</Button>
                 )}
                 <Button onClick={() => act(() => reverifyCacheEntry(selected.id), `Re-verified ${selected.version}`)}>Re-verify</Button>
-                <Tooltip title="available after authentication (P10)">
+                <Tooltip title="this destructive endpoint is not implemented yet">
                   <Button danger disabled>Delete</Button>
                 </Tooltip>
               </Space>

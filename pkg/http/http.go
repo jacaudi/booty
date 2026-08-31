@@ -17,13 +17,19 @@ import (
 	"github.com/spf13/viper"
 )
 
-// StartHTTP starts the HTTP server in a background goroutine and returns it so
-// the caller can Shutdown() it during graceful shutdown. Signal handling and
-// the ordered shutdown live with the caller; this function only starts serving.
-func StartHTTP(deps APIDeps) *http.Server {
-	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
-	slog.Info("starting HTTP server", "addr", port)
-	// Create a mux for routing incoming requests
+// baseMux builds the plain (non-Huma) HTTP surface: the boot-config
+// endpoints (ignition/machineconfig/preseed), the open /login and /logout
+// endpoints, the UI, and the /data/ artifact server. It is the single source
+// of the base-mux routes, so a test asserting a route is mounted (or
+// deliberately retired and no longer mounted) exercises the exact same
+// registration StartHTTP uses instead of a hand-built stand-in mux that
+// could silently drift from it.
+//
+// /hosts, /register, /unregister, /booty.json and /info were retired here:
+// they are superseded by the gated /api/v1 surface (POST /api/v1/hosts,
+// DELETE /api/v1/hosts/{mac}, GET /api/v1/hosts's unknown field, GET
+// /api/v1/info).
+func baseMux(deps APIDeps) *http.ServeMux {
 	myHandler := http.NewServeMux()
 
 	// All URLs will be handled by this function
@@ -33,12 +39,9 @@ func StartHTTP(deps APIDeps) *http.Server {
 	myHandler.HandleFunc("/preseed", handlePreseedRequest(deps.Store))
 	myHandler.HandleFunc("/version.txt", handleVersionRequest)
 	myHandler.HandleFunc("/version.json", handleVersionRequest)
-	myHandler.HandleFunc("/hosts", handleHostsRequest)
-	myHandler.HandleFunc("/register", handleRegistrationRequest)
-	myHandler.HandleFunc("/unregister", handleUnregistrationRequest)
-	myHandler.HandleFunc("/booty.json", handleDataRequest)
-	myHandler.HandleFunc("/info", handleInfoRequest)
 	myHandler.HandleFunc("/healthz", handleHealthz)
+	myHandler.HandleFunc("/login", handleLogin(deps.Auth))
+	myHandler.HandleFunc("/logout", handleLogout(deps.Auth))
 	myHandler.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(viper.GetString(config.DataDir))))
 	uiFS, err := web.DistFS()
 	if err != nil {
@@ -46,6 +49,29 @@ func StartHTTP(deps APIDeps) *http.Server {
 		os.Exit(1)
 	}
 	myHandler.Handle("/ui/", http.StripPrefix("/ui/", uiHandler(uiFS)))
+
+	return myHandler
+}
+
+// StartHTTP starts the HTTP server in a background goroutine and returns it so
+// the caller can Shutdown() it during graceful shutdown. Signal handling and
+// the ordered shutdown live with the caller; this function only starts serving.
+//
+// It refuses to start when deps.Auth is nil and deps.NoAuth is false: that
+// combination means no credential was wired at all, and authMiddleware passes
+// a nil store through unconditionally (so pre-existing in-process tests keep
+// working) -- so this refusal is the only place a silent-open deployment is
+// caught. Returning an error rather than calling os.Exit keeps that refusal
+// testable.
+func StartHTTP(deps APIDeps) (*http.Server, error) {
+	if deps.Auth == nil && !deps.NoAuth {
+		return nil, errors.New("http: no Auth token store and --noAuth not set; refusing to start unauthenticated")
+	}
+
+	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
+	slog.Info("starting HTTP server", "addr", port)
+
+	myHandler := baseMux(deps)
 
 	// Mount the typed /api/v1 surface on the same mux (additive).
 	RegisterAPI(myHandler, deps)
@@ -66,7 +92,7 @@ func StartHTTP(deps APIDeps) *http.Server {
 	}()
 	slog.Info("server started")
 
-	return s
+	return s, nil
 }
 
 // dataFileHandler serves files under dataDir, restricted to the subtrees in

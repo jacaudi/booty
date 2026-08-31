@@ -96,11 +96,11 @@ func registerRoles(api huma.API, deps APIDeps) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-role", Method: http.MethodDelete, Path: "/roles/{id}",
-		Summary: "Delete a role (disabled until auth)", Tags: []string{"roles"},
+		Summary: "Delete a role (not implemented)", Tags: []string{"roles"},
 	}, func(ctx context.Context, _ *struct {
 		ID int64 `path:"id"`
 	}) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 }
 

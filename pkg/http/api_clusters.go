@@ -88,9 +88,10 @@ func validateClusterInputs(endpoint, talosVersion string) error {
 	return nil
 }
 
-// registerClusters mounts /clusters on the /api/v1 group. Mutations are OPEN in
-// the trust window; DELETE is wired-but-403 until auth (P10). The membership +
-// import arms are added by Task 14 inside this same function.
+// registerClusters mounts /clusters on the /api/v1 group. Every operation
+// here requires a credential like the rest of /api/v1; DELETE is wired but
+// not implemented yet, and returns 403 regardless of credential. The
+// membership + import arms are added by Task 14 inside this same function.
 func registerClusters(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "list-clusters", Method: http.MethodGet, Path: "/clusters",
@@ -273,11 +274,11 @@ func registerClusters(api huma.API, deps APIDeps) {
 
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-cluster", Method: http.MethodDelete, Path: "/clusters/{id}",
-		Summary: "Delete a cluster (disabled until auth)", Tags: []string{"clusters"},
+		Summary: "Delete a cluster (not implemented)", Tags: []string{"clusters"},
 	}, func(ctx context.Context, _ *struct {
 		ID int64 `path:"id"`
 	}) (*struct{}, error) {
-		return nil, huma.Error403Forbidden("destructive endpoints are disabled until authentication lands (P10)")
+		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 
 	registerClusterMembers(api, deps) // Task 14 (import + add/remove member)
@@ -330,8 +331,9 @@ func ensureClusterMemberTargets(deps APIDeps, clusterID int64, talosVersion stri
 // reconciler fetches those boot assets even when the version is already below
 // the discovery window (closes the D-F back-fetch gap, I5) and never prunes it
 // (manual rows are retained). It does NOT Trigger — callers batch the reconcile.
-// Auto-created pins are not removed on remove-member (DELETE version is 403
-// until P10); they accumulate like frozen revisions do, to be cleaned up at P10.
+// Auto-created pins are not removed on remove-member (DELETE version is wired
+// but not implemented yet, 403 regardless of credential); they accumulate
+// like frozen revisions do, to be cleaned up once that delete is implemented.
 func pinClusterMemberVersion(deps APIDeps, schematic, talosVersion string) error {
 	if schematic == "" {
 		return nil
@@ -519,7 +521,8 @@ type importCPEntry struct {
 // rollbackImport compensates a failed multi-host import: it unbinds every host
 // the import touched (idempotent — clearing an unbound host is a no-op) and then
 // deletes the freshly-created cluster row via the store-level DeleteCluster (the
-// HTTP delete-cluster handler is 403 until P10). Best-effort: it presses past
+// HTTP delete-cluster handler is wired but not implemented yet, 403 regardless
+// of credential). Best-effort: it presses past
 // individual errors so one failing unbind cannot strand the cluster row. Order
 // mirrors remove-cluster-member (clear node_config first, prune revisions, clear
 // type, clear cluster) so no row references a deleted config mid-sequence, and it

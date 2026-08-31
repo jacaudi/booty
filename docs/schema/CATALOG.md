@@ -198,7 +198,7 @@ it to. Concretely, each reconcile tick:
 3. **`source=catalog` target not in the desired set** (its entry was removed)
    → **disable** it (`enabled=false`). The row and its cached bytes are kept —
    disk is reclaimed only by the existing eviction/budget sweep or an explicit
-   `DELETE` (currently `403` until authentication lands, P10).
+   `DELETE` (currently `403` — wired but not implemented yet).
 4. **`source=api` / `source=host` targets** → never touched, in every case.
 
 Identity `(os, arch, params)` is never re-keyed by any of the above, so an
@@ -413,8 +413,8 @@ manage them as `source=host`. Building cross-source arbitration (the catalog
 pass checking "does any host still need this before disabling") is deliberately
 not implemented — it would be speculative machinery for a case an operator can
 avoid by not double-declaring a schematic. No data is ever lost either way:
-disabling keeps the row and its cached bytes, and `DELETE` remains `403` until
-authentication lands (P10).
+disabling keeps the row and its cached bytes, and `DELETE` remains `403` — wired but not
+implemented yet.
 
 ## Upgrade notes
 

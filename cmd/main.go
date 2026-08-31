@@ -8,9 +8,11 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/jeefy/booty/pkg/auth"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
@@ -63,6 +65,9 @@ var args struct {
 	signaturePolicy string
 
 	secretsKey string
+
+	apiToken string
+	noAuth   bool
 }
 
 var (
@@ -119,9 +124,22 @@ func init() {
 	)
 
 	flags.StringVar(
+		&args.apiToken,
+		"apiToken",
+		"",
+		"Explicit API token (or BOOTY_API_TOKEN); overrides <dataDir>/api-token and is never persisted (default: auto-generated on first run)",
+	)
+	flags.BoolVar(
+		&args.noAuth,
+		"noAuth",
+		false,
+		"Disable ALL API authentication (every /api/v1 endpoint becomes world-writable); for trusted-network debugging only",
+	)
+
+	flags.StringVar(
 		&args.dataDir,
 		"dataDir",
-		"/data",
+		defaultDataDir,
 		"Directory to store stateful data",
 	)
 
@@ -251,6 +269,7 @@ func init() {
 
 	Cmd.AddCommand(newVersionCmd())
 	Cmd.AddCommand(newConvertPreseedCmd())
+	Cmd.AddCommand(newTokenCmd())
 
 	viper.BindPFlags(flags)
 
@@ -294,6 +313,54 @@ func run(cmd *cobra.Command, argv []string) error {
 
 	if err := config.ValidateSecretsKey(); err != nil {
 		return err
+	}
+
+	// Bootstrap the shared API token before anything serves. An explicit
+	// --apiToken wins and is never written to disk; otherwise the file is
+	// read, or generated at 0600 and logged ONCE so it is discoverable via
+	// docker logs / journalctl on first run.
+	tokenStore := auth.NewStore(filepath.Join(viper.GetString(config.DataDir), auth.TokenFileName))
+	noAuth := viper.GetBool(config.NoAuth)
+	// explicit is also threaded into watchSIGHUP below: a HUP must not
+	// silently replace an explicit --apiToken/BOOTY_API_TOKEN credential with
+	// whatever is sitting in <dataDir>/api-token, which SetExplicit
+	// deliberately never touches and which can easily be stale (e.g. left
+	// over from before the operator switched to an explicit token).
+	explicit := !noAuth && viper.GetString(config.ApiToken) != ""
+	switch {
+	case noAuth:
+		slog.Warn("--noAuth is set: the /api/v1 management surface is UNAUTHENTICATED")
+		// Deliberately no Load() here: --noAuth must not mint and persist a
+		// credential the operator did not ask for. Consequence to document
+		// (Task 8): under --noAuth, <dataDir>/api-token is never created, so
+		// `booty token print` reports "no API token" until booty runs without
+		// --noAuth once, or `booty token rotate --yes` creates one.
+	case explicit:
+		// Fail fast on a blank explicit token: `--apiToken " "` must abort
+		// startup, never open the API (12-Factor III -- a misconfigured
+		// service should not start).
+		if err := tokenStore.SetExplicit(viper.GetString(config.ApiToken)); err != nil {
+			// err already carries auth's own "auth: " prefix (it is always
+			// auth.ErrEmptyToken here); do not add a second one.
+			return fmt.Errorf("--apiToken/BOOTY_API_TOKEN: %w", err)
+		}
+		slog.Info("API token loaded from an explicit override", "token", tokenStore.Token())
+	default:
+		generated, err := tokenStore.Load()
+		if err != nil {
+			// Load's own errors are already prefixed "auth: " (e.g. "auth:
+			// token file ... is blank: auth: token is empty"); wrapping with
+			// another "auth: " here produced a doubled "auth: auth: " prefix.
+			return err
+		}
+		if generated {
+			// The ONLY place the token is ever printed in full. Secret.String
+			// redacts it everywhere else, which is why Expose is explicit here.
+			slog.Info("generated a new API token; store it now, it is not logged again",
+				"token", tokenStore.Token().Expose(), "path", tokenStore.Path())
+		} else {
+			slog.Info("API token loaded", "path", tokenStore.Path(), "token", tokenStore.Token())
+		}
 	}
 
 	// Resolve the client-facing port before anything reads ServerHttpPort
@@ -362,6 +429,18 @@ func run(cmd *cobra.Command, argv []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// SIGHUP re-reads the token file. It gets its OWN signal.Notify channel and
+	// not the shutdown NotifyContext above: a HUP delivered into that context
+	// would cancel it and shut booty down. It stops when ctx is done, so the
+	// goroutine does not outlive the process under -race.
+	//
+	// Started UNCONDITIONALLY, including under --noAuth. Go's default
+	// disposition for an unhandled SIGHUP TERMINATES the process, and
+	// `docker kill -s HUP` is a common reload idiom -- gating this on !noAuth
+	// would make --noAuth silently turn a routine reload into an outage. Under
+	// --noAuth the reload is a no-op that logs, which is the right behaviour.
+	watchSIGHUP(ctx, tokenStore, noAuth, explicit)
+
 	// Single cache reconciler replaces the per-OS version-check crons. Start it
 	// after the host store is loaded; it owns all target/version DB writes and
 	// eager artifact caching. Serving (TFTP/HTTP below) may begin immediately —
@@ -377,10 +456,15 @@ func run(cmd *cobra.Command, argv []string) error {
 	tftpServer := tftp.StartTFTP()
 
 	// Start the HTTP server (non-blocking; returns the running server).
-	httpServer := bootyHTTP.StartHTTP(bootyHTTP.APIDeps{
+	httpServer, err := bootyHTTP.StartHTTP(bootyHTTP.APIDeps{
 		Store:   store,
 		Trigger: reconciler.Trigger,
+		Auth:    tokenStore,
+		NoAuth:  noAuth,
 	})
+	if err != nil {
+		return fmt.Errorf("http: %w", err)
+	}
 
 	// Start the proxyDHCP responder when enabled. Best-effort: nil when not
 	// started, in which case the shutdown step is skipped below.
@@ -454,4 +538,57 @@ func startProxyDHCP() *proxydhcp.Server {
 		return nil
 	}
 	return srv
+}
+
+// watchSIGHUP re-reads the token file on every SIGHUP until ctx is done. A
+// failed reload is logged and the live token left untouched, so a HUP against
+// a deleted or unreadable file cannot lock the operator out.
+//
+// It returns a channel that is closed when its goroutine exits, so a test can
+// assert the goroutine actually stops instead of merely compiling the
+// ctx-scoped call; production callers may ignore it.
+func watchSIGHUP(ctx context.Context, store *auth.Store, noAuth, explicit bool) <-chan struct{} {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGHUP)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer signal.Stop(ch)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ch:
+				handleHUP(store, noAuth, explicit)
+			}
+		}
+	}()
+	return done
+}
+
+// handleHUP is watchSIGHUP's body, split out so it is directly testable
+// without delivering a real signal to the test process.
+func handleHUP(store *auth.Store, noAuth, explicit bool) {
+	if noAuth {
+		slog.Info("SIGHUP: --noAuth is set; nothing to reload")
+		return
+	}
+	if explicit {
+		// The live token came from --apiToken/BOOTY_API_TOKEN, which
+		// SetExplicit installs without ever touching <dataDir>/api-token.
+		// Reloading from that file here would silently replace the explicit
+		// credential with whatever (possibly stale) token happens to be on
+		// disk -- reload it and every session cookie is re-keyed to a
+		// credential the operator did not set.
+		slog.Info("SIGHUP: token is set explicitly via --apiToken/BOOTY_API_TOKEN; nothing to reload")
+		return
+	}
+	if err := store.Reload(); err != nil {
+		// Keeping the current token is deliberate: a HUP against a deleted or
+		// blanked file must not lock the operator out, and must not install an
+		// empty token (pkg/auth refuses that outright).
+		slog.Error("SIGHUP: token reload failed; keeping the current token", "err", err)
+		return
+	}
+	slog.Info("SIGHUP: API token reloaded; existing UI sessions are now invalid", "path", store.Path())
 }
