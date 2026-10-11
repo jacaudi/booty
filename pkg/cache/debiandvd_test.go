@@ -121,12 +121,12 @@ func TestExtractAndMergeISO_PoolUnionDisc1Dists(t *testing.T) {
 	// fake per-disc extracted contents
 	disc1 := map[string]string{
 		"dists/bookworm/main/binary-amd64/Packages": "Package: a\n",
-		"pool/main/a/a/a_1.deb":                      "AAA",
-		"install.amd64/linux":                        "KERNEL",
+		"pool/main/a/a/a_1.deb":                     "AAA",
+		"install.amd64/linux":                       "KERNEL",
 	}
 	disc2 := map[string]string{
 		"dists/bookworm/main/binary-amd64/Packages": "SHOULD-NOT-WIN\n", // disc-2 dists ignored
-		"pool/main/b/b/b_1.deb":                      "BBB",              // unioned in
+		"pool/main/b/b/b_1.deb":                     "BBB",              // unioned in
 	}
 	restore := swapISOExtractor(fakeExtractor(map[string]map[string]string{
 		"DVD-1.iso": disc1, "DVD-2.iso": disc2,
@@ -250,7 +250,10 @@ func TestEnsureDebianDVD_PromoteFlipsPinsAndIsIdempotent(t *testing.T) {
 	store := newEnsureDVDStore(t)
 	var downloads int
 	swapDVDSeams(t,
-		func(ctx context.Context, url, dest string) error { downloads++; return os.WriteFile(dest, []byte("iso"), 0o644) },
+		func(_ context.Context, _, dest string) error {
+			downloads++
+			return os.WriteFile(dest, []byte("iso"), 0o644)
+		},
 		func(ctx context.Context, dir string, names []string) error { return nil },
 		func(ctx context.Context, isoDir string, names []string, final, arch string) error {
 			if err := os.MkdirAll(final, 0o755); err != nil {
@@ -316,7 +319,10 @@ func TestEnsureDebianDVD_SentinelPresentButRowsMissingSelfHeals(t *testing.T) {
 	store := newEnsureDVDStore(t)
 	var downloads int
 	swapDVDSeams(t,
-		func(ctx context.Context, url, dest string) error { downloads++; return os.WriteFile(dest, []byte("iso"), 0o644) },
+		func(_ context.Context, _, dest string) error {
+			downloads++
+			return os.WriteFile(dest, []byte("iso"), 0o644)
+		},
 		func(ctx context.Context, dir string, names []string) error { return nil },
 		func(ctx context.Context, isoDir string, names []string, final, arch string) error { return nil })
 
@@ -477,7 +483,10 @@ func TestEnsureDebianDVD_FullySettledIsNoOp(t *testing.T) {
 	store := newEnsureDVDStore(t)
 	var downloads int
 	swapDVDSeams(t,
-		func(ctx context.Context, url, dest string) error { downloads++; return os.WriteFile(dest, []byte("iso"), 0o644) },
+		func(_ context.Context, _, dest string) error {
+			downloads++
+			return os.WriteFile(dest, []byte("iso"), 0o644)
+		},
 		func(ctx context.Context, dir string, names []string) error { return nil },
 		func(ctx context.Context, isoDir string, names []string, final, arch string) error {
 			if err := os.MkdirAll(final, 0o755); err != nil {
