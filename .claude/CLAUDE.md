@@ -111,13 +111,26 @@ The maintainer's decision (2026-10-11): **new code must follow the principles; c
 touches moves toward them within that change's scope; there is no big-bang refactor.** Known
 debt, not to be copied into new code:
 
-- `viper.Get*` is read deep inside `pkg/tftp`, `pkg/http`, `pkg/cache` and others.
-- New exported helpers `tftp.URLHost` and `tftp.TopLevelBootFiles` read viper directly (accepted in the upstream import; move to parameters when touched).
-- Package-level injected stores: `hardware.SetStore`, `tftp.SetStore`, `absDataDir`.
-- The layout is `pkg/` rather than `internal/`, and there is no patchbay package.
-- Servers call `os.Exit` inside goroutines (TFTP, HTTP).
-- Existing `golangci-lint` findings (1,231 with the golden config at `7432c81`) are not yet fixed.
-  Only new and changed code is gated. govulncheck findings are fixed in the upstream-import work.
+Each item has a `tech-debt` issue; close the issue when the item is gone and drop its line here.
+
+- `viper.Get*` is read deep inside `pkg/cache`, `pkg/http`, `pkg/ostype`, `pkg/tftp` and `pkg/hardware` (#91).
+- New exported helpers `tftp.URLHost` and `tftp.TopLevelBootFiles` read viper directly (#92).
+- Package-level injected stores: `hardware.SetStore`, `tftp.SetStore` (#93).
+- The layout is `pkg/` rather than `internal/`, and there is no patchbay package (#94).
+- The HTTP server calls `os.Exit` inside a goroutine and on UI embed failure; TFTP no longer does (#95).
+- Existing `golangci-lint` findings (1,172 uncapped at `ed6198d`) are not yet fixed (#96).
+  Only new and changed code is gated. govulncheck reports no called vulnerabilities.
+- Host operations report a `HasHost` database error as 422 "invalid MAC" (#97).
+- Most flags cannot be set from the environment; only four keys are env-bound (#98).
+- A runtime startup error is printed twice (#99).
+- `boot.Lookup` is unused and `boot.Names` is a mutable exported slice (#100).
+- A symlink that stays inside `--dataDir` bypasses the TFTP and `/data/` allowlist (#101).
+- proxyDHCP answers on whatever source port a client claims (#102).
+- `wake-host` has no per-host rate limit (#103).
+- `GET /menu/<anything>` answers 200 with the holding script (#104).
+- proxyDHCP broadcasts may leave through the wrong interface on multi-homed hosts (#105).
+- Unverified on real hardware: BIOS PXE via `undionly.kpxe` (#106), the Debian node-report
+  `late_command` (#107), `booty-health.service` on Flatcar/FCOS (#108).
 
 ## Repository map
 
