@@ -20,6 +20,7 @@ import (
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	bootyHTTP "github.com/jeefy/booty/pkg/http"
+	"github.com/jeefy/booty/pkg/nodereport"
 	"github.com/jeefy/booty/pkg/power"
 	"github.com/jeefy/booty/pkg/proxydhcp"
 	"github.com/jeefy/booty/pkg/tftp"
@@ -56,6 +57,8 @@ var args struct {
 	proxyDHCPBootfileUEFI  string
 	proxyDHCPBootfileARM64 string
 	proxyDHCPRelay         bool
+
+	nodeReports bool
 
 	talosArchitecture string
 	talosSchematic    string
@@ -133,6 +136,12 @@ func init() {
 		"apiToken",
 		"",
 		"Explicit API token (or BOOTY_API_TOKEN); overrides <dataDir>/api-token and is never persisted (default: auto-generated on first run)",
+	)
+	flags.BoolVar(
+		&args.nodeReports,
+		"nodeReports",
+		false,
+		"Inject a boot-time health/running-version report into Flatcar, CoreOS and debianconfig Debian hosts and accept reports at POST /node/report",
 	)
 	flags.BoolVar(
 		&args.noAuth,
@@ -521,14 +530,24 @@ func run(cmd *cobra.Command, argv []string) error {
 		return err
 	}
 
+	var nodeReports *bootyHTTP.NodeReports
+	if viper.GetBool(config.NodeReports) {
+		key, keyErr := nodereport.LoadOrCreateKey(filepath.Join(viper.GetString(config.DataDir), "node-report-key"))
+		if keyErr != nil {
+			return fmt.Errorf("node reports: %w", keyErr)
+		}
+		nodeReports = &bootyHTTP.NodeReports{Key: key}
+	}
+
 	// Start the HTTP server (non-blocking; returns the running server).
 	httpServer, err := bootyHTTP.StartHTTP(bootyHTTP.APIDeps{
-		Store:     store,
-		Trigger:   reconciler.Trigger,
-		Auth:      tokenStore,
-		NoAuth:    noAuth,
-		BootFiles: boot.Files,
-		Waker:     &power.Waker{},
+		Store:       store,
+		Trigger:     reconciler.Trigger,
+		Auth:        tokenStore,
+		NoAuth:      noAuth,
+		BootFiles:   boot.Files,
+		Waker:       &power.Waker{},
+		NodeReports: nodeReports,
 	})
 	if err != nil {
 		return fmt.Errorf("http: %w", err)

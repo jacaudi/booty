@@ -39,7 +39,9 @@ func baseMux(deps APIDeps) *http.ServeMux {
 	myHandler.HandleFunc("/preseed", preseedHandler(deps.Store, deps.NodeReports))
 	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(arpLookup))
 	myHandler.Handle("GET /menu/", menuSelectionHandler(arpLookup))
-	myHandler.Handle("POST /node/report", nodeReportHandler(deps))
+	// Bare path: every method reaches the handler, so a non-POST is a 405
+	// (404 when the feature is off) instead of falling to the "/" catch-all.
+	myHandler.Handle("/node/report", nodeReportHandler(deps))
 	myHandler.HandleFunc("/version.txt", handleVersionRequest)
 	myHandler.HandleFunc("/version.json", handleVersionRequest)
 	myHandler.HandleFunc("/healthz", handleHealthz)

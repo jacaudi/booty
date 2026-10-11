@@ -147,3 +147,18 @@ func TestValidatePathSegment(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfig_NodeReportsDefaultsOff(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(DataDir, t.TempDir())
+
+	LoadConfig(&cobra.Command{})
+
+	if viper.GetBool(NodeReports) {
+		t.Error("NodeReports defaults on, want off")
+	}
+	if NodeReports != "nodeReports" {
+		t.Errorf("NodeReports key = %q, want the flag name nodeReports", NodeReports)
+	}
+}
