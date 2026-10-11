@@ -1,6 +1,6 @@
 # Design: import the worthwhile parts of upstream `jeefy/booty`
 
-**Status:** design, decisions reviewed with the maintainer 2026-10-11; awaiting final approval. Nothing below is built yet.
+**Status:** design; decisions (§6) and Fable review findings (§7) resolved with the maintainer 2026-10-11; awaiting final approval. Nothing below is built yet.
 **Base:** `main` @ `eaea955` (the #86 merge).
 **Upstream reviewed:** `jeefy/booty` `main` @ `8a5a227` (2026-10-08). Common ancestor `d9eafed`
 (2024-10-12); 392 upstream commits since, ~65k lines changed on each side.
@@ -55,6 +55,33 @@ surface.
 Each item lists: what changes, where, the decisions, and tests. File references are the fork's
 unless prefixed `upstream:`.
 
+### Item 0. Close the TFTP data-directory leak (security fix, lands first)
+
+**Bug (live today; Fable review finding 1).** `pkg/tftp/tftp.go:197-215`: any TFTP filename that
+is not special-cased is opened from `dataDir` through `safeJoin` with no allowlist. `dataDir`
+holds `api-token` (`cmd/main.go:322`), `booty.db` (`pkg/config/config.go:174`, including
+`config_revisions.source_b64`, the plaintext per-host boot configs) and `config/` (server-side
+templates). Any LAN client can `tftp <booty> -c get api-token` and gain full `/api/v1` access. The
+HTTP `/data/` handler had the same bug and was fixed with an allowlist
+(`pkg/http/http.go:120-140`); TFTP never got it.
+
+**Change.** Mirror the HTTP fix: before opening anything from `dataDir`, TFTP allows only
+- paths strictly below `cache.DirName/` and `public/`, and
+- these top-level names: `undionly.kpxe`, `ipxe.efi`, `snponly.efi`, `ipxe-arm64.efi`, plus the
+  current values of `--proxyDHCPBootfileBIOS`, `--proxyDHCPBootfileUEFI` and
+  `--proxyDHCPBootfileARM64`.
+
+Everything else gets `ErrNotExist` and a warn log. An allowlist, not a denylist, so a future
+secret written to `dataDir` (item 10's `node-report-key`) is safe automatically. Implemented on the
+current `safeJoin` path; item 8 later moves the same check onto `os.Root`.
+
+**Tests.** `api-token`, `booty.db`, `booty.db-wal`, `config/ignition.yaml` and `node-report-key` →
+not found over TFTP; `cache/…`, `public/…` and the iPXE names still served.
+
+**Release note.** Security fix. Operators who exposed UDP/69 to untrusted machines should rotate the
+API token (`booty token rotate --yes`). Operators who served other top-level files over TFTP must
+move them under `public/`.
+
 ### Item 1. ProxyDHCP protocol fix (full)
 
 **Bug.** `pkg/proxydhcp/proxydhcp.go:75-78` answers DISCOVER *and* REQUEST/INFORM on **both**
@@ -81,6 +108,13 @@ the wire with OVMF).
   assumes BIOS): pre-PXE-2.1 ROMs that omit option 93 stop being answered by proxyDHCP. Call it out
   in the release notes; such machines still boot with the site DHCP server pointed at booty.
 - `handle()` passes the listener's port; `loop` already knows which conn it reads.
+- **Library parity** (Fable finding 5): bump `github.com/insomniacslk/dhcp` to upstream's pin
+  (`v0.0.0-20260901064844-234b97448fae`) **in this item**, so reply serialisation matches the
+  golden files from the first commit.
+- **Defaults** (Fable finding 5): port upstream's `Config.withDefaults()`; empty bootfile names
+  and ports get the standard defaults (`undionly.kpxe`, `ipxe.efi`, `ipxe-arm64.efi`,
+  `booty.ipxe`, 67, 4011) instead of `NewServer` rejecting them (`proxydhcp.go:141`). The test
+  config is then `Config{ServerIP: testServerIP}`, identical to upstream's `testConfig()`.
 
 **Tests.** Port `upstream:pkg/dhcp/golden_test.go`'s `goldenCases`: synthetic request packets
 built in code for 9 PXE/iPXE cases (3 DISCOVER, 6 REQUEST: BIOS, EFI x64, EFI BC, ARM64, iPXE
@@ -162,7 +196,11 @@ client and silently breaks every URL booty renders.
   `192.0.2.1:9`; no packet sent; returns the default-route source address).
 - In `cmd/main.go`, beside the existing serverHttpPort resolution (~line 366): if empty, detect,
   `viper.Set`, and `slog.Info("serverIP autodetected", ...)`. Detection failure is a **startup
-  error** naming `--serverIP` (maintainer: "fall back to error").
+  error** naming `--serverIP` (maintainer: "fall back to error"; reaffirmed for Fable finding 9). The
+  message says what to do: "no default route; set --serverIP to the address clients reach booty
+  on". Release-note it: hosts or containers with no default route (e.g. `--network none`,
+  isolated labs) that start today on 127.0.0.1 will refuse to start until `--serverIP` is set.
+  Tests that start `main` inject the detector.
 - An explicit value (flag or whatever path sets it today) always wins.
 - `startProxyDHCP`'s loopback guard stays.
 
@@ -205,8 +243,9 @@ plain `go build` works anywhere, air-gapped; embedded copies **take precedence**
 - Delete the root `undionly.kpxe`.
 - **TFTP** (`readHandler`): after the special names (`booty.ipxe`, `menu/…`, `pxelinux.cfg/default`)
   and **before** the `dataDir` lookup, serve `boot.Lookup(filename)` if present.
-- **HTTP**: new `GET|HEAD /boot/{name}` on the base mux serving only the embedded files, with
-  `Content-Length`, no redirects, `application/efi` for `.efi` and `application/octet-stream`
+- **HTTP**: new `GET|HEAD /boot/{name}` serving only the embedded files, routed **before**
+  `http.ServeMux` (a small wrapper, as `upstream:pkg/server/http.go:136-144` does; Fable finding
+  6), because ServeMux would 301 unclean paths such as `/boot/../x`. `Content-Length`, no redirects, `application/efi` for `.efi` and `application/octet-stream`
   otherwise (shape from `upstream:pkg/server/http.go` `bootHandler`; no `/boot/sb/`).
 - **proxyDHCP defaults** (`undionly.kpxe`, `ipxe.efi`) already match the embedded names; ARM64
   (`ipxe-arm64.efi`) is not built and still comes from `dataDir`.
@@ -215,7 +254,7 @@ plain `go build` works anywhere, air-gapped; embedded copies **take precedence**
   #!ipxe
   :start
   dhcp || goto retry
-  chain tftp://${next-server}/booty.ipxe || chain http://${next-server}/booty.ipxe?mac=${mac} || goto shell
+  chain tftp://${proxydhcp/next-server}/booty.ipxe || chain tftp://${next-server}/booty.ipxe || chain http://${next-server}/booty.ipxe?mac=${mac} || goto shell
   exit
   :retry
   sleep 5
@@ -224,6 +263,13 @@ plain `go build` works anywhere, air-gapped; embedded copies **take precedence**
   echo Booty: could not reach ${next-server} - dropping to the iPXE shell
   shell
   ```
+  `${proxydhcp/next-server}` comes first (Fable finding 3): in iPXE, `${next-server}` is taken
+  from the highest-priority settings block, and when booty's proxyDHCP runs beside a site DHCP
+  server that sets its own next-server, that may be the site server. Without proxyDHCP the first
+  leg is empty and fails at once, and the second behaves as today. `build-ipxe.sh`'s
+  embedded-script check greps for the new first `chain` line. **QEMU check before committing the
+  binaries:** boot under OVMF and SeaBIOS in two topologies: (a) booty proxyDHCP beside a DHCP
+  server that hands out a different next-server; (b) the site DHCP pointed at booty, no proxyDHCP.
   The HTTP fallback only reaches booty on port 80 (the port is unknown at iPXE build time). The
   TFTP leg is the normal path and item 7 makes it chain to HTTP on the right port.
 - **Task**: `task ipxe` runs `go generate ./boot/` (item 13).
@@ -242,20 +288,26 @@ when `dataDir` has a same-named file; `/boot/ipxe.efi` returns 200 with the righ
 needs `CAP_NET_RAW`, fails across routers, and the whole per-host decision (dispatch, menu,
 DoInstall flip) lives in the TFTP handler.
 
+**DoInstall (Fable finding 2).** Nothing reads `DoInstall`. The flip at `pkg/tftp/tftp.go:125-134`
+is its only writer outside the DB plumbing, and no script or renderer branches on it. Moving the
+flip to `GET /booty.ipxe?mac=` would make it an unauthenticated write any LAN client could aim at
+any host. **Remove the flip entirely.** Keep the column and field (no migration). Correct the
+README's "One-shot install" concept, which describes behaviour booty does not have. Install-once,
+if wanted, gets its own design.
+
 **Change.**
 - Extract the script renderers into an exported, transport-neutral entry point in `pkg/tftp`
   (keep the package; a rename is churn): `RenderBootScript(host *hardware.Host, urlHost string)`
   returning `(script, kind string)`, and `RenderMenuSelection(host, path, urlHost)`.
   `bootDispatch`, `assignedScript`, `renderMenu`, `holdingScript` are unchanged underneath.
-- **New HTTP endpoints** on the base mux (unauthenticated, boot path, read-only apart from the
-  DoInstall flip that TFTP already does unauthenticated today):
+- **New HTTP endpoints** on the base mux (unauthenticated, boot path, **read-only**):
   - `GET /booty.ipxe?mac=…` → identify host by `?mac=` (normalised with `hardware.NormalizeMAC`;
     malformed → treated as unidentified), else ARP on `RemoteAddr`; render via
-    `RenderBootScript`; `text/plain`. **The DoInstall flip moves here.**
+    `RenderBootScript`; `text/plain`.
   - `GET /menu/{selection}/boot.ipxe?mac=…` → `RenderMenuSelection`.
 - **TFTP `booty.ipxe` becomes a stub**:
   `#!ipxe` / `chain http://[[server]]/booty.ipxe?mac=${mac} || shell` (where `[[server]]` is
-  `serverIP[:serverHttpPort]`). It does **no** ARP and **no** DoInstall flip. The TFTP
+  `serverIP[:serverHttpPort]`). It does **no** ARP. The TFTP
   `menu/…/boot.ipxe` path stays working (ARP) for scripts already cached in clients, but nothing
   new links to it.
 - All `chain tftp://…/booty.ipxe` and `chain tftp://…/menu/${sel}/boot.ipxe` lines in
@@ -266,13 +318,15 @@ DoInstall flip) lives in the TFTP handler.
 - ARP stays as the fallback everywhere (maintainer's decision); `CAP_NET_RAW` is still needed
   until a later change removes ARP. Document that `?mac=` is client-asserted: a LAN client can
   fetch another host's boot script, exactly as it can already fetch that host's
-  `/ignition.json?mac=`. No new exposure.
+  `/ignition.json?mac=`. Both endpoints are read-only, so this adds no new write surface.
 
-**Tests.** HTTP `/booty.ipxe` with `?mac=` for holding / assigned / menu hosts; DoInstall flips on
-the HTTP fetch and **not** on the TFTP stub fetch; malformed MAC → holding script; every rendered
+**Tests.** HTTP `/booty.ipxe` with `?mac=` for holding / assigned / menu hosts; no request on any
+path changes a host row (`DoInstall` included); malformed MAC → holding script; every rendered
 `chain` line now targets `http://…?mac=${mac}`; existing TFTP menu tests still pass.
 
 ### Item 8. TFTP hardening + `pin/tftp` v3
+
+Item 0's allowlist moves onto the `os.Root` path here unchanged.
 
 **Change.**
 - `go.mod`: drop `replace github.com/pin/tftp => … v0.0.0-20210809155059-0161c5dd2e96`; require
@@ -345,14 +399,22 @@ autopilot-specific.
 
 **Receiver.** `POST /node/report` on the base mux (outside `/api/v1`; nodes have no API token):
 - Header `X-Booty-Node-Token`, query `?mac=`. Constant-time compare against the derived token.
-  Unknown host or bad token → 401 with no detail.
+  Unknown host or bad token → the **same** 401 with no detail.
+- **Layered limits** (Fable finding 4), in this order:
+  1. Cheap rejects first: malformed MAC or missing token header → 400/401 before any DB or HMAC
+     work.
+  2. Pre-auth limit **per source IP** in a **size-capped** map (LRU; e.g. 10 requests/IP/minute,
+     4096 entries), so attacker-chosen MACs cannot grow memory.
+  3. Token check against an **in-memory cache** of per-host `report_token_gen`, refreshed on
+     rotate and on host create/delete, so verification needs no DB read.
+  4. Only after the token verifies: per-MAC limit of one accepted report per 10 s → 429.
 - `http.MaxBytesReader` 64 KiB; `Normalize`; upsert `host_health`; also update `hosts.last_seen`.
-- Per-MAC rate limit: at most one accepted report per 10 s; extra → 429 **(builder's call)**.
 
 **Node side.**
 - Script: port `upstream:pkg/ignition/health.go` `HealthReportScript`, changed to send the token
-  header, post to `/node/report`, and **use a MAC baked into the rendered script** (the
-  `?mac=` the config was fetched with, i.e. the booting NIC) instead of upstream's default-route
+  header, post to `/node/report`, and **use a MAC baked into the rendered script**: `host.MAC`,
+  the canonical MAC of the host record the config was rendered for, however it was identified
+  (`?mac=` or ARP; Fable finding 8; an ARP-identified fetch has no `?mac=` to copy), instead of upstream's default-route
   NIC lookup. The token is derived from that MAC, so on a multi-NIC host the two would differ and
   every report would 401 (review decision 11). Unit: `HealthUnit`, minus the
   upstream `booted` unit dependency.
@@ -366,7 +428,11 @@ autopilot-specific.
   declared version before serving; on failure serve the un-merged config and warn.
 - **Debian (debianconfig only):** `buildPreseedView` (`pkg/http/debiangen.go`) composes
   one more ordered `late_command` source that writes the script and unit with `in-target` and
-  enables it; adds `curl` to the package list via `appendIfAbsent`. Raw preseed files (rung 4,
+  enables it. It goes **before the operator's own commands** (ssh → sudo → ESP sync → health →
+  operator; Fable finding 7), keeping the existing "operator last" rule at `debiangen.go:509-511`,
+  so the operator's commands can still adjust it. Parts are joined with ` ; `, so one failing does
+  not stop the rest. Document that a `d-i preseed/late_command` written in `raw_preseed:` replaces
+  the whole composed command, health install included. It also adds `curl` to the package list via `appendIfAbsent`. Raw preseed files (rung 4,
   `--preseedFile`) are **not** modified: debconf keeps only the last `late_command`, so appending
   would silently replace the operator's.
 - **Opt-in** (review decision 2): `--nodeReports` flag, default **off**, so configs served by an
@@ -467,16 +533,17 @@ source repo and commit. No edits to the skill files. Lands in the same push as t
 Separate commits (or small PRs), in this order, each green on `go test -race ./...`, `go vet`, and
 `npm test`:
 
-1. Design doc + vendored skills (item 14).
-2. Items 3 + 8 (TFTP v3, OpenRoot, nil write handler).
-3. Item 1 (proxyDHCP).
-4. Items 2, 4, 5 (small bug fixes; one commit each).
-5. Item 6 (embedded iPXE).
-6. Item 7 (HTTP boot script, MAC identification). Depends on 6 for the embedded script.
-7. Item 12 (deps).
-8. Item 9 (WoL).
-9. Item 10 (node reports). Largest; may split into receiver+storage, Ignition, Debian, UI.
-10. Items 11 + 13 (workflows, Taskfile, Dockerfile, doc updates).
+1. Design doc + vendored skills (item 14). *(Done.)*
+2. **Item 0 (TFTP allowlist security fix)**, standalone, with its release note.
+3. Items 3 + 8 (TFTP v3, OpenRoot, nil write handler).
+4. Item 1 (proxyDHCP, including the `insomniacslk/dhcp` bump).
+5. Items 2, 4, 5 (small bug fixes; one commit each).
+6. Item 6 (embedded iPXE).
+7. Item 7 (HTTP boot script, MAC identification, DoInstall flip removed). Depends on 6.
+8. Item 12 (deps).
+9. Item 9 (WoL).
+10. Item 10 (node reports). Largest; may split into receiver+storage, Ignition, Debian, UI.
+11. Items 11 + 13 (workflows, Taskfile, Dockerfile, doc updates).
 
 ## 5. Left to the builder
 
@@ -515,3 +582,21 @@ Each was put to the maintainer one at a time with its reasoning, pros and cons, 
 Smaller calls still left to the builder: the per-MAC report rate limit (one per 10 s, else 429);
 an operator-defined unit or file of the same name wins over the injected health fragment; INFORM
 packets are dropped (as upstream).
+
+## 7. Fable design review (2026-10-11), findings resolved with the maintainer
+
+1. **Blocking: TFTP serves `api-token`, `booty.db` and `config/`.** New item 0: an allowlist that
+   mirrors HTTP `/data/`, landing first as a standalone security fix.
+2. **DoInstall flip over spoofable `?mac=`.** The flip is removed; nothing reads the flag.
+3. **`${next-server}` scope.** The embedded script tries `${proxydhcp/next-server}` first; QEMU
+   check in both topologies before committing binaries.
+4. **`/node/report` DoS.** Layered limits: cheap rejects, bounded per-IP pre-auth limit, cached
+   counters, per-MAC limit only after the token verifies.
+5. **Golden parity vs library version.** `insomniacslk/dhcp` bumped inside item 1; upstream's
+   `withDefaults()` ported.
+6. **`/boot/` and ServeMux redirects.** `/boot/` is routed before the mux.
+7. **Debian late_command order.** The health fragment goes before the operator's commands; the
+   `raw_preseed` override is documented.
+8. **Baked MAC source.** `host.MAC`, not the `?mac=` query value.
+9. **No default route.** Startup error kept; actionable message, release note, injected detector
+   in tests.
