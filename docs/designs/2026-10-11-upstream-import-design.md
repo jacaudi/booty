@@ -232,7 +232,7 @@ item 8.
 
 - New exported renderer in `pkg/tftp` shared by TFTP and HTTP:
   `RenderBootScript(host *hardware.Host, urlHost string) (script, kind string)` and
-  `RenderMenuSelection(host *hardware.Host, selection, urlHost string) string`.
+  `MenuSelectionScript(host *hardware.Host, filename, urlHost string) string` (the existing `menuSelectionScript`, exported).
 - New open, read-only base-mux routes in `pkg/http`:
   `GET /booty.ipxe?mac=…` and `GET /menu/{selection}/boot.ipxe?mac=…`. Host from `?mac=`
   (normalised; malformed → unidentified), else ARP (injected function, as item 0b).
@@ -381,6 +381,15 @@ Plan files under `docs/plans/2026-10-11-upstream-import/`, each phase green on
 5. `DoInstall` no longer changes (item 7); it never had an effect.
 6. Absolute symlinks under `dataDir` are not followed over TFTP (item 8).
 7. Butane experimental variants (item 12).
+
+### Known risks not addressed here
+
+- `hardware.trackUnknown` (`pkg/hardware/mac.go:550`) keeps unknown MACs with no size cap.
+  `GET /booty.ipxe?mac=<random>` (item 7) is a new unauthenticated way to grow it;
+  `/ignition.json?mac=` already was. Capping it is follow-up work.
+- booty's proxyDHCP broadcasts from a socket bound to `0.0.0.0`. On a host with several
+  interfaces, the reply may leave through the default-route interface. Plan phase 5 measures this
+  (`NOROUTE=1`); fixing it belongs with `--proxyDHCPListen` / routed boot (#71).
 
 ---
 

@@ -38,17 +38,19 @@ See `README.md`. Phase 7 must be done first: go-task v3.54.0 needs go ≥ 1.26.4
 
 **Files:** Create `taskfile.yml`, `.golangci.yml`; Delete `Makefile`.
 
-- [ ] **Step 1: Install the tools.**
+- [ ] **Step 1: Install the tools.** Every later step in this phase assumes `$HOME/go/bin` is on `PATH`.
 
 ```bash
+export PATH=$HOME/go/bin:$PATH
 GOBIN=$HOME/go/bin go install github.com/go-task/task/v3/cmd/task@v3.54.0
 V=2.14.0
+TMP=$(mktemp -d) && cd "$TMP"
 curl -sSfLO https://github.com/golangci/golangci-lint/releases/download/v$V/golangci-lint-$V-linux-amd64.tar.gz
 curl -sSfLO https://github.com/golangci/golangci-lint/releases/download/v$V/golangci-lint-$V-checksums.txt
 grep "golangci-lint-$V-linux-amd64.tar.gz" golangci-lint-$V-checksums.txt | sha256sum -c
 tar xzf golangci-lint-$V-linux-amd64.tar.gz && mv golangci-lint-$V-linux-amd64/golangci-lint $HOME/go/bin/
-rm -rf golangci-lint-$V-linux-amd64* golangci-lint-$V-checksums.txt
-$HOME/go/bin/task --version && $HOME/go/bin/golangci-lint version
+cd - >/dev/null && rm -rf "$TMP"
+task --version && golangci-lint version
 ```
 
 Expected:
@@ -57,6 +59,7 @@ Expected:
 - `golangci-lint version` prints `golangci-lint has version 2.14.0 …`.
 
 The binary install follows golangci-lint's docs, which advise against `go install` (`install/local.md:116-118`). govulncheck was installed in phase 7.
+- [ ] **Step 1b: Make the tree gofmt-clean**, since `task fmt` gates the exit check. Eight files were not gofmt-clean at `f36482c`: `pkg/cache/debiandvd_test.go`, `pkg/cache/list.go`, `pkg/db/db.go`, `pkg/db/host.go`, `pkg/hardware/mac.go`, `pkg/http/api_cache.go`, `pkg/http/api_targets_test.go` and `pkg/tftp/menu_test.go`. Run `gofmt -l $(git ls-files '*.go')`, then `gofmt -w` on exactly the files it lists, then `go build ./... && go test ./...`. Commit with `git commit -am "style: gofmt"`. Expected afterwards: `gofmt -l $(git ls-files '*.go')` prints nothing.
 - [ ] **Step 2: Create `.golangci.yml`** containing exactly:
 
 ```yaml
@@ -248,16 +251,16 @@ ENTRYPOINT [ "/booty" ]
   | `GPL version 2 only` | `GPL-2.0-only` |
   | `GPL version 2 (or, at your option, any later version)` | `GPL-2.0-or-later` |
 
-  The label is `MIT AND ` followed by the distinct ids joined with ` AND `. If `LICENCE.txt` contains any other licence text, stop and report it; do not invent an SPDX id. If `boot/LICENCE.txt` does not exist yet, finish phase 5 first.
+  The label is `MIT AND ` followed by the distinct ids, **sorted alphabetically**, joined with ` AND ` (for example `MIT AND GPL-2.0-only AND GPL-2.0-or-later`). Replace the placeholder text in the `LABEL` line with it. If `LICENCE.txt` contains any other licence text, stop and report it; do not invent an SPDX id. If `boot/LICENCE.txt` does not exist yet, finish phase 5 first.
 - [ ] **Step 2: Verify** (requires Docker; if Docker is not available, start `dockerd` as phase 5 does, or report that this step could not run):
   - `task image` succeeds.
   - `docker run --rm booty:dev --help` prints usage.
-  - `docker inspect booty:dev --format '{{.Config.User}}|{{json .Config.ExposedPorts}}'` prints `|{"69/udp":{},"8080/tcp":{}}`. An empty `User` means root: distroless `static-debian13:latest` runs as user `0` (`research/tooling-qemu.md` §4).
+  - `docker inspect booty:dev --format '{{.Config.User}}|{{json .Config.ExposedPorts}}'` prints `0|{"69/udp":{},"8080/tcp":{}}`. `static-debian13:latest` sets `User` to `0`, root (`research/tooling-qemu.md` §4).
 - [ ] **Step 3:** Commit: `git add Dockerfile && git commit -m "build(docker): npm ci, cached module layer, stripped binary, OCI labels, distroless static-debian13"`.
 
 ### Task 4: Docs
 
-- [ ] **Step 1:** `README.md:282-293` ("Building from source"):
+- [ ] **Step 1:** README section `## Building from source`:
   - replace the `make` block with `task build`, `task run`, `task image` and `task image:buildx`, each with the same comments;
   - add the line `Install go-task: go install github.com/go-task/task/v3/cmd/task@v3.54.0`;
   - change "distroless image" to "distroless static image".
@@ -267,7 +270,7 @@ ENTRYPOINT [ "/booty" ]
   - add the golangci-lint install commands from Task 2 Step 1;
   - add a "Known findings" paragraph: `golangci-lint (default linters) reports <N> issues, mostly errcheck; govulncheck reports none called after the go1.26.9 bump. Lint findings are not yet fixed.`
 - [ ] **Step 4:** `docs/standards.md`:
-  - §1.1 (line 15): fill in `Go version: go1.26.9 toolchain (go.mod)`;
+  - §1.1: replace the line `- Go version: _TBD_` with `- Go version: go1.26.9 toolchain (go.mod)`;
   - change `base-debian12` to `static-debian13` and `make docker-buildx` to `task image:buildx`;
   - lines 254-255: append the sentence `2026-10-11: moved to gcr.io/distroless/static-debian13 (debian12 images are no longer rebuilt upstream).`
 - [ ] **Step 5:** Commit: `git add README.md docs && git commit -m "docs: task-based build, lint/vuln, static-debian13"`.

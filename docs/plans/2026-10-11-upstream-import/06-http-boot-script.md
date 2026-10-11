@@ -36,10 +36,10 @@ See `README.md`. Depends on phase 1 (`arpFunc`, `arpLookup`, `requestFromMAC` in
 
 **Interfaces:**
 - Produces (package `tftp`):
-  - `func URLHost() string`: `viper.GetString(config.ServerIP)`, plus `":<port>"` unless `viper.GetInt(config.ServerHttpPort) == 80`. This is the existing expression at `tftp.go:137-141`, moved.
+  - `func URLHost() string`: `viper.GetString(config.ServerIP)`, plus `":<port>"` unless `viper.GetInt(config.ServerHttpPort) == 80`. This is the existing `urlHost := viper.GetString(config.ServerIP)` / `if hostPort != 80` block in `readHandler`, moved.
   - `func StubScript(urlHost string) string`: returns exactly `"#!ipxe\nchain http://" + urlHost + "/booty.ipxe?mac=${mac} || shell\n"`.
   - `func RenderBootScript(host *hardware.Host, urlHost string) (script, kind string)`: the `booty.ipxe` branch body. `kind` is one of `"holding"`, `"assigned"`, `"menu"`.
-  - `func RenderMenuSelection(host *hardware.Host, filename, urlHost string) string`: the renamed `menuSelectionScript`.
+  - `func MenuSelectionScript(host *hardware.Host, filename, urlHost string) string`: the existing `menuSelectionScript`, exported (capitalised only). It is deliberately not named after `renderMenuSelection` (`menu.go:67`), which stays unexported and is a different function.
   - `renderMenu(inWindow, archived []cache.CacheEntry, urlHost string) string`: the parameter changes from bare server IP to `urlHost`.
 
 - [ ] **Step 1: Write the failing tests** in `pkg/tftp/render_test.go`:
@@ -101,14 +101,14 @@ func TestRenderBootScriptKinds(t *testing.T) {
     - `chain http://<urlHost>/booty.ipxe?mac=${mac} || shell`
 
     Update its doc comment ("urlHost is serverIP[:port]").
-  - In `menuSelectionScript`, build the holding fallback with `holdingScript(urlHost)` (`tftp.go:231`) instead of the inline duplicate (lines 101-104). Rename the function to `RenderMenuSelection`.
-- [ ] **Step 4: Create `pkg/tftp/render.go`** with `URLHost`, `StubScript` and `RenderBootScript`. Move the `switch kind` body from `readHandler`'s `booty.ipxe` branch (`tftp.go:155-180`) into `RenderBootScript`. In the menu arm, call `renderMenu(inWindow, archEntries, urlHost)`; previously it passed `viper.GetString(config.ServerIP)`.
+  - In `menuSelectionScript`, build the holding fallback with `holdingScript(urlHost)` (`tftp.go:231`) instead of the inline duplicate (lines 101-104). Export it as `MenuSelectionScript`.
+- [ ] **Step 4: Create `pkg/tftp/render.go`** with `URLHost`, `StubScript` and `RenderBootScript`. Move the `switch kind` body from `readHandler`'s `if filename == "booty.ipxe" {` branch into `RenderBootScript`. In the menu arm, call `renderMenu(inWindow, archEntries, urlHost)`; previously it passed `viper.GetString(config.ServerIP)`.
 - [ ] **Step 5: Simplify `readHandler`** (the method from phase 2):
-  - delete the DoInstall flip (lines 125-133 at `f36482c`);
+  - delete the DoInstall flip: the `if host.DoInstall && filename == "booty.ipxe" {` block and its body (it calls `hardware.WriteMacAddress` with `modified.DoInstall = false`);
   - move the ARP + `hardware.GetMacAddress` block into a method `(s *server) hostFromARP(ip net.IP) *hardware.Host`, called **only** in the `menu/` and `pxelinux.cfg/default` branches;
   - replace the URL-host lines with `urlHost := URLHost()`;
   - `booty.ipxe` branch: serve `StubScript(urlHost)` with no ARP, logging `"kind", "stub"`;
-  - `menu/` branch: `RenderMenuSelection(s.hostFromARP(raddr.IP), filename, urlHost)`.
+  - `menu/` branch: `MenuSelectionScript(s.hostFromARP(raddr.IP), filename, urlHost)`.
 - [ ] **Step 6: Update the existing tests that assert TFTP chains:**
   - `menu_test.go:42`: expect `chain http://10.0.0.1/menu/${sel}/boot.ipxe?mac=${mac}`.
   - `menu_test.go:46`: expect `chain http://10.0.0.1/booty.ipxe?mac=${mac}`.
@@ -117,7 +117,7 @@ func TestRenderBootScriptKinds(t *testing.T) {
   - `tftp_test.go:301-313` (`TestHoldingTemplateExists`): assert the template contains `http://[[server]]/booty.ipxe?mac=${mac}` and does **not** contain `tftp://`. Replace the comment at 306-307 with: `The holding loop re-chains over HTTP so the MAC travels in the URL (design item 7).`
   - `tftp_test.go:579-583`: change the empty-marker check from `tftp:///` to `http:///` and the message to `[[server]] substituted as empty`.
   - `tool_scripts_test.go:214` and `:233`: expect `chain http://[[server]]/booty.ipxe?mac=${mac}`.
-  - Callers of `menuSelectionScript` in tests: rename them to `RenderMenuSelection`.
+  - Callers of `menuSelectionScript` in tests: update them to `MenuSelectionScript`.
 - [ ] **Step 7:** Run `go vet ./pkg/tftp/ && go test -race ./pkg/tftp/`. Expected: `ok`.
 - [ ] **Step 8:** Commit: `git add pkg/tftp && git commit -m "feat(tftp): booty.ipxe over TFTP becomes a stub; scripts re-chain over HTTP with ?mac=; drop the DoInstall flip"`.
 
@@ -126,15 +126,16 @@ func TestRenderBootScriptKinds(t *testing.T) {
 **Files:**
 - Create: `pkg/http/bootscript.go`, `pkg/http/bootscript_test.go`
 - Modify: `pkg/http/http.go` (`baseMux`, lines 32-54)
+- Modify: `pkg/http/preseed.go` (`identifyHost`, lines 147-165)
 
 **Interfaces:**
-- Consumes: `tftp.URLHost`, `tftp.RenderBootScript`, `tftp.RenderMenuSelection`, plus `arpFunc`/`arpLookup` (phase 1).
+- Consumes: `tftp.URLHost`, `tftp.RenderBootScript`, `tftp.MenuSelectionScript`, plus `arpFunc`/`arpLookup` (phase 1).
 - Produces:
-  - `func hostFromRequest(r *http.Request, arp arpFunc) *hardware.Host`:
-    - `?mac=` present and normalisable → `hardware.GetMacAddress` (which records unknown MACs);
-    - `?mac=` present but malformed → `nil`;
-    - `?mac=` absent → ARP on `r.RemoteAddr`, then `GetMacAddress`;
-    - any lookup error → `nil`.
+  - `func identifyHostWith(r *http.Request, arp arpFunc) *hardware.Host`: the body of the existing `identifyHost(r)` (`pkg/http/preseed.go:147-165`), with its direct `arping.Ping` call replaced by `arp`. `identifyHost(r)` becomes a one-line wrapper, `return identifyHostWith(r, arpLookup)`, so `/preseed` is unchanged (CLAUDE.md DRY rule). Behaviour, unchanged from `identifyHost` except for the malformed case:
+    - an empty `?mac=` counts as absent;
+    - a non-empty `?mac=` → `hardware.GetMacAddress` (which records unknown MACs and returns an error for a malformed MAC);
+    - absent → ARP on `r.RemoteAddr`, then `GetMacAddress`;
+    - any error → `nil`.
   - `func bootScriptHandler(arp arpFunc) http.HandlerFunc` and `func menuSelectionHandler(arp arpFunc) http.HandlerFunc`.
 
 - [ ] **Step 1: Write the failing tests** in `pkg/http/bootscript_test.go`. Use `s := servingStore(t)`, `viper.Set(config.ServerHttpPort, 8080)`, and `noARP := func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp") }`. Seed the menu host with `hardware.WriteMacAddress(mac, hardware.Host{MAC: mac})` then `hardware.Approve(mac)` (`pkg/hardware/mac.go:369`). New rows default to `boot_mode='menu'` (`pkg/db/migrations/0001_init.sql`), so no `SetBootMode` call is needed.
@@ -154,8 +155,8 @@ func TestRenderBootScriptKinds(t *testing.T) {
 - [ ] **Step 2:** Run `go test ./pkg/http/ -run BootScript`. Expected: FAIL (undefined).
 - [ ] **Step 3: Implement `pkg/http/bootscript.go`.**
   - Both handlers set `Content-Type: text/plain; charset=utf-8`.
-  - `bootScriptHandler`: `script, kind := tftp.RenderBootScript(hostFromRequest(r, arp), tftp.URLHost())`; log `slog.Info("boot script", "kind", kind, "mac", r.URL.Query().Get("mac"))`; write `script`.
-  - `menuSelectionHandler`: `filename := strings.TrimPrefix(r.URL.Path, "/")`; write `tftp.RenderMenuSelection(hostFromRequest(r, arp), filename, tftp.URLHost())`.
+  - `bootScriptHandler`: `script, kind := tftp.RenderBootScript(identifyHostWith(r, arp), tftp.URLHost())`; log `slog.Info("boot script", "kind", kind, "mac", r.URL.Query().Get("mac"))`; write `script`.
+  - `menuSelectionHandler`: `filename := strings.TrimPrefix(r.URL.Path, "/")`; write `tftp.MenuSelectionScript(identifyHostWith(r, arp), filename, tftp.URLHost())`.
 - [ ] **Step 4: Register in `baseMux`** after the `/preseed` line:
 
 ```go
@@ -170,12 +171,19 @@ func TestRenderBootScriptKinds(t *testing.T) {
 
 **Files:** Test `pkg/http/bootscript_test.go`; Modify `README.md:242-244`, `docs/schema/API.md:48-57`, `docs/schema/DATABASE.md:30,145`, `docs/BOOT-MENU.md:245-289`, `README.md:303-308`.
 
-- [ ] **Step 1: Write the test** `TestBootScriptDoesNotChangeDoInstall`:
+- [ ] **Step 1: Write the tests.** First `TestTFTPStubDoesNotChangeDoInstall` in `pkg/tftp/server_test.go`:
+  - `store := db.Open(t.TempDir()+"/b.db")`; `hardware.SetStore(store)` with cleanup `hardware.SetStore(nil); store.Close()`;
+  - `hardware.WriteMacAddress("aa:bb:cc:dd:ee:d0", hardware.Host{MAC: "aa:bb:cc:dd:ee:d0", DoInstall: true})`;
+  - `s, c := startTestServer(t, t.TempDir(), nil)` with its ARP returning `aa:bb:cc:dd:ee:d0`. `startTestServer` hardcodes a failing ARP, so build this server with `Start(...)` directly and the same client construction;
+  - `c.Receive("booty.ipxe", "octet")` returns the stub;
+  - `hardware.GetMacAddress` still reports `DoInstall == true`.
+
+  Then `TestBootScriptDoesNotChangeDoInstall` in `pkg/http/bootscript_test.go`:
   - seed a host via `hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, DoInstall: true})`;
   - GET `/booty.ipxe?mac=<mac>`;
   - re-read with `hardware.GetMacAddress(mac)`;
   - assert `DoInstall` is still `true`.
-- [ ] **Step 2:** Run `go test ./pkg/http/ -run TestBootScriptDoesNotChangeDoInstall`. Expected: `ok` (Task 1 removed the only writer).
+- [ ] **Step 2:** Run `go test ./pkg/tftp/ -run TestTFTPStubDoesNotChangeDoInstall && go test ./pkg/http/ -run TestBootScriptDoesNotChangeDoInstall`. Expected: `ok` for both (Task 1 removed the only writer).
 - [ ] **Step 3: Docs.**
   - `README.md:242-244` ("One-shot install") → `**DoInstall.** The host record carries a DoInstall flag for a future install-once feature. booty does not act on it yet.`
   - `docs/schema/API.md` TFTP table:
@@ -187,7 +195,7 @@ func TestRenderBootScriptKinds(t *testing.T) {
     - steps table rows 1 and 3: TFTP fetches a stub, the HTTP `/booty.ipxe?mac=` renders the menu, and selections chain `http://<serverIP>[:port]/menu/.../boot.ipxe?mac=${mac}`;
     - Troubleshooting "same layer-2 segment": identification uses the MAC iPXE reports, and ARP is only a fallback;
     - Limitations: delete the "TFTP-only" bullet; change the layer-2 bullet to `Routed networks: the boot script and menu work across routers (identification by ?mac=), but TFTP and proxyDHCP still need L2 adjacency or a relay (--proxyDHCPRelay), and Talos cluster members need ARP (design item 0b).`
-  - `README.md:303-308` (VLAN note): same correction as the BOOT-MENU limitation.
+  - README Deployment notes, the **Networking** bullet that mentions VLAN/subnet and issue #71: same correction as the BOOT-MENU limitation.
   - `docs/releases/UNRELEASED.md` `## Changes`: `booty.ipxe is now rendered over HTTP (/booty.ipxe?mac=) and identifies hosts by the MAC iPXE reports; TFTP serves a one-line stub. DoInstall is no longer cleared on boot; it never changed what booted.`
 - [ ] **Step 4:** Commit: `git add pkg/http README.md docs && git commit -m "docs: HTTP boot script, MAC identification and DoInstall"`.
 

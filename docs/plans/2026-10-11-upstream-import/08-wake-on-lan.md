@@ -60,13 +60,13 @@ See `README.md`. `pkg/power` must not import `pkg/hardware`: that import would d
 - Consumes: `power.Waker` (Task 1).
 - Produces: field `Waker interface { Wake(ctx context.Context, mac, hostIP string) ([]string, error) }` on `APIDeps`. A nil value makes the operation answer 503. The operation is `wake-host`.
 
-- [ ] **Step 1: Write the failing tests** in `pkg/http/api_hosts_test.go`. Add a fake: `type fakeWaker struct{ calls []string; sent []string; err error }`, whose `Wake` appends `mac+"|"+hostIP` to `calls` and returns `(sent, err)`. Use `deps := hostsTestSetup(t)`, set `deps.Waker = fw`, then `api := newTestAPI(t, deps)`.
+- [ ] **Step 1: Write the failing tests** in `pkg/http/api_hosts_test.go`. Add a fake: `type fakeWaker struct{ calls []string; sent []string; err error }`, whose `Wake` appends `mac+"|"+hostIP` to `calls` and returns `(sent, err)`. Use `deps := hostsTestSetup(t)`, set `deps.Waker = fw`, then `api := newTestAPI(t, deps)`. Paths include the `/api/v1` prefix, as the existing tests do (`api_hosts_test.go:37`).
 
   | case | setup | request | expected |
   |---|---|---|---|
-  | wakes known host | `hardware.WriteMacAddress("aa:bb:cc:dd:ee:b0", hardware.Host{MAC: "aa:bb:cc:dd:ee:b0", IP: "10.0.0.7"})`; `fw.sent = []string{"10.0.0.255:9"}` | `api.Post("/hosts/aa:bb:cc:dd:ee:b0/wake")` | 200; body JSON `{"sentTo":["10.0.0.255:9"]}`; `fw.calls == []string{"aa:bb:cc:dd:ee:b0|10.0.0.7"}` |
-  | unknown host | none | `api.Post("/hosts/aa:bb:cc:dd:ee:b1/wake")` | 404; `len(fw.calls) == 0` |
-  | malformed MAC | none | `api.Post("/hosts/zz/wake")` | 422 |
+  | wakes known host | `hardware.WriteMacAddress("aa:bb:cc:dd:ee:b0", hardware.Host{MAC: "aa:bb:cc:dd:ee:b0", IP: "10.0.0.7"})`; `fw.sent = []string{"10.0.0.255:9"}` | `api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:b0/wake")` | 200; body JSON `{"sentTo":["10.0.0.255:9"]}`; `fw.calls == []string{"aa:bb:cc:dd:ee:b0|10.0.0.7"}` |
+  | unknown host | none | `api.Post("/api/v1/hosts/aa:bb:cc:dd:ee:b1/wake")` | 404; `len(fw.calls) == 0` |
+  | malformed MAC | none | `api.Post("/api/v1/hosts/zz/wake")` | 422 |
   | send failed | known host; `fw.err = errors.New("no destination accepted the packet")` | wake | 502 |
   | no waker | `deps.Waker = nil` | wake | 503 |
 
