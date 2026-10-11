@@ -29,10 +29,17 @@ func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 // machineConfigHandler is handleMachineConfigRequest with the ARP lookup
 // injected.
 //
-//nolint:gocognit // pre-existing handler complexity; this change only injects the ARP lookup and gates members
+//nolint:gocognit,funlen // pre-existing handler complexity; this change only injects the ARP lookup and gates members, then validates the hostname
 func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("machineconfig request", "uri", r.RequestURI)
+
+		if h := r.URL.Query().Get("hostname"); h != "" {
+			if err := hardware.ValidateHostname(h); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid hostname", err)
+				return
+			}
+		}
 
 		macAddress := r.URL.Query().Get("mac")
 		if macAddress == "" {
