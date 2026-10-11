@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AutoComplete, Badge, Button, Drawer, Form, Modal, Popconfirm, Select, Space, Tabs, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { isPending, type Host, type HostHealth } from '../api/types'
@@ -25,13 +25,19 @@ export default function HostsView() {
   const [healthFor, setHealthFor] = useState<string | null>(null)
   const [health, setHealth] = useState<HostHealth | null>(null)
 
+  // The MAC most recently requested: a slow response for an earlier host must
+  // not overwrite the drawer of the one opened since.
+  const healthReq = useRef<string | null>(null)
+
   const openHealth = async (mac: string) => {
+    healthReq.current = mac
     setHealthFor(mac)
     setHealth(null)
     try {
-      setHealth((await getHostHealth(mac)) ?? null)
+      const h = (await getHostHealth(mac)) ?? null
+      if (healthReq.current === mac) setHealth(h)
     } catch (e) {
-      message.error(e instanceof Error ? e.message : String(e))
+      if (healthReq.current === mac) message.error(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -261,8 +267,8 @@ export default function HostsView() {
               <div>None</div>
             ) : (
               <ul>
-                {health.failedUnits.map((u) => (
-                  <li key={u}>{u}</li>
+                {health.failedUnits.map((u, i) => (
+                  <li key={`${i}-${u}`}>{u}</li>
                 ))}
               </ul>
             )}
