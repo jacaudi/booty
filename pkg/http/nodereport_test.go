@@ -2,7 +2,9 @@ package http
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,6 +31,15 @@ func seedReportHost(t *testing.T, s *db.Store, mac string) {
 	if err := s.UpsertHost(db.Host{MAC: mac}); err != nil {
 		t.Fatalf("UpsertHost: %v", err)
 	}
+}
+
+// rowARP answers 10.1.0.<n> with nodeReportMAC(n), so each table row's
+// RemoteAddr ARP-resolves to its own MAC. Any other address fails.
+func rowARP(ip net.IP) (net.HardwareAddr, error) {
+	if v4 := ip.To4(); v4 != nil && v4[0] == 10 && v4[1] == 1 && v4[2] == 0 {
+		return net.ParseMAC(nodeReportMAC(int(v4[3])))
+	}
+	return nil, errors.New("no reply")
 }
 
 func postReport(rr *reportReceiver, remote, query, token, body string) *httptest.ResponseRecorder {
@@ -199,6 +210,38 @@ func TestNodeReportStatuses(t *testing.T) {
 				)
 			},
 		},
+		{
+			"valid token, ARP names another MAC",
+			http.StatusUnauthorized,
+			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				mac := nodeReportMAC(0)
+				seedReportHost(t, s, mac)
+				rr.arp = fixedARP("aa:bb:cc:dd:ee:99")
+				return postReport(
+					rr,
+					fmt.Sprintf("10.1.0.%d:1000", row),
+					"?mac="+mac,
+					nodereport.Token(key, mac, 0),
+					reportBody,
+				)
+			},
+		},
+		{
+			"valid token, ARP fails",
+			http.StatusUnauthorized,
+			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				mac := nodeReportMAC(0)
+				seedReportHost(t, s, mac)
+				rr.arp = failingARP
+				return postReport(
+					rr,
+					fmt.Sprintf("10.1.0.%d:1000", row),
+					"?mac="+mac,
+					nodereport.Token(key, mac, 0),
+					reportBody,
+				)
+			},
+		},
 	}
 	for i, tc := range tests {
 		row := i // MAC aa:bb:cc:dd:ee:c<row>, RemoteAddr 10.1.0.<row>
@@ -206,7 +249,7 @@ func TestNodeReportStatuses(t *testing.T) {
 			s := servingStore(t)
 			seedReportHost(t, s, nodeReportMAC(0))
 			seedReportHost(t, s, nodeReportMAC(1))
-			rr := newReportReceiver(s, key, nodeReportClock())
+			rr := newReportReceiver(s, key, nodeReportClock(), rowARP)
 			if w := tc.run(t, rr, s, row); w.Code != tc.want {
 				t.Fatalf("status = %d, want %d (body %q)", w.Code, tc.want, w.Body.String())
 			}
@@ -216,7 +259,7 @@ func TestNodeReportStatuses(t *testing.T) {
 
 func TestNodeReportMethodNotAllowed(t *testing.T) {
 	s := servingStore(t)
-	rr := newReportReceiver(s, nodeReportKey(), nodeReportClock())
+	rr := newReportReceiver(s, nodeReportKey(), nodeReportClock(), rowARP)
 	w := httptest.NewRecorder()
 	rr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/node/report?mac="+nodeReportMAC(0), nil))
 	if w.Code != http.StatusMethodNotAllowed {
@@ -254,7 +297,7 @@ func TestNodeReport401BodiesIdentical(t *testing.T) {
 	s := servingStore(t)
 	seedReportHost(t, s, nodeReportMAC(0))
 	seedReportHost(t, s, nodeReportMAC(1))
-	rr := newReportReceiver(s, key, nodeReportClock())
+	rr := newReportReceiver(s, key, nodeReportClock(), rowARP)
 
 	missing := postReport(rr, "10.1.0.1:1000", "?mac="+nodeReportMAC(0), "", reportBody)
 	unknown := postReport(
@@ -272,7 +315,22 @@ func TestNodeReport401BodiesIdentical(t *testing.T) {
 		reportBody,
 	)
 	garbage := postReport(rr, "10.1.0.4:1000", "?mac="+nodeReportMAC(0), "not-a-token", reportBody)
-	for name, w := range map[string]*httptest.ResponseRecorder{"missing": missing, "unknown": unknown, "other": other, "garbage": garbage} {
+	// A valid token from an address that ARP-resolves to another MAC
+	// (10.1.0.1 answers as nodeReportMAC(1)).
+	arpMismatch := postReport(
+		rr,
+		"10.1.0.1:1000",
+		"?mac="+nodeReportMAC(0),
+		nodereport.Token(key, nodeReportMAC(0), 0),
+		reportBody,
+	)
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"missing":      missing,
+		"unknown":      unknown,
+		"other":        other,
+		"garbage":      garbage,
+		"arp mismatch": arpMismatch,
+	} {
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("%s: status = %d, want 401", name, w.Code)
 		}
@@ -288,7 +346,7 @@ func TestNodeReport401BodiesIdentical(t *testing.T) {
 // Random MACs from one IP must hit the per-IP limit before any DB lookup.
 func TestNodeReportFloodHitsPerIPLimitBeforeDB(t *testing.T) {
 	s := servingStore(t)
-	rr := newReportReceiver(s, nodeReportKey(), nodeReportClock())
+	rr := newReportReceiver(s, nodeReportKey(), nodeReportClock(), rowARP)
 	for i := 1; i <= 10; i++ {
 		mac := fmt.Sprintf("aa:bb:cc:00:00:%02x", i)
 		if w := postReport(
@@ -319,7 +377,7 @@ func TestNodeReportFloodHitsPerIPLimitBeforeDB(t *testing.T) {
 
 func TestNodeReportLimiterMapsAreBounded(t *testing.T) {
 	s := servingStore(t)
-	rr := newReportReceiver(s, nodeReportKey(), nodeReportClock())
+	rr := newReportReceiver(s, nodeReportKey(), nodeReportClock(), rowARP)
 	for i := range 5000 {
 		remote := fmt.Sprintf("10.%d.%d.%d:1000", i>>16&0xff, i>>8&0xff, i&0xff)
 		postReport(rr, remote, "?mac="+nodeReportMAC(0), "anything", reportBody)
@@ -383,8 +441,8 @@ func TestGenCacheLateLookupCannotResurrectOldGeneration(t *testing.T) {
 	s := servingStore(t)
 	key := nodeReportKey()
 	now := nodeReportClock()
-	rr := newReportReceiver(s, key, now)
 	mac := nodeReportMAC(1)
+	rr := newReportReceiver(s, key, now, fixedARP(mac))
 	seedReportHost(t, s, mac)
 
 	oldGen, err := rr.gens.Lookup(mac) // the in-flight lookup read generation N

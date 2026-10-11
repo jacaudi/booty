@@ -113,8 +113,10 @@ to `POST /node/report`. booty keeps the latest report per host and shows it on t
   `404` when it is off.
 - **Raw late_command.** A `d-i preseed/late_command` written in `raw_preseed:` replaces the composed
   one, including the health install.
-- **Token exposure.** The token sits inside each host's config, so anyone who can fetch that config
-  can forge that host's reports.
+- **Token exposure.** A report is accepted only when it carries the host's token **and** comes from
+  an address that ARP-resolves to the host's MAC (the same rule as Talos cluster members). The token
+  is in the host's config, which any LAN client can fetch, so the ARP check is what ties a report to
+  the machine. Hosts booted through a DHCP relay (not ARP-resolvable from booty) cannot send reports.
 - **Rotation.** `POST /api/v1/hosts/{mac}/report-token/rotate` takes effect immediately: booty updates
   its token cache on rotate, so the old token is refused at once. The new token reaches the host on
   its next config fetch, which for an installed Debian host means reinstalling.

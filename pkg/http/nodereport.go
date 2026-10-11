@@ -42,7 +42,7 @@ func nodeReportHandler(deps APIDeps) http.Handler {
 	if deps.NodeReports == nil {
 		return http.NotFoundHandler()
 	}
-	rr := newReportReceiver(deps.Store, deps.NodeReports.Key, time.Now)
+	rr := newReportReceiver(deps.Store, deps.NodeReports.Key, time.Now, arpLookup)
 	deps.NodeReports.receiver = rr
 	return rr
 }
@@ -104,21 +104,24 @@ func (c *genCache) put(mac string, gen int64, exp time.Time) {
 }
 
 // reportReceiver serves POST /node/report. It is unauthenticated at the
-// HTTP layer: the per-host HMAC token is its credential, and the per-IP and
-// per-MAC limiters bound pre-auth work.
+// HTTP layer: the per-host HMAC token plus an ARP match of the source IP to
+// the claimed MAC are its credential, and the per-IP and per-MAC limiters
+// bound pre-auth work.
 type reportReceiver struct {
 	store         *db.Store
 	key           []byte
 	now           func() time.Time
 	perIP, perMAC *nodereport.Limiter
 	gens          *genCache
+	arp           arpFunc
 }
 
-func newReportReceiver(store *db.Store, key []byte, now func() time.Time) *reportReceiver {
+func newReportReceiver(store *db.Store, key []byte, now func() time.Time, arp arpFunc) *reportReceiver {
 	return &reportReceiver{
 		store:  store,
 		key:    key,
 		now:    now,
+		arp:    arp,
 		perIP:  nodereport.NewLimiter(perIPLimit, time.Minute, limiterCapacity, now),
 		perMAC: nodereport.NewLimiter(1, perMACWindow, limiterCapacity, now),
 		gens:   newGenCache(store, now),
@@ -132,6 +135,37 @@ func (rr *reportReceiver) reject(w http.ResponseWriter, r *http.Request, rawMAC 
 	//nolint:sloglint // default logger: no injected logger in this package yet
 	slog.Debug("node report rejected", "status", code, "mac", rawMAC, "remote", r.RemoteAddr)
 	http.Error(w, http.StatusText(code), code)
+}
+
+// authorize applies the per-IP limit, the token check, the ARP match and the
+// per-MAC limit, in that order, and returns [http.StatusOK] or the status to
+// reject with.
+func (rr *reportReceiver) authorize(r *http.Request, mac, token string) int {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+	if !rr.perIP.Allow(ip) {
+		return http.StatusTooManyRequests
+	}
+	gen, err := rr.gens.Lookup(mac)
+	if err != nil {
+		return http.StatusUnauthorized
+	}
+	if !nodereport.ValidToken(rr.key, mac, gen, token) {
+		return http.StatusUnauthorized
+	}
+	// ARP sends a packet and can block, so it runs only after the per-IP
+	// limit and a valid token, and before the per-MAC limit so a spoofer
+	// cannot spend the real host's budget. The token is readable from the
+	// host's config, so this check is what ties the report to the machine.
+	if !requestFromMAC(r, mac, rr.arp) {
+		return http.StatusUnauthorized
+	}
+	if !rr.perMAC.Allow(mac) {
+		return http.StatusTooManyRequests
+	}
+	return http.StatusOK
 }
 
 func (rr *reportReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -151,25 +185,8 @@ func (rr *reportReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rr.reject(w, r, rawMAC, http.StatusUnauthorized)
 		return
 	}
-	ip, _, splitErr := net.SplitHostPort(r.RemoteAddr)
-	if splitErr != nil {
-		ip = r.RemoteAddr
-	}
-	if !rr.perIP.Allow(ip) {
-		rr.reject(w, r, rawMAC, http.StatusTooManyRequests)
-		return
-	}
-	gen, err := rr.gens.Lookup(mac)
-	if err != nil {
-		rr.reject(w, r, rawMAC, http.StatusUnauthorized)
-		return
-	}
-	if !nodereport.ValidToken(rr.key, mac, gen, token) {
-		rr.reject(w, r, rawMAC, http.StatusUnauthorized)
-		return
-	}
-	if !rr.perMAC.Allow(mac) {
-		rr.reject(w, r, rawMAC, http.StatusTooManyRequests)
+	if code := rr.authorize(r, mac, token); code != http.StatusOK {
+		rr.reject(w, r, rawMAC, code)
 		return
 	}
 	var h nodereport.Health
