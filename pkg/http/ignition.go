@@ -147,7 +147,7 @@ ExecStart=reboot
 WantedBy=default.target
 `
 			coreosConfig.Systemd.Units = append(coreosConfig.Systemd.Units, coreOSType.Unit{
-				Name:     "Reboot now please",
+				Name:     "booty-reboot.service",
 				Enabled:  &truePointer,
 				Contents: &contentsPointer,
 			})

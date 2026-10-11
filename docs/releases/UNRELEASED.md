@@ -28,3 +28,5 @@
 - Flatcar, CoreOS and Debian config URLs carry ?mac=${mac}, so hosts are identified without ARP.
 - The embedded undionly.kpxe, ipxe.efi and snponly.efi are served ahead of same-named files in --dataDir; booty logs a warning at startup for each shadowed file.
 - The container image is based on gcr.io/distroless/static-debian13 (was base-debian12). The Makefile is replaced by taskfile.yml (go-task), and the image publish workflows are removed; build images locally with task image.
+- The reboot config served to unknown hosts was invalid Ignition (its unit had no .service suffix), so Flatcar/CoreOS could stop at an Ignition error instead of rebooting; the unit is now booty-reboot.service.
+- HTTP /data/ now opens files through os.Root, like TFTP: symlinks that lead out of --dataDir are refused, and any file that cannot be opened returns 404 (previously some errors returned 403).

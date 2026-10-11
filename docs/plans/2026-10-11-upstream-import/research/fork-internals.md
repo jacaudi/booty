@@ -403,7 +403,7 @@ DoInstall: only writer outside DB plumbing is pkg/tftp/tftp.go:125-133; nothing 
    the template file to exist (ignition_test.go:37 comment).
 4. **Reboot config** when host == nil (127-151): `coreOSType.Config{}` from
    `github.com/coreos/ignition/v2/config/v3_5_experimental/types` (import at 15), `Ignition.Version = "3.4.0"`,
-   one unit `Name: "Reboot now please"`, `ExecStart=reboot`, `json.Marshal`, `w.Write` (no Content-Type set).
+   one unit `Name: "booty-reboot.service"`, `ExecStart=reboot`, `json.Marshal`, `w.Write` (no Content-Type set).
 5. Else `butaneConfig.TranslateBytes(tpl, Pretty:true)` (153), report handling (156-174), `w.Write(ignCfg)` (176).
    Item 10's JSON-level merge must hook both step 2 (after `renderConfig`) and step 5.
 
