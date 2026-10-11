@@ -29,8 +29,8 @@ func TestMigrate_CreatesTablesAndSetsUserVersion(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 9 {
-		t.Errorf("user_version = %d, want 9 after all migrations", uv)
+	if uv != 10 {
+		t.Errorf("user_version = %d, want 10 after all migrations", uv)
 	}
 }
 
@@ -53,21 +53,21 @@ func TestMigrate_IsIdempotentAcrossReopen(t *testing.T) {
 	if err := s2.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("read user_version: %v", err)
 	}
-	if uv != 9 {
-		t.Errorf("user_version = %d after reopen, want 9", uv)
+	if uv != 10 {
+		t.Errorf("user_version = %d after reopen, want 10", uv)
 	}
 }
 
 func TestMigration0003ConfigsRoles(t *testing.T) {
 	s := newTestStore(t) // Open() runs every migration, incl. 0003
 
-	// user_version reached 9 (nine migrations applied).
+	// user_version reached 10 (ten migrations applied).
 	var uv int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if uv != 9 {
-		t.Fatalf("user_version = %d, want 9", uv)
+	if uv != 10 {
+		t.Fatalf("user_version = %d, want 10", uv)
 	}
 
 	// The four new tables + the hosts.config_id column exist.
@@ -298,8 +298,8 @@ func TestMigration0006DebianConfig(t *testing.T) {
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatalf("user_version: %v", err)
 	}
-	if uv != 9 {
-		t.Fatalf("user_version = %d, want 9", uv)
+	if uv != 10 {
+		t.Fatalf("user_version = %d, want 10", uv)
 	}
 
 	// The rebuilt kind CHECK admits 'debianconfig' and still rejects junk.
@@ -468,8 +468,8 @@ func TestMigrate0008_DebianColumns(t *testing.T) {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&uv); err != nil {
 		t.Fatal(err)
 	}
-	if uv != 9 {
-		t.Fatalf("user_version = %d, want 9", uv)
+	if uv != 10 {
+		t.Fatalf("user_version = %d, want 10", uv)
 	}
 	// defaults apply to a row inserted without the new columns
 	if _, err := s.db.Exec(`INSERT INTO targets (os,arch,params,mode,retain_n,source,enabled)
