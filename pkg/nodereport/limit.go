@@ -1,0 +1,74 @@
+package nodereport
+
+import (
+	"container/list"
+	"sync"
+	"time"
+)
+
+// Limiter is a fixed-window rate limiter keyed by string, with a hard cap
+// on the number of keys it remembers: the least recently used key is
+// evicted first, so pre-auth traffic with spoofed keys cannot grow it.
+type Limiter struct {
+	mu       sync.Mutex
+	max      int
+	window   time.Duration
+	capacity int
+	now      func() time.Time
+	order    *list.List // front = most recently used; values are *limitEntry
+	entries  map[string]*list.Element
+}
+
+type limitEntry struct {
+	key   string
+	start time.Time
+	count int
+}
+
+// NewLimiter allows limit events per key per window and remembers at most
+// capacity keys. now supplies the clock.
+func NewLimiter(limit int, window time.Duration, capacity int, now func() time.Time) *Limiter {
+	return &Limiter{
+		max:      limit,
+		window:   window,
+		capacity: capacity,
+		now:      now,
+		order:    list.New(),
+		entries:  make(map[string]*list.Element),
+	}
+}
+
+// Allow records an event for key and reports whether it is within budget.
+func (l *Limiter) Allow(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if el, ok := l.entries[key]; ok {
+		l.order.MoveToFront(el)
+		e, _ := el.Value.(*limitEntry)
+		if now.Sub(e.start) >= l.window {
+			e.start, e.count = now, 0
+		}
+		if e.count >= l.max {
+			return false
+		}
+		e.count++
+		return true
+	}
+	l.entries[key] = l.order.PushFront(&limitEntry{key: key, start: now, count: 1})
+	for l.order.Len() > l.capacity {
+		oldest := l.order.Back()
+		l.order.Remove(oldest)
+		if e, ok := oldest.Value.(*limitEntry); ok {
+			delete(l.entries, e.key)
+		}
+	}
+	return l.max > 0
+}
+
+// Len returns the number of keys currently remembered.
+func (l *Limiter) Len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.order.Len()
+}
