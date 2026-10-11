@@ -60,45 +60,24 @@ func currentStore() *db.Store {
 //   - approved + unknown/empty    -> "holding"
 func bootDispatch(host *hardware.Host) (kind, osToLoad string) {
 	if host == nil || !host.Approved {
-		return "holding", ""
+		return kindHolding, ""
 	}
 	if host.BootMode == "assigned" {
 		osToLoad := host.AssignedOS
 		if osToLoad == "" {
 			osToLoad = host.OS
 		}
-		return "assigned", osToLoad
+		return kindAssigned, osToLoad
 	}
 	if host.BootMode == "menu" {
-		return "menu", ""
+		return kindMenu, ""
 	}
-	return "holding", ""
+	return kindHolding, ""
 }
 
-// bootScript renders the booty.ipxe script for host and reports which kind of
-// boot (holding, assigned, menu) it chose.
-func bootScript(host *hardware.Host, urlHost string) (string, string) {
-	kind, _ := bootDispatch(host)
-	switch kind {
-	case "assigned":
-		return kind, assignedScript(host, urlHost)
-	case "menu":
-		var inWindow, archEntries []cache.CacheEntry
-		if s := currentStore(); s != nil {
-			inWindow, archEntries = cache.PartitionCached(s)
-		} else {
-			inWindow = cache.ListCached() // no store: everything in-window (safe default)
-		}
-		return kind, renderMenu(inWindow, archEntries, viper.GetString(config.ServerIP))
-	default: // holding
-		return kind, holdingScript(urlHost)
-	}
-}
-
-// lookupHost identifies the requesting host by ARP and loads its record. It
-// returns nil when the MAC cannot be resolved or is unknown. A request for
-// booty.ipxe from a host flagged DoInstall clears the flag (best effort).
-func (s *server) lookupHost(ip net.IP, filename string) *hardware.Host {
+// hostFromARP identifies the requesting host by ARP and loads its record. It
+// returns nil when the MAC cannot be resolved or is unknown.
+func (s *server) hostFromARP(ip net.IP) *hardware.Host {
 	hwAddr, err := s.arp(ip)
 	if err != nil {
 		//nolint:sloglint // default logger: no injected logger in this package yet
@@ -111,16 +90,6 @@ func (s *server) lookupHost(ip net.IP, filename string) *hardware.Host {
 		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Warn("TFTP: error looking up host", "mac", macAddress, "err", lookupErr)
 	}
-	if host != nil && host.DoInstall && filename == "booty.ipxe" {
-		modified := *host
-		modified.DoInstall = false
-		if writeErr := hardware.WriteMacAddress(macAddress, modified); writeErr != nil {
-			//nolint:sloglint // default logger: no injected logger in this package yet
-			slog.Warn("TFTP: error persisting DoInstall flip", "mac", macAddress, "err", writeErr)
-			// Best-effort: continue serving the iPXE script even if
-			// the persist failed; the next boot will retry.
-		}
-	}
 	return host
 }
 
@@ -131,16 +100,10 @@ func (s *server) readHandler(filename string, rf io.ReaderFrom) error {
 	laddr := rf.(tftp.RequestPacketInfo).LocalIP()
 	slog.Debug("RRQ", "from", raddr.String(), "to", laddr.String())
 
-	host := s.lookupHost(raddr.IP, filename)
-
-	urlHost := viper.GetString(config.ServerIP)
-	hostPort := viper.GetInt(config.ServerHttpPort)
-	if hostPort != 80 {
-		urlHost = fmt.Sprintf("%s:%d", urlHost, hostPort)
-	}
+	urlHost := URLHost()
 
 	if strings.HasPrefix(filename, "menu/") && strings.HasSuffix(filename, "/boot.ipxe") {
-		toServe := menuSelectionScript(host, filename, urlHost)
+		toServe := MenuSelectionScript(s.hostFromARP(raddr.IP), filename, urlHost)
 		r := strings.NewReader(toServe)
 		n, rerr := rf.ReadFrom(r)
 		if rerr != nil {
@@ -152,19 +115,20 @@ func (s *server) readHandler(filename string, rf io.ReaderFrom) error {
 	}
 
 	if filename == "booty.ipxe" {
-		kind, toServe := bootScript(host, urlHost)
-		r := strings.NewReader(toServe)
+		r := strings.NewReader(StubScript(urlHost))
 		n, err := rf.ReadFrom(r)
 		if err != nil {
 			slog.Warn("error reading iPXE config", "err", err)
 			return err
 		}
-		slog.Info("bytes sent", "bytes", n, "file", filename, "kind", kind)
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Info("bytes sent", "bytes", n, "file", filename, "kind", "stub")
 		return nil
 	}
 
 	if filename == "pxelinux.cfg/default" {
 		// pxelinux.cfg/default — legacy syslinux path; selection preserved verbatim.
+		host := s.hostFromARP(raddr.IP)
 		pxeOS := "flatcar"
 		if host != nil && host.OS != "" {
 			pxeOS = host.OS

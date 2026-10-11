@@ -39,11 +39,11 @@ func TestRenderMenuItemsAndRetry(t *testing.T) {
 		t.Errorf("missing or wrong choose line:\n%s", got)
 	}
 	// selection chains to the synthetic menu path
-	if !strings.Contains(got, "chain tftp://10.0.0.1/menu/${sel}/boot.ipxe") {
+	if !strings.Contains(got, "chain http://10.0.0.1/menu/${sel}/boot.ipxe?mac=${mac}") {
 		t.Errorf("missing selection chain:\n%s", got)
 	}
-	// retry re-chains booty.ipxe over TFTP
-	if !strings.Contains(got, "chain tftp://10.0.0.1/booty.ipxe") {
+	// retry re-chains booty.ipxe over HTTP
+	if !strings.Contains(got, "chain http://10.0.0.1/booty.ipxe?mac=${mac}") {
 		t.Errorf("missing retry re-chain:\n%s", got)
 	}
 	// full-range ASCII guard — iPXE-build compatibility requires ASCII-only output
@@ -104,7 +104,7 @@ func TestMenuSelectionScript(t *testing.T) {
 		validFile   = "menu/talos/schemA/amd64/v1.10.5/boot.ipxe"
 		invalidFile = "menu/talos/schemA/amd64/v9.9.9/boot.ipxe" // not cached
 	)
-	holdingMarker := "tftp://" + server + "/booty.ipxe"
+	holdingMarker := "http://" + server + "/booty.ipxe?mac=${mac}"
 	validMarker := cache.CacheURLBase(server, "talos", "schemA", "amd64", "v1.10.5")
 
 	menuHost := &hardware.Host{Approved: true, BootMode: "menu"}
@@ -123,7 +123,7 @@ func TestMenuSelectionScript(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := menuSelectionScript(tc.host, tc.filename, server)
+			got := MenuSelectionScript(tc.host, tc.filename, server)
 			if tc.wantHolding {
 				if !strings.Contains(got, holdingMarker) {
 					t.Errorf("expected holding script (re-chains %q), got:\n%s", holdingMarker, got)
@@ -180,8 +180,8 @@ func TestRenderMenuSelectionRejects(t *testing.T) {
 		"menu/talos/schemA/amd64/v1.10.5/extra/boot.ipxe", // 5 segments
 		"menu/bogusos/-/amd64/v1.0.0/boot.ipxe",           // unknown os
 		"menu/talos/schemA/amd64/v9.9.9/boot.ipxe",        // not cached
-		"menu/talos/schemA/amd64/not-a-version/boot.ipxe",  // invalid version
-		"menu/talos/../amd64/v1.10.5/boot.ipxe",            // traversal
+		"menu/talos/schemA/amd64/not-a-version/boot.ipxe", // invalid version
+		"menu/talos/../amd64/v1.10.5/boot.ipxe",           // traversal
 	}
 	for _, f := range bad {
 		if _, err := renderMenuSelection(f, "10.0.0.1"); err == nil {

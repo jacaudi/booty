@@ -211,7 +211,7 @@ func TestZFSBootMenuGuardsBIOSTerminally(t *testing.T) {
 		t.Errorf("initrd lines = %d, want 0 (direct EFI chainload)\n%s", got, s)
 	}
 	// The guard branch must END the script, not fall through.
-	if !strings.Contains(s, "chain tftp://[[server-ip]]/booty.ipxe") {
+	if !strings.Contains(s, "chain http://[[server]]/booty.ipxe?mac=${mac}") {
 		t.Errorf("BIOS guard must re-chain rather than fall through:\n%s", s)
 	}
 	// The guard must be the LAST block, so nothing can fall into the boot path.
@@ -230,7 +230,7 @@ func TestUEFIShellGuardsBIOSTerminally(t *testing.T) {
 	}
 	// The guard branch must END the script, not fall through into whatever
 	// label follows in the generated menu.
-	if !strings.Contains(s, "chain tftp://[[server-ip]]/booty.ipxe") {
+	if !strings.Contains(s, "chain http://[[server]]/booty.ipxe?mac=${mac}") {
 		t.Errorf("BIOS guard must re-chain rather than fall through:\n%s", s)
 	}
 }
