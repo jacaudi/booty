@@ -387,6 +387,8 @@ Plan files under `docs/plans/2026-10-11-upstream-import/`, each phase green on
 - `hardware.trackUnknown` (`pkg/hardware/mac.go:550`) keeps unknown MACs with no size cap.
   `GET /booty.ipxe?mac=<random>` (item 7) is a new unauthenticated way to grow it;
   `/ignition.json?mac=` already was. Capping it is follow-up work.
+  - Update (2026-10-11, final fix wave): the list is now capped at 1024 entries
+    (`maxUnknownHosts`); the earliest-tracked MAC is evicted first.
 - booty's proxyDHCP broadcasts from a socket bound to `0.0.0.0`. On a host with several
   interfaces, the reply may leave through the default-route interface. Plan phase 5 measures this
   (`NOROUTE=1`); fixing it belongs with `--proxyDHCPListen` / routed boot (#71).
