@@ -10,124 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testCfg() Config {
-	return Config{
-		BootfileBIOS:  "undionly.kpxe",
-		BootfileUEFI:  "ipxe.efi",
-		BootfileARM64: "ipxe-arm64.efi",
-	}
-}
-
-// reqWithArch builds a minimal PXEClient DISCOVER carrying a client-arch option.
-func reqWithArch(t *testing.T, arch iana.Arch) *dhcpv4.DHCPv4 {
-	t.Helper()
-	req, err := dhcpv4.New(
-		dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
-		dhcpv4.WithOption(dhcpv4.OptClassIdentifier("PXEClient")),
-		dhcpv4.WithOption(dhcpv4.OptClientArch(arch)),
-	)
-	require.NoError(t, err)
-	return req
-}
-
-func TestSelectBootfile_Arch(t *testing.T) {
-	cfg := testCfg()
-	require.Equal(t, "undionly.kpxe", selectBootfile(reqWithArch(t, iana.INTEL_X86PC), cfg))
-	require.Equal(t, "ipxe.efi", selectBootfile(reqWithArch(t, iana.EFI_X86_64), cfg))
-	require.Equal(t, "ipxe.efi", selectBootfile(reqWithArch(t, iana.EFI_IA32), cfg))
-	require.Equal(t, "ipxe-arm64.efi", selectBootfile(reqWithArch(t, iana.EFI_ARM64), cfg))
-}
-
-func TestSelectBootfile_NoArchDefaultsBIOS(t *testing.T) {
-	cfg := testCfg()
-	req, err := dhcpv4.New(
-		dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
-		dhcpv4.WithOption(dhcpv4.OptClassIdentifier("PXEClient")),
-	)
-	require.NoError(t, err)
-	require.Equal(t, "undionly.kpxe", selectBootfile(req, cfg))
-}
-
-func TestSelectBootfile_IPXEUserClassWinsOverArch(t *testing.T) {
-	cfg := testCfg()
-	req := reqWithArch(t, iana.EFI_X86_64)
-	req.UpdateOption(dhcpv4.OptUserClass("iPXE"))
-	require.Equal(t, bootfileIPXEScript, selectBootfile(req, cfg))
-}
-
-func TestSelectBootfile_IPXELengthPrefixedUserClass(t *testing.T) {
-	cfg := testCfg()
-	req := reqWithArch(t, iana.EFI_X86_64)
-	// RFC-3004 length-prefixed: one class, len 4, "iPXE"
-	req.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionUserClassInformation, []byte{0x04, 'i', 'P', 'X', 'E'}))
-	require.Equal(t, bootfileIPXEScript, selectBootfile(req, cfg))
-}
-
-func replyCfg() Config {
-	c := testCfg()
-	c.ServerIP = net.IPv4(192, 168, 1, 10)
-	return c
-}
-
-func TestBuildReply_IgnoresNonPXEClient(t *testing.T) {
-	req, err := dhcpv4.New(
-		dhcpv4.WithMessageType(dhcpv4.MessageTypeDiscover),
-		dhcpv4.WithOption(dhcpv4.OptClassIdentifier("not-pxe")),
-	)
-	require.NoError(t, err)
-	_, ok := buildReply(req, replyCfg())
-	require.False(t, ok, "non-PXEClient requests must be dropped")
-}
-
-func TestBuildReply_DiscoverBecomesOffer(t *testing.T) {
-	resp, ok := buildReply(reqWithArch(t, iana.EFI_X86_64), replyCfg())
-	require.True(t, ok)
-	require.Equal(t, dhcpv4.MessageTypeOffer, resp.MessageType())
-}
-
-func TestBuildReply_RequestBecomesAck(t *testing.T) {
-	req := reqWithArch(t, iana.EFI_X86_64)
-	req.UpdateOption(dhcpv4.OptMessageType(dhcpv4.MessageTypeRequest))
-	resp, ok := buildReply(req, replyCfg())
-	require.True(t, ok)
-	require.Equal(t, dhcpv4.MessageTypeAck, resp.MessageType())
-}
-
-func TestBuildReply_NeverAssignsLease(t *testing.T) {
-	resp, ok := buildReply(reqWithArch(t, iana.EFI_X86_64), replyCfg())
-	require.True(t, ok)
-	require.True(t, resp.YourIPAddr.Equal(net.IPv4zero), "must not offer an IP address")
-}
-
-func TestBuildReply_SetsNextServerAndBootfile(t *testing.T) {
-	resp, ok := buildReply(reqWithArch(t, iana.EFI_X86_64), replyCfg())
-	require.True(t, ok)
-	require.Equal(t, "ipxe.efi", resp.BootFileName)
-	require.Equal(t, "192.168.1.10", resp.ServerHostName)
-}
-
-func TestBuildReply_UnknownMessageTypeDropped(t *testing.T) {
-	req := reqWithArch(t, iana.EFI_X86_64)
-	req.UpdateOption(dhcpv4.OptMessageType(dhcpv4.MessageTypeRelease))
-	_, ok := buildReply(req, replyCfg())
-	require.False(t, ok)
-}
-
-func TestBuildReply_EchoesClientMachineID(t *testing.T) {
-	req := reqWithArch(t, iana.EFI_X86_64)
-	guid := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10}
-	req.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionClientMachineIdentifier, guid))
-	resp, ok := buildReply(req, replyCfg())
-	require.True(t, ok)
-	require.Equal(t, guid, resp.Options.Get(dhcpv4.OptionClientMachineIdentifier))
-}
-
 // TestNewServerThenShutdown verifies the lifecycle invariant that a server which
 // was constructed but never Start()ed can still be Shutdown() cleanly — no panic,
 // no deadlock. T5 starts proxyDHCP best-effort, so a never-started server reaching
 // Shutdown is a real, reachable state.
 func TestNewServerThenShutdown(t *testing.T) {
-	s, err := NewServer(replyCfg())
+	s, err := NewServer(Config{ServerIP: net.IPv4(192, 0, 2, 10)})
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
@@ -140,30 +28,60 @@ func TestNewServerThenShutdown(t *testing.T) {
 	}
 }
 
-// TestHandleWritesReplyToSource proves handle wires buildReply to the socket: it
-// sends the reply to the request source (the UDP/4011 path, bootp=false) where a
-// loopback reader can observe it. Uses unprivileged 127.0.0.1 sockets so it runs
-// without root in CI. The bootp broadcast path (UDP/67 -> 255.255.255.255:68) is
-// integration glue, not loopback-observable, and is left to build/vet/race.
-func TestHandleWritesReplyToSource(t *testing.T) {
+func TestNewServerRequiresServerIP(t *testing.T) {
+	s, err := NewServer(Config{})
+	require.Error(t, err)
+	require.Nil(t, s)
+}
+
+// respondFixture returns a Server and a connected loopback pair: srvConn is
+// what respond writes through, cliConn is where the reply is observed.
+func respondFixture(t *testing.T) (*Server, *net.UDPConn, *net.UDPConn) {
+	t.Helper()
 	srvConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	require.NoError(t, err)
-	defer srvConn.Close()
+	t.Cleanup(func() { _ = srvConn.Close() })
 
 	cliConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	require.NoError(t, err)
-	defer cliConn.Close()
+	t.Cleanup(func() { _ = cliConn.Close() })
 
-	s := &Server{cfg: replyCfg(), done: make(chan struct{})}
-	s.handle(srvConn, cliConn.LocalAddr().(*net.UDPAddr), reqWithArch(t, iana.EFI_X86_64), false)
+	s := &Server{cfg: Config{ServerIP: net.IPv4(127, 0, 0, 1)}.withDefaults(), done: make(chan struct{})}
+	return s, srvConn, cliConn
+}
+
+// TestRespondSendsRequestAckToSource proves respond wires handle to the socket:
+// the 4011 ACK goes to the request source, where a loopback reader can see it.
+// It uses unprivileged 127.0.0.1 sockets so it runs without root in CI.
+func TestRespondSendsRequestAckToSource(t *testing.T) {
+	s, srvConn, cliConn := respondFixture(t)
+
+	req := pxePacket(t, dhcpv4.MessageTypeRequest, iana.EFI_X86_64)
+	s.respond(srvConn, cliConn.LocalAddr().(*net.UDPAddr), req, s.cfg.Port4011)
 
 	require.NoError(t, cliConn.SetReadDeadline(time.Now().Add(2*time.Second)))
-	buf := make([]byte, 1500)
+	buf := make([]byte, maxPacketSize)
 	n, _, err := cliConn.ReadFromUDP(buf)
 	require.NoError(t, err, "no reply delivered to the request source")
 
 	resp, err := dhcpv4.FromBytes(buf[:n])
 	require.NoError(t, err)
-	require.Equal(t, dhcpv4.MessageTypeOffer, resp.MessageType())
+	require.Equal(t, dhcpv4.MessageTypeAck, resp.MessageType())
 	require.Equal(t, "ipxe.efi", resp.BootFileName)
+}
+
+// TestRespondIgnoresRequestOn67 pins the EDK2 lease-decline fix at the socket
+// layer: a REQUEST on port 67 belongs to the site DHCP server.
+func TestRespondIgnoresRequestOn67(t *testing.T) {
+	s, srvConn, cliConn := respondFixture(t)
+
+	req := pxePacket(t, dhcpv4.MessageTypeRequest, iana.EFI_X86_64)
+	s.respond(srvConn, cliConn.LocalAddr().(*net.UDPAddr), req, s.cfg.Port67)
+
+	require.NoError(t, cliConn.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+	buf := make([]byte, maxPacketSize)
+	_, _, err := cliConn.ReadFromUDP(buf)
+	var ne net.Error
+	require.ErrorAs(t, err, &ne)
+	require.True(t, ne.Timeout(), "expected a read timeout, got %v", err)
 }
