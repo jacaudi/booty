@@ -182,8 +182,8 @@ func init() {
 	flags.StringVar(
 		&args.serverIP,
 		"serverIP",
-		"127.0.0.1",
-		"IP address that clients can connect to",
+		"",
+		"IP address clients use to reach booty; detected from the default route when empty",
 	)
 	flags.IntVar(
 		&args.serverHttpPort,
@@ -312,6 +312,28 @@ func resolveServerHTTPPort(serverHTTPPort, httpPort int) int {
 	return cmp.Or(serverHTTPPort, httpPort)
 }
 
+// resolveServerIP returns the address clients use to reach booty. An explicit
+// --serverIP always wins and is returned unchanged. Otherwise the address comes
+// from detect (the default route), and it must be a usable LAN IPv4 address: a
+// loopback, unspecified, IPv6 or unparseable result is refused, so booty never
+// advertises an address no client can reach.
+func resolveServerIP(explicit string, detect func() (string, error)) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	ip, err := detect()
+	if err != nil {
+		return "", fmt.Errorf("no default route (%w); set --serverIP to the address clients reach booty on", err)
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.IsLoopback() || parsed.IsUnspecified() || parsed.To4() == nil {
+		return "", fmt.Errorf(
+			"detected %q is not a usable LAN IPv4 address; set --serverIP to the address clients reach booty on",
+			ip)
+	}
+	return ip, nil
+}
+
 func run(cmd *cobra.Command, argv []string) error {
 	setupLogging(viper.GetBool(config.Debug))
 	slog.Info("Starting Booty!")
@@ -372,6 +394,18 @@ func run(cmd *cobra.Command, argv []string) error {
 			slog.Info("API token loaded", "path", tokenStore.Path(), "token", tokenStore.Token())
 		}
 	}
+
+	// Resolve the LAN address clients use to reach booty before anything reads
+	// ServerIP (proxyDHCP next-server, ClientRegistry, boot-config URLs).
+	serverIP, err := resolveServerIP(viper.GetString(config.ServerIP), config.DetectServerIP)
+	if err != nil {
+		return err
+	}
+	if viper.GetString(config.ServerIP) == "" {
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Info("serverIP autodetected", "ip", serverIP)
+	}
+	viper.Set(config.ServerIP, serverIP)
 
 	// Resolve the client-facing port before anything reads ServerHttpPort
 	// (TFTP boot-config URLs, HTTP ignition/machineconfig/preseed templates).
