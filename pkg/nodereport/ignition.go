@@ -2,6 +2,7 @@ package nodereport
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/coreos/ignition/v2/config"
@@ -19,6 +20,9 @@ func MergeIgnition(cfg []byte, script, unit string) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(cfg, &doc); err != nil {
 		return nil, fmt.Errorf("parse ignition config: %w", err)
+	}
+	if doc == nil {
+		return nil, errors.New("ignition config is not a JSON object")
 	}
 	storage := section(doc, "storage")
 	files, _ := storage["files"].([]any)
