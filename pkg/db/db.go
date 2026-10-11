@@ -44,4 +44,3 @@ func Open(path string) (*Store, error) {
 
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
-

@@ -213,7 +213,7 @@ func toDBHost(h Host) db.Host {
 		IgnitionFile: h.IgnitionFile, OS: h.OS, DoInstall: h.DoInstall, Schematic: h.Schematic,
 		Approved: h.Approved, BootMode: h.BootMode, AssignedOS: h.AssignedOS,
 		AssignedArch: h.AssignedArch, AssignedParams: h.AssignedParams, UUID: h.UUID, Serial: h.Serial,
-		ConfigID: h.ConfigID,
+		ConfigID:  h.ConfigID,
 		ClusterID: h.ClusterID, MachineType: h.MachineType, NodeConfigID: h.NodeConfigID,
 	}
 }
@@ -224,7 +224,7 @@ func fromDBHost(d db.Host) *Host {
 		IgnitionFile: d.IgnitionFile, OS: d.OS, DoInstall: d.DoInstall, Schematic: d.Schematic,
 		Approved: d.Approved, BootMode: d.BootMode, AssignedOS: d.AssignedOS,
 		AssignedArch: d.AssignedArch, AssignedParams: d.AssignedParams, UUID: d.UUID, Serial: d.Serial,
-		ConfigID: d.ConfigID,
+		ConfigID:  d.ConfigID,
 		ClusterID: d.ClusterID, MachineType: d.MachineType, NodeConfigID: d.NodeConfigID,
 	}
 }
