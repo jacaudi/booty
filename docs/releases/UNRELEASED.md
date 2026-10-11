@@ -18,3 +18,4 @@
 - New --proxyDHCPRelay.
 - --serverIP is detected from the default route when unset. Hosts or containers with no default route (for example --network none) now refuse to start until --serverIP is set; previously they started on 127.0.0.1, which no client can reach.
 - Butane 0.29 / Ignition 2.27: the fcos 1.6.0-experimental variant no longer translates (use fcos 1.6.0); flatcar 1.2.0-experimental now emits Ignition 3.7.0-experimental. Stable variants are unchanged.
+- proxyDHCP now boots UEFI firmware that sits beside another DHCP server: the PXE boot item uses vendor type 0x8000 (UEFI treated the previous type 0 as "boot locally" and cancelled with PXE-E21), and the boot-server ACK goes to the port the firmware sent from (4011).

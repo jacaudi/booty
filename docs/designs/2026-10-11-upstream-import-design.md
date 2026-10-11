@@ -423,7 +423,7 @@ Plan files under `docs/plans/2026-10-11-upstream-import/`, each phase green on
 
 1. `/machineconfig` CA exposure → item 0b interim fix in this import.
 2. `--tftpBlockSize` dropped (it would be a no-op).
-3. iPXE clients get `siaddr` + `booty.ipxe` on the OFFER; parity with upstream's 9 goldens kept.
+3. iPXE clients get `siaddr` + `booty.ipxe` on the OFFER; parity with upstream's 9 goldens kept. (superseded for the type byte by decision 12)
 4. Full health detail at `GET /api/v1/hosts/{mac}/health`.
 5. `--proxyDHCPRelay` opt-in with `replyDestination`.
 6. jsonparser bumped to v1.6.1.
@@ -433,6 +433,7 @@ Plan files under `docs/plans/2026-10-11-upstream-import/`, each phase green on
    plan phase 7; govulncheck must then report no called vulnerabilities.
 10. Base image `gcr.io/distroless/static-debian13` (debian12 is frozen upstream).
 11. `docs/plans/` is tracked in git (removed from `.gitignore`).
+12. proxyDHCP departs from upstream byte parity (maintainer, 2026-10-11, after the QEMU check): boot-server and menu type 0x8000 instead of 0 (EDK2 PxeBcBoot.c:937-941 treats 0 as local boot and aborts with PXE-E21), the ACK goes to the client's source port when it equals ciaddr (EDK2 listens on 4011 only, PxeBcDhcp4.c), and the ACK echoes the requested PXE_BOOT_ITEM. The 10 goldens differ from upstream only in that type byte. Upstream has the same bug.
 
 ## 9. Verified facts (sources)
 
