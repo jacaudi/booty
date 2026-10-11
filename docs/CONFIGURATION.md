@@ -34,6 +34,7 @@ config file.
 | `--talosConfigFile` | `config/machineconfig.yaml` | Talos machine-config template, relative to `--dataDir`. |
 | `--talosFactoryURL` | `https://factory.talos.dev` | Talos Image Factory base URL. |
 | `--secretsKey` | `""` (unset) | Path to an age identity file (`age-keygen` output) encrypting Talos cluster secrets and frozen node configs at rest. **Fail-closed** when unset: cluster create/import/add-member/export refuse with `422`. **Fail-fast** when set but invalid: refuses startup (see [below](#talos-cluster-authoring-p6)). |
+| `--nodeReports` | `false` | Opt in to node health reports: inject a boot-time report unit into Flatcar, Fedora CoreOS and `debianconfig` Debian configs and accept reports at `POST /node/report`. See [Node reports](#node-reports). |
 | `--proxyDHCPEnabled` | `false` | Enable the proxyDHCP responder (UDP 67 + 4011). |
 | `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | BIOS iPXE binary named in the proxyDHCP ACK (embedded for `undionly.kpxe` and `ipxe.efi`; other names are served from `--dataDir`). |
 | `--proxyDHCPBootfileUEFI` | `ipxe.efi` | UEFI (x86-64) iPXE binary named in the proxyDHCP ACK (embedded for `undionly.kpxe` and `ipxe.efi`; other names are served from `--dataDir`). |
@@ -92,6 +93,34 @@ set are kept. The window therefore **grows one release at a time** as new versio
 backfill** older versions upstream no longer advertises; there is no way to retroactively populate
 history that was never seen while the reconciler was running. Versions that age out of the window
 are archived, not deleted (see [schema/STORAGE.md](schema/STORAGE.md)).
+
+## Node reports
+
+With `--nodeReports`, booty injects a small systemd unit and script into each host's rendered config.
+Once the node reaches `multi-user.target`, the script POSTs the running OS version, kernel, firmware
+type, DMI vendor/product/BIOS version, failed units and an excerpt of the boot's error-level journal
+to `POST /node/report`. booty keeps the latest report per host and shows it on the Hosts page
+(Running and Last report columns, plus a health drawer).
+
+- **Which OSes.** Flatcar, Fedora CoreOS and Debian hosts configured through `debianconfig`. Raw
+  preseed files and Talos configs are never touched.
+- **Key.** Per-host tokens are derived from a key stored at `<dataDir>/node-report-key` (mode 0600),
+  created on first start with the feature on.
+- **Limits.** 10 requests per minute per source IP, 1 report per 10 seconds per host, 64 KiB per body.
+  The per-IP limit is shared by everything behind one NAT or reverse proxy; booty expects nodes to
+  reach it directly.
+- **Methods.** `/node/report` accepts only `POST`. Other methods get `405` when the feature is on and
+  `404` when it is off.
+- **Raw late_command.** A `d-i preseed/late_command` written in `raw_preseed:` replaces the composed
+  one, including the health install.
+- **Token exposure.** The token sits inside each host's config, so anyone who can fetch that config
+  can forge that host's reports.
+- **Rotation.** `POST /api/v1/hosts/{mac}/report-token/rotate` takes effect immediately: booty updates
+  its token cache on rotate, so the old token is refused at once. The new token reaches the host on
+  its next config fetch, which for an installed Debian host means reinstalling.
+- **Delete and re-add.** Deleting a host and later re-adding the same MAC restores its first token
+  (generation 0). To revoke every token, stop booty, delete `<dataDir>/node-report-key` and restart.
+  Every host then needs its config re-fetched.
 
 ## Boot config precedence (P4)
 

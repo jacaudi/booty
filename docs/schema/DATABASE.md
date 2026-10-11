@@ -153,6 +153,16 @@ P1c; remaining columns keep their defaults):
 | `cluster_id` | INTEGER (nullable) → `clusters(id)` | **P6.** The cluster this host is a member of. `NULL` = not a member; a host is in **at most one** cluster. Plain nullable column (same not-a-DB-FK rationale as `config_id`); referential cleanup waits the same way, on `DELETE /api/v1/clusters/{id}`. Set via `POST /clusters/{id}/members`, cleared via `DELETE /clusters/{id}/members/{mac}`. |
 | `machine_type` | TEXT (nullable) | **P6.** `controlplane` \| `worker` \| `NULL` (not a member). Written alongside `cluster_id`. |
 | `node_config_id` | INTEGER (nullable) → `cluster_node_configs(id)` | **P6.** The member's currently-active frozen revision. Serving's top rung (see [API.md](API.md#clusters-p6)): a host with `node_config_id` set is served that revision's bytes verbatim, ahead of every P4 resolve rung. |
+| `report_token_gen` | INTEGER NOT NULL DEFAULT 0 | Node report token generation (migration `0010`). Bumped by `POST /hosts/{mac}/report-token/rotate`; part of the per-host token derivation. |
+
+### `host_health`
+Latest node health report per host (migration `0010`).
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `mac` | TEXT PK → `hosts(mac)` `ON DELETE CASCADE` | Host the report belongs to. |
+| `received_at` | TEXT | RFC 3339 UTC time booty received it. |
+| `report` | TEXT | The normalized report as JSON. |
 
 > **As of P1c:** `approved`, `boot_mode`, `assigned_os`, `assigned_arch`, and `assigned_params`
 > are the columns booty now actively reads and writes. Migration `0001` (P1a) created all of these;
