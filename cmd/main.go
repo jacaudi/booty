@@ -39,6 +39,7 @@ var args struct {
 	cacheConcurrency    int
 	cacheMaxBytes       int64
 	httpPort            int
+	tftpPort            int
 	flatcarArchitecture string
 	coreOSArchitecture  string
 	serverIP            string
@@ -267,6 +268,8 @@ func init() {
 		"Number of newest config revisions to retain per config (the active revision is always kept)",
 	)
 
+	flags.IntVar(&args.tftpPort, "tftpPort", config.DefaultTFTPPort, "UDP port the TFTP server listens on")
+
 	Cmd.AddCommand(newVersionCmd())
 	Cmd.AddCommand(newConvertPreseedCmd())
 	Cmd.AddCommand(newTokenCmd())
@@ -463,7 +466,15 @@ func run(cmd *cobra.Command, argv []string) error {
 	)
 	reconciler.Start(ctx)
 
-	tftpServer := tftp.StartTFTP()
+	tftpErr := make(chan error, 1)
+	tftpServer, err := tftp.Start(tftp.Config{
+		Port:              viper.GetInt(config.TFTPPort),
+		DataDir:           viper.GetString(config.DataDir),
+		TopLevelBootFiles: tftp.TopLevelBootFiles(),
+	}, tftpErr)
+	if err != nil {
+		return err
+	}
 
 	// Start the HTTP server (non-blocking; returns the running server).
 	httpServer, err := bootyHTTP.StartHTTP(bootyHTTP.APIDeps{
@@ -484,8 +495,15 @@ func run(cmd *cobra.Command, argv []string) error {
 
 	// Block until a signal arrives, then shut down in order:
 	// stop proxyDHCP (if running) -> drain HTTP -> stop schedulers -> stop TFTP.
-	<-ctx.Done()
-	slog.Info("shutdown signal received")
+	var runErr error
+	select {
+	case <-ctx.Done():
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Info("shutdown signal received")
+	case runErr = <-tftpErr:
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Error("TFTP server failed; shutting down", "err", runErr)
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -503,10 +521,8 @@ func run(cmd *cobra.Command, argv []string) error {
 			}
 		}},
 		shutdownStep{name: "reconciler", stop: reconciler.Stop},
-		// Bound the TFTP stop: in single-port mode pin/tftp's Shutdown() does
-		// not close the listening socket and the serve loop blocks on ReadFrom
-		// with no read deadline, so Shutdown() can hang until the next packet.
-		// Cap the wait so run() returns within a bounded window regardless.
+		// The bound remains as a safety net; pin/tftp v3's single-port Shutdown
+		// returns promptly and Server.Shutdown closes the socket itself.
 		shutdownStep{name: "tftp", stop: func() {
 			if !stopWithTimeout(tftpServer.Shutdown, 5*time.Second) {
 				slog.Warn("TFTP shutdown timed out; exiting anyway", "timeout", 5*time.Second)
@@ -516,7 +532,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	shutdown(slog.Default(), steps)
 
 	slog.Info("Booty stopped")
-	return nil
+	return runErr
 }
 
 // startProxyDHCP starts the proxyDHCP responder when enabled. It is
