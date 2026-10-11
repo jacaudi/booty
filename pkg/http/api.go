@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"io/fs"
 	"net/http"
 
@@ -20,6 +21,10 @@ type APIDeps struct {
 	NoAuth  bool
 	// BootFiles holds the embedded iPXE binaries served at /boot/<name>; nil serves none.
 	BootFiles fs.FS
+	// Waker sends Wake-on-LAN packets; nil disables wake-host (503).
+	Waker interface {
+		Wake(ctx context.Context, mac, hostIP string) ([]string, error)
+	}
 }
 
 // RegisterAPI mounts the Huma /api/v1 surface on mux (the existing booty

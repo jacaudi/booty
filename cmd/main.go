@@ -20,6 +20,7 @@ import (
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	bootyHTTP "github.com/jeefy/booty/pkg/http"
+	"github.com/jeefy/booty/pkg/power"
 	"github.com/jeefy/booty/pkg/proxydhcp"
 	"github.com/jeefy/booty/pkg/tftp"
 	"github.com/spf13/cobra"
@@ -527,6 +528,7 @@ func run(cmd *cobra.Command, argv []string) error {
 		Auth:      tokenStore,
 		NoAuth:    noAuth,
 		BootFiles: boot.Files,
+		Waker:     &power.Waker{},
 	})
 	if err != nil {
 		return fmt.Errorf("http: %w", err)
