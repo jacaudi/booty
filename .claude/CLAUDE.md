@@ -112,6 +112,7 @@ touches moves toward them within that change's scope; there is no big-bang refac
 debt, not to be copied into new code:
 
 - `viper.Get*` is read deep inside `pkg/tftp`, `pkg/http`, `pkg/cache` and others.
+- New exported helpers `tftp.URLHost` and `tftp.TopLevelBootFiles` read viper directly (accepted in the upstream import; move to parameters when touched).
 - Package-level injected stores: `hardware.SetStore`, `tftp.SetStore`, `absDataDir`.
 - The layout is `pkg/` rather than `internal/`, and there is no patchbay package.
 - Servers call `os.Exit` inside goroutines (TFTP, HTTP).
@@ -133,6 +134,10 @@ debt, not to be copied into new code:
 | `pkg/tftp/` | TFTP server, `booty.ipxe` dispatch (holding / assigned / menu), boot menu, per-OS iPXE templates and tool scripts. |
 | `pkg/http/` | Base mux (boot-path endpoints, `/data/` allowlist, login/logout, UI) plus the huma `/api/v1` surface. Also config rendering for Butane→Ignition, Talos machineconfig and debianconfig→preseed, and Talos cluster generation/import. |
 | `pkg/proxydhcp/` | Default-off proxyDHCP responder (UDP 67 + 4011). |
+| `pkg/power/` | Wake-on-LAN. |
+| `pkg/nodereport/` | Node health reports (opt-in `--nodeReports`). |
+| `boot/` | Embedded iPXE binaries (`undionly.kpxe`, `ipxe.efi`, `snponly.efi`), regenerated with `go generate`. |
+| `test/qemu/` | UEFI boot-chain check under QEMU. |
 | `web/` | React + Ant Design UI (Vite, Vitest). The built `dist/` is embedded by `web/embed.go`. |
 | `docs/designs/` | Design documents, one per change (`YYYY-MM-DD-<topic>-design.md`). |
 | `docs/schema/` | API, catalog, database and storage references. |
@@ -142,9 +147,11 @@ debt, not to be copied into new code:
 ## How a boot works (today)
 
 1. The site DHCP server (or booty's proxyDHCP) points firmware at booty's TFTP and an iPXE binary.
-2. iPXE fetches `booty.ipxe` over TFTP. booty identifies the host by **ARP** on the request's
-   source IP and renders one of three scripts: holding (unknown or unapproved), assigned OS, or
-   boot menu.
+   booty embeds iPXE (`boot/`) and serves it over TFTP and `/boot/`.
+2. iPXE fetches `booty.ipxe` over TFTP, which is a stub that chains to HTTP `/booty.ipxe?mac=`.
+   That renders one of three scripts: holding (unknown or unapproved), assigned OS, or boot menu.
+   The host is identified by the `?mac=` iPXE reports; **ARP** on the request's source IP is the
+   fallback.
 3. The OS kernel/initrd come from `/data/cache/...` over HTTP. The config comes from
    `/ignition.json`, `/machineconfig` or `/preseed`, identified by `?mac=` or ARP.
 4. Unknown MACs get a reboot-loop config and appear as unknown hosts until approved.
@@ -179,10 +186,10 @@ debt, not to be copied into new code:
 ## Working in this repo
 
 - Build/test: `go build ./...`, `go vet ./...`, `go test -race ./...`.
-  - The `go.mod` toolchain line selects go1.26.2; the system `go` here may be older and
+  - The `go.mod` toolchain line selects go1.26.9; the system `go` here may be older and
     auto-switches.
-  - Build tooling is moving from `Makefile` to `taskfile.yml` (go-task) in the upstream-import
-    work; check which exists before using either.
+  - The Makefile is gone; `taskfile.yml` (go-task) is the build tool.
+  - The golangci-lint gate needs v2.14.0 built with Go >= 1.26, at `$HOME/go/bin`.
 - CI: `.github/workflows/go-test.yml` (build, vet, `go test -race`) and `web-test.yml`. Publish
   workflows are being removed and will be rebuilt later.
 - Real network boots need L2 adjacency, UDP 67/69/4011 and `CAP_NET_BIND_SERVICE` + `CAP_NET_RAW`.

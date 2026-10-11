@@ -9,6 +9,8 @@
 
 - Opt-in node health reports (--nodeReports): Flatcar, CoreOS and debianconfig Debian hosts report their running OS version, failed units and boot errors; shown on the Hosts page.
 
+- Wake-on-LAN: wake a registered host from the Hosts page or POST /api/v1/hosts/{mac}/wake.
+
 ## Changes
 
 - booty.ipxe is now rendered over HTTP (/booty.ipxe?mac=) and identifies hosts by the MAC iPXE reports; TFTP serves a one-line stub. DoInstall is no longer cleared on boot; it never changed what booted.
@@ -23,3 +25,6 @@
 - proxyDHCP now boots UEFI firmware that sits beside another DHCP server: the PXE boot item uses vendor type 0x8000 (UEFI treated the previous type 0 as "boot locally" and cancelled with PXE-E21), and the boot-server ACK goes to the port the firmware sent from (4011).
 - Hostnames are validated as RFC 1123: create-host rejects an invalid hostname with 400; /machineconfig ignores (and logs) an invalid ?hostname= from DHCP; a debianconfig whose templated hostname or domain contains a control character is refused; stored hostnames have control characters stripped when rendered.
 - The legacy PXELINUX path (pxelinux.cfg/default) is removed; it could no longer boot under the TFTP allowlist. Legacy BIOS PXE firmware chains booty's embedded undionly.kpxe instead.
+- Flatcar, CoreOS and Debian config URLs carry ?mac=${mac}, so hosts are identified without ARP.
+- The embedded undionly.kpxe, ipxe.efi and snponly.efi are served ahead of same-named files in --dataDir; booty logs a warning at startup for each shadowed file.
+- The container image is based on gcr.io/distroless/static-debian13 (was base-debian12). The Makefile is replaced by taskfile.yml (go-task), and the image publish workflows are removed; build images locally with task image.
