@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, AutoComplete, Badge, Button, Form, Modal, Popconfirm, Select, Space, Tabs, Table, Typography, message } from 'antd'
+import { Alert, AutoComplete, Badge, Button, Drawer, Form, Modal, Popconfirm, Select, Space, Tabs, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { isPending, type Host } from '../api/types'
-import { approveHostWith, bindSchematic, listHosts, revokeHost, setMenuMode, wakeHost } from '../api/client'
+import { isPending, type Host, type HostHealth } from '../api/types'
+import { approveHostWith, bindSchematic, getHostHealth, listHosts, revokeHost, setMenuMode, wakeHost } from '../api/client'
 import type { Config } from '../api/configs'
 import { listConfigs } from '../api/configs'
 import type { Role } from '../api/roles'
@@ -21,6 +21,19 @@ export default function HostsView() {
   const [allowing, setAllowing] = useState<Host | null>(null)
   const [allowForm] = Form.useForm()
   const [familyKinds, setFamilyKinds] = useState<FamilyKinds | undefined>()
+
+  const [healthFor, setHealthFor] = useState<string | null>(null)
+  const [health, setHealth] = useState<HostHealth | null>(null)
+
+  const openHealth = async (mac: string) => {
+    setHealthFor(mac)
+    setHealth(null)
+    try {
+      setHealth((await getHostHealth(mac)) ?? null)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -109,6 +122,22 @@ export default function HostsView() {
     { title: 'IP', dataIndex: 'ip', key: 'ip' },
     { title: 'OS', dataIndex: 'os', key: 'os' },
     { title: 'Booted', dataIndex: 'booted', key: 'booted' },
+    {
+      title: 'Running',
+      key: 'running',
+      render: (_, h) =>
+        h.health ? (
+          <Space>
+            <Button type="link" size="small" onClick={() => openHealth(h.mac)}>
+              {h.health.running}
+            </Button>
+            {h.health.failedUnitCount > 0 && <Badge count={h.health.failedUnitCount} />}
+          </Space>
+        ) : (
+          '—'
+        ),
+    },
+    { title: 'Last report', key: 'lastReport', render: (_, h) => h.health?.receivedAt ?? '—' },
   ]
 
   const pendingCols: ColumnsType<Host> = [
@@ -219,6 +248,29 @@ export default function HostsView() {
           )}
         </Form>
       </Modal>
+      <Drawer title={`Health: ${healthFor ?? ''}`} open={healthFor !== null} onClose={() => setHealthFor(null)} width={520}>
+        {health && (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <div>Kernel: {health.kernel}</div>
+            <div>Firmware: {health.firmware || '—'}</div>
+            <div>
+              Hardware: {health.dmi.vendor} {health.dmi.product}
+            </div>
+            <Typography.Text strong>Failed units</Typography.Text>
+            {health.failedUnits.length === 0 ? (
+              <div>None</div>
+            ) : (
+              <ul>
+                {health.failedUnits.map((u) => (
+                  <li key={u}>{u}</li>
+                ))}
+              </ul>
+            )}
+            <Typography.Text strong>Journal errors</Typography.Text>
+            <pre style={{ whiteSpace: 'pre-wrap' }}>{health.journalErrors.join('\n')}</pre>
+          </Space>
+        )}
+      </Drawer>
     </Space>
   )
 }
