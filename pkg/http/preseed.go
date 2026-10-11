@@ -12,6 +12,7 @@ import (
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/nodereport"
 	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
@@ -22,6 +23,13 @@ import (
 // verbatim via renderPreseedFile — a raw d-i template, not an authored kind).
 // Debian has no legacy per-host file column, so rung 3 does not apply.
 func handlePreseedRequest(store *db.Store) http.HandlerFunc {
+	return preseedHandler(store, nil)
+}
+
+// preseedHandler is handlePreseedRequest with the optional node health report
+// unit (n nil = feature off, output unchanged). Only a DB-bound debianconfig
+// is injected; the raw --preseedFile default never is.
+func preseedHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("preseed request", "uri", r.RequestURI)
 		host := identifyHost(r)
@@ -33,7 +41,7 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 			// familyAllowsKind / authoringKindsForFamily.
 			if src, kind, ok := resolveConfig(store, host); ok && familyAllowsKind("preseed", kind) {
 				vars := preseedVars(store, host)
-				out, ct, _, err := renderConfig(kind, src, vars)
+				out, ct, err := renderPreseed(n, store, host, kind, src, vars)
 				if err != nil {
 					writeError(w, http.StatusInternalServerError, "render bound preseed", err)
 					return
@@ -66,6 +74,27 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write(out)
 	}
+}
+
+// renderPreseed is renderConfig, except that a debianconfig for a host with
+// node reports on also gets the health unit and curl.
+func renderPreseed(n *NodeReports, store *db.Store, host *hardware.Host, kind string, src []byte, vars TemplateVars,
+) ([]byte, string, error) {
+	if kind == kindDebianConfig {
+		if s, u, ok := n.script(store, host); ok {
+			rendered, rerr := executeTemplate(src, vars)
+			if rerr != nil {
+				return nil, "", rerr
+			}
+			out, err := translateDebianConfigWith(rendered, preseedOptions{
+				ExtraLateCommand: nodereport.DebianLateCommand(s, u),
+				ExtraPackages:    []string{"curl"},
+			})
+			return out, contentTypeText, err
+		}
+	}
+	out, contentType, _, err := renderConfig(kind, src, vars)
+	return out, contentType, err
 }
 
 // withDVDMirror appends booty's local apt mirror directives to a rendered

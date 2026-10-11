@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jeefy/booty/pkg/bootscript"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/jeefy/booty/pkg/nodereport"
@@ -196,4 +197,25 @@ func (rr *reportReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// script builds the health-report script and unit for host. The bool is false
+// when the feature is off, the host is unknown, the generation lookup fails
+// or the inputs cannot be embedded safely; the caller then serves the config
+// unchanged.
+func (n *NodeReports) script(store *db.Store, host *hardware.Host) (string, string, bool) {
+	if n == nil || host == nil {
+		return "", "", false
+	}
+	gen, err := store.HostReportTokenGen(host.MAC)
+	if err != nil {
+		return "", "", false
+	}
+	script, err := nodereport.Script(bootscript.URLHost(), host.MAC, nodereport.Token(n.Key, host.MAC, gen))
+	if err != nil {
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Warn("node report injection skipped", "mac", host.MAC, "err", err)
+		return "", "", false
+	}
+	return script, nodereport.Unit(nodereport.ScriptPath), true
 }
