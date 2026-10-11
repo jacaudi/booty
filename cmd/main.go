@@ -209,19 +209,19 @@ func init() {
 		&args.proxyDHCPBootfileBIOS,
 		"proxyDHCPBootfileBIOS",
 		"undionly.kpxe",
-		"proxyDHCP pass-1 BIOS iPXE binary (staged in dataDir)",
+		"BIOS iPXE binary named in the proxyDHCP ACK (staged in dataDir)",
 	)
 	flags.StringVar(
 		&args.proxyDHCPBootfileUEFI,
 		"proxyDHCPBootfileUEFI",
 		"ipxe.efi",
-		"proxyDHCP pass-1 UEFI iPXE binary (staged in dataDir)",
+		"UEFI iPXE binary named in the proxyDHCP ACK (staged in dataDir)",
 	)
 	flags.StringVar(
 		&args.proxyDHCPBootfileARM64,
 		"proxyDHCPBootfileARM64",
 		"ipxe-arm64.efi",
-		"proxyDHCP pass-1 ARM64 iPXE binary (staged in dataDir)",
+		"ARM64 iPXE binary named in the proxyDHCP ACK (staged in dataDir)",
 	)
 	flags.BoolVar(
 		&args.proxyDHCPRelay,

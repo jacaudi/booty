@@ -35,9 +35,9 @@ config file.
 | `--talosFactoryURL` | `https://factory.talos.dev` | Talos Image Factory base URL. |
 | `--secretsKey` | `""` (unset) | Path to an age identity file (`age-keygen` output) encrypting Talos cluster secrets and frozen node configs at rest. **Fail-closed** when unset: cluster create/import/add-member/export refuse with `422`. **Fail-fast** when set but invalid: refuses startup (see [below](#talos-cluster-authoring-p6)). |
 | `--proxyDHCPEnabled` | `false` | Enable the proxyDHCP responder (UDP 67 + 4011). |
-| `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | Pass-1 BIOS iPXE binary name (staged in `--dataDir`). |
-| `--proxyDHCPBootfileUEFI` | `ipxe.efi` | Pass-1 UEFI (x86-64) iPXE binary name. |
-| `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | Pass-1 ARM64 iPXE binary name. |
+| `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | BIOS iPXE binary named in the proxyDHCP ACK (staged in `--dataDir`). |
+| `--proxyDHCPBootfileUEFI` | `ipxe.efi` | UEFI (x86-64) iPXE binary named in the proxyDHCP ACK. |
+| `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | ARM64 iPXE binary named in the proxyDHCP ACK. |
 | `--proxyDHCPRelay` | `false` | Answer relayed PXE requests by replying to the relay agent (giaddr). Talos cluster members behind a relay are refused their config until authenticated fetch exists. |
 | `--preseedFile` | `config/preseed.cfg` | Debian preseed template, relative to `--dataDir` — the rung-4 server-default fallback for hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
 | `--configRevisionsKeep` | `10` | Number of newest config revisions to retain per config, applied after every `PUT /configs/{id}`. The currently-active revision is always kept, even if it falls outside the newest-N window. |
@@ -637,8 +637,8 @@ In addition to the auto-bound flag env vars, a few settings are read directly fr
 |------|----------|------|---------|
 | `8080` (`--httpPort`) | TCP | always | HTTP: boot configs, artifacts, API, web UI. |
 | `69` (`--tftpPort`) | UDP | always | TFTP: iPXE binaries and the `booty.ipxe` chain script. |
-| `67` | UDP | `--proxyDHCPEnabled` | proxyDHCP pass-1 (firmware PXE request). |
-| `4011` | UDP | `--proxyDHCPEnabled` | proxyDHCP pass-2 (iPXE re-request). |
+| `67` | UDP | `--proxyDHCPEnabled` | proxyDHCP: answers the firmware DISCOVER with an OFFER (an iPXE DISCOVER gets `booty.ipxe` in it). |
+| `4011` | UDP | `--proxyDHCPEnabled` | proxyDHCP: answers the firmware REQUEST with the ACK naming the iPXE binary. |
 
 proxyDHCP binds privileged ports — run with `CAP_NET_BIND_SERVICE` (e.g. Docker
 `--cap-add=NET_BIND_SERVICE`) or as root. proxyDHCP is best-effort: if it fails to start, booty

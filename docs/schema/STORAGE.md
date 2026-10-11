@@ -17,9 +17,9 @@ keep cache and registration across restarts.
 │   └── preseed.cfg               # Debian preseed template (--preseedFile)
 ├── public/                       # SERVED at /data/public/ — operator assets the
 │   └── *.sh                      #   booted node fetches (see examples/config/ignition.yaml)
-├── undionly.kpxe                 # proxyDHCP pass-1 BIOS iPXE binary (if proxyDHCP enabled)
-├── ipxe.efi                      # proxyDHCP pass-1 UEFI iPXE binary
-├── ipxe-arm64.efi               # proxyDHCP pass-1 ARM64 iPXE binary
+├── undionly.kpxe                 # BIOS iPXE binary named in the proxyDHCP ACK (if proxyDHCP enabled)
+├── ipxe.efi                      # UEFI iPXE binary named in the proxyDHCP ACK
+├── ipxe-arm64.efi               # ARM64 iPXE binary named in the proxyDHCP ACK
 └── cache/                        # downloaded boot artifacts (see below)
 ```
 
