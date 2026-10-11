@@ -19,6 +19,9 @@ import (
 	"github.com/spf13/viper"
 )
 
+// DefaultTFTPPort is the default of --tftpPort.
+const DefaultTFTPPort = 69
+
 const (
 	FlatcarChannel         = "flatcarChannel"
 	CoreOSChannel          = "coreOSChannel"
@@ -28,6 +31,7 @@ const (
 	FlatcarArchitecture    = "flatcarArchitecture"
 	Debug                  = "debug"
 	HttpPort               = "httpPort"
+	TFTPPort               = "tftpPort"
 	DataDir                = "dataDir"
 	FlatcarURL             = "flatcarURL"
 	CoreOSURL              = "coreOSURL"
@@ -73,6 +77,7 @@ var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(Debug, false)
+	viper.SetDefault(TFTPPort, DefaultTFTPPort)
 	viper.SetDefault(ProxyDHCPEnabled, false)
 	viper.SetDefault(ProxyDHCPBootfileBIOS, "undionly.kpxe")
 	viper.SetDefault(ProxyDHCPBootfileUEFI, "ipxe.efi")

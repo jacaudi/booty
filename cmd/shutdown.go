@@ -29,12 +29,8 @@ func shutdown(logger *slog.Logger, steps []shutdownStep) {
 
 // stopWithTimeout runs stop in a goroutine and waits up to d for it to return.
 // It reports whether stop completed within the bound (true) or the bound was
-// hit first (false). When it returns false the stop goroutine is still running;
-// callers use this only at process shutdown, where returning lets run() exit and
-// the OS reclaims the leaked goroutine. This exists because the pin/tftp server
-// in single-port mode does not close its listening socket on Shutdown() and its
-// serve loop blocks on conn.ReadFrom with no read deadline, so Shutdown() can
-// block until the next packet arrives — unbounded without this wrapper.
+// hit first (false). The bound remains as a safety net; pin/tftp v3's
+// single-port Shutdown returns promptly and Server.Shutdown closes the socket itself.
 func stopWithTimeout(stop func(), d time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
