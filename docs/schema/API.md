@@ -54,7 +54,7 @@ host database. Most filenames are served as plain cached files; two are **magic*
 |----------|----------|
 | `booty.ipxe` | Dynamically generated per-host iPXE script — selects the OS template and substitutes boot tokens (below). If the host's `DoInstall` flag is set, it is flipped off on this fetch (one-shot install). |
 | `pxelinux.cfg/default` | Legacy PXE config, for firmware that boots PXE rather than iPXE. |
-| *(any other path)* | Served from the artifact cache via a path-escape-checked join under `--dataDir`. |
+| *(any other path)* | Served only if below cache/ or public/, or one of the iPXE bootfile names (undionly.kpxe, ipxe.efi, snponly.efi, ipxe-arm64.efi and the --proxyDHCPBootfile* values); everything else is "file not found". |
 
 **Boot-token substitution** (replaced in the generated `booty.ipxe`):
 
