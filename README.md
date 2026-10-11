@@ -310,7 +310,7 @@ The container is a distroless static image with the binary at `/booty` and the w
 - **PXE vs. iPXE.** iPXE is recommended (faster, HTTP-capable). The bootfile you point firmware at
   differs: use an iPXE binary (e.g. `undionly.kpxe` / `ipxe.efi`) for the iPXE chain (booty ships
   `undionly.kpxe`, `ipxe.efi` and `snponly.efi`, also downloadable from
-  `http://<booty>:8080/boot/<name>`), or `pxelinux.cfg/default` for legacy PXE. With `--proxyDHCPEnabled`, booty selects the right
+  `http://<booty>:8080/boot/<name>`). With `--proxyDHCPEnabled`, booty selects the right
   iPXE binary by client architecture automatically.
 - **Networking.** Make sure UDP/69 (and UDP/67 + 4011 for proxyDHCP) are reachable. Routed networks:
   the boot script and menu work across routers (hosts are identified by the `?mac=` iPXE reports),

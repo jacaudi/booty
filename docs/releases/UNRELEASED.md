@@ -22,3 +22,4 @@
 - Butane 0.29 / Ignition 2.27: the fcos 1.6.0-experimental variant no longer translates (use fcos 1.6.0); flatcar 1.2.0-experimental now emits Ignition 3.7.0-experimental. Stable variants are unchanged.
 - proxyDHCP now boots UEFI firmware that sits beside another DHCP server: the PXE boot item uses vendor type 0x8000 (UEFI treated the previous type 0 as "boot locally" and cancelled with PXE-E21), and the boot-server ACK goes to the port the firmware sent from (4011).
 - Hostnames are validated as RFC 1123: create-host rejects an invalid hostname with 400; /machineconfig ignores (and logs) an invalid ?hostname= from DHCP; a debianconfig whose templated hostname or domain contains a control character is refused; stored hostnames have control characters stripped when rendered.
+- The legacy PXELINUX path (pxelinux.cfg/default) is removed; it could no longer boot under the TFTP allowlist. Legacy BIOS PXE firmware chains booty's embedded undionly.kpxe instead.

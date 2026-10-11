@@ -436,6 +436,7 @@ Plan files under `docs/plans/2026-10-11-upstream-import/`, each phase green on
 12. proxyDHCP departs from upstream byte parity (maintainer, 2026-10-11, after the QEMU check): boot-server and menu type 0x8000 instead of 0 (EDK2 PxeBcBoot.c:937-941 treats 0 as local boot and aborts with PXE-E21), the ACK goes to the client's source port when it equals ciaddr (EDK2 listens on 4011 only, PxeBcDhcp4.c), and the ACK echoes the requested PXE_BOOT_ITEM. The 10 goldens differ from upstream only in that type byte. Upstream has the same bug.
 13. /node/report also requires the source IP to ARP-resolve to the claimed MAC (maintainer, 2026-10-11, after the adversarial review showed the per-host token is readable by any LAN client from /ignition.json?mac=). Relayed hosts cannot report.
 14. /machineconfig ignores an invalid ?hostname= (logged) instead of answering 400 (maintainer, 2026-10-11): the value comes from DHCP and a 400 would stop the Talos boot. Supersedes the /machineconfig half of item 4's 400.
+15. The legacy pxelinux.cfg/default path is removed (maintainer, 2026-10-11): it could not work under the item 0 TFTP allowlist, and booty now embeds iPXE for BIOS and UEFI.
 
 ## 9. Verified facts (sources)
 
