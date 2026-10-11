@@ -35,9 +35,9 @@ It does one job: get your machines netbooted into the right OS.
   `controlplane.yaml`, then add or remove member nodes. Each member's machineconfig is generated
   once and served **byte-identically** thereafter; cluster secrets and frozen node configs are
   age-encrypted at rest (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
-- **Drives the full iPXE chain over TFTP.** It answers the magic `booty.ipxe` filename with a
-  dynamically generated, per-host iPXE script that points the machine at the cached kernel,
-  initramfs, and config.
+- **Drives the full iPXE chain.** TFTP answers the magic `booty.ipxe` filename with a one-line stub
+  that chains to HTTP `/booty.ipxe?mac=`, which renders the per-host iPXE script pointing the machine
+  at the cached kernel, initramfs, and config.
 - **Offers an interactive boot menu.** A host can be switched to *menu mode* instead of a pinned
   OS: at boot it's shown an iPXE menu of every image booty currently has cached and picks one.
   The choice is per-boot; see [docs/BOOT-MENU.md](docs/BOOT-MENU.md).
@@ -73,9 +73,11 @@ It does one job: get your machines netbooted into the right OS.
         ▼
   booty TFTP (:69/udp)
         │  2. serves an iPXE binary, then answers "booty.ipxe"
-        │     with a per-host script (host looked up by MAC via ARP)
+        │     with a one-line stub that chains to HTTP
         ▼
   booty HTTP (:8080)
+        │  2b. /booty.ipxe?mac= renders the per-host script
+        │      (host identified by ?mac=, ARP as fallback)
         │  3. serves cached kernel + initramfs from /data/...
         │  4. serves /ignition.json or /machineconfig for this host
         ▼
