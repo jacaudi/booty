@@ -480,7 +480,7 @@ func TestTokenFileIsNotServedOverData(t *testing.T) {
 	// dataMux is the production-shaped harness already defined at
 	// pkg/http/http_test.go:19 -- use it rather than rebuilding a mux, so this
 	// test exercises the same StripPrefix chain production does.
-	mux := dataMux(dir)
+	mux := dataMux(t, dir)
 
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/data/"+auth.TokenFileName, nil))
@@ -533,7 +533,7 @@ func TestNilAuthStorePassesThroughSoExistingTestsKeepWorking(t *testing.T) {
 // instead.
 func TestLoginAndLogoutAreMountedOnTheBaseMux(t *testing.T) {
 	store := tokenStore(t, "mounted-token")
-	mux := baseMux(APIDeps{Auth: store})
+	mux := baseMux(APIDeps{Auth: store}, testDataRoot(t, t.TempDir()))
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", nil)
@@ -578,5 +578,23 @@ func TestStartHTTPAllowsANilStoreUnderNoAuth(t *testing.T) {
 	}
 	if err := srv.Close(); err != nil {
 		t.Fatalf("srv.Close() = %v", err)
+	}
+}
+
+// TestStartHTTPFailsWhenDataDirCannotBeOpened: /data/ serves through an
+// [os.Root] opened at startup, so a missing dataDir is a startup error.
+func TestStartHTTPFailsWhenDataDirCannotBeOpened(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, filepath.Join(t.TempDir(), "missing"))
+	viper.Set(config.HttpPort, 0)
+
+	srv, err := StartHTTP(APIDeps{NoAuth: true})
+	if err == nil {
+		_ = srv.Close()
+		t.Fatal("StartHTTP with an unopenable dataDir = nil error, want a startup error")
+	}
+	if srv != nil {
+		t.Fatal("a failed StartHTTP must not return a server")
 	}
 }
