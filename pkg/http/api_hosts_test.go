@@ -836,6 +836,7 @@ func TestRotateHostReportTokenInvalidatesOldToken(t *testing.T) {
 	h := nodeReportHandler(deps) // also sets deps.NodeReports.receiver
 	api := newTestAPI(t, deps)
 	const mac = "aa:bb:cc:00:00:32"
+	deps.NodeReports.receiver.arp = fixedARP(mac)
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar"}); err != nil {
 		t.Fatal(err)
 	}
