@@ -37,6 +37,8 @@ func baseMux(deps APIDeps) *http.ServeMux {
 	myHandler.HandleFunc("/ignition.json", handleIgnitionRequest(deps.Store))
 	myHandler.HandleFunc("/machineconfig", handleMachineConfigRequest(deps.Store))
 	myHandler.HandleFunc("/preseed", handlePreseedRequest(deps.Store))
+	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(arpLookup))
+	myHandler.Handle("GET /menu/", menuSelectionHandler(arpLookup))
 	myHandler.HandleFunc("/version.txt", handleVersionRequest)
 	myHandler.HandleFunc("/version.json", handleVersionRequest)
 	myHandler.HandleFunc("/healthz", handleHealthz)
