@@ -305,9 +305,10 @@ item 8.
   `firmware`, `receivedAt`, `failedUnitCount`, `vendor`, `product`). New
   `GET /api/v1/hosts/{mac}/health` (decision §8.4) returns the full stored report.
   `POST /api/v1/hosts/{mac}/report-token/rotate` bumps the generation.
-- UI: Hosts table columns **Running** (or a muted "no report yet" when `--nodeReports` is on and
-  the OS is flatcar/coreos/debian) and **Last report**; a failed-units badge; a drawer that loads
-  `/hosts/{mac}/health`.
+- UI: Hosts table columns **Running** and **Last report** (`—` when there is no report; the UI is not
+  told whether `--nodeReports` is on, so it cannot distinguish "off" from "not yet"); a failed-units
+  badge; a drawer that loads `/hosts/{mac}/health` **(researched call: avoids a new info field for
+  one hint)**.
 
 ### Item 11. Remove the publish workflows
 
