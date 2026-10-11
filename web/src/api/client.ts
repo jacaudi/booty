@@ -1,4 +1,4 @@
-import type { Host } from './types'
+import type { Host, HostHealth } from './types'
 
 const BASE = '/api/v1'
 
@@ -88,4 +88,12 @@ export function setMenuMode(mac: string): Promise<unknown> {
 
 export function wakeHost(mac: string): Promise<{ sentTo: string[] } | undefined> {
   return request(`/hosts/${mac}/wake`, { method: 'POST' })
+}
+
+export function getHostHealth(mac: string): Promise<HostHealth | undefined> {
+  return request(`/hosts/${mac}/health`)
+}
+
+export function rotateReportToken(mac: string): Promise<{ generation: number } | undefined> {
+  return request(`/hosts/${mac}/report-token/rotate`, { method: 'POST' })
 }

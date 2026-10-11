@@ -200,4 +200,45 @@ describe('HostsView', () => {
     expect(optionNames()).not.toContain('iscsi')
     expect(optionNames()).not.toContain('prod-spec')
   })
+
+  it('shows the running version and a failed-unit badge', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([
+      host({
+        mac: 'h1',
+        approved: true,
+        health: { running: '4152.2.0', kernel: 'k', firmware: 'uefi', receivedAt: 't', failedUnitCount: 2, vendor: 'v', product: 'p' },
+      }),
+    ])
+    render(<HostsView />)
+    await userEvent.click(await screen.findByRole('tab', { name: /Approved/ }))
+    expect(screen.getByText('4152.2.0')).toBeInTheDocument()
+    expect(screen.getByText('2')).toBeInTheDocument()
+  })
+
+  it('shows a dash when a host has no health', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([host({ mac: 'h2', approved: true })])
+    render(<HostsView />)
+    await userEvent.click(await screen.findByRole('tab', { name: /Approved/ }))
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('opens the health drawer listing failed units', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([
+      host({
+        mac: 'mac',
+        approved: true,
+        health: { running: '4152.2.0', kernel: 'k', firmware: 'uefi', receivedAt: 't', failedUnitCount: 1, vendor: 'v', product: 'p' },
+      }),
+    ])
+    vi.mocked(client.getHostHealth).mockResolvedValue({
+      running: '4152.2.0', kernel: '6.6', firmware: 'uefi', receivedAt: 't', bootID: 'b',
+      failedUnits: ['sshd.service'], journalErrors: ['oops line'], dmi: { vendor: 'v', product: 'p', biosVersion: '1' },
+    })
+    render(<HostsView />)
+    await userEvent.click(await screen.findByRole('tab', { name: /Approved/ }))
+    await userEvent.click(screen.getByRole('button', { name: /4152\.2\.0/ }))
+    expect(client.getHostHealth).toHaveBeenCalledWith('mac')
+    expect(await screen.findByText('Health: mac')).toBeInTheDocument()
+    expect(await screen.findByText('sshd.service')).toBeInTheDocument()
+  })
 })

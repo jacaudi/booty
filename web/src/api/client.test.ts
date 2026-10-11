@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { approveHost, bindSchematic, listHosts, login, onUnauthorized, request, revokeHost, setMenuMode, wakeHost } from './client'
+import { approveHost, bindSchematic, getHostHealth, rotateReportToken, listHosts, login, onUnauthorized, request, revokeHost, setMenuMode, wakeHost } from './client'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -46,6 +46,20 @@ describe('api client', () => {
 
     await wakeHost('aa:bb')
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/hosts/aa:bb/wake', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('getHostHealth GETs /hosts/{mac}/health', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ running: '1' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await getHostHealth('aa:bb')).toEqual({ running: '1' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/hosts/aa:bb/health', expect.anything())
+  })
+
+  it('rotateReportToken POSTs /hosts/{mac}/report-token/rotate', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ generation: 1 }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await rotateReportToken('aa:bb')
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/hosts/aa:bb/report-token/rotate', expect.objectContaining({ method: 'POST' }))
   })
 
   it('throws on a non-ok response', async () => {
