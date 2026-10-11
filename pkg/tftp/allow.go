@@ -36,7 +36,6 @@ func allowedDataFile(name string, topLevel []string) bool {
 
 // TopLevelBootFiles returns the iPXE bootfile names served from the top level
 // of dataDir: the fixed defaults plus any configured proxyDHCP bootfiles.
-// Phase 2 replaces this with a Config field.
 func TopLevelBootFiles() []string {
 	names := []string{"undionly.kpxe", "ipxe.efi", "snponly.efi", "ipxe-arm64.efi"}
 	for _, key := range []string{config.ProxyDHCPBootfileBIOS, config.ProxyDHCPBootfileUEFI, config.ProxyDHCPBootfileARM64} {

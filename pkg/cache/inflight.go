@@ -11,7 +11,7 @@ import "strings"
 // SweepPartials cannot delete a multi-GB ISO between reconcile ticks. That
 // makes a .download file the LONGER-lived of the two on disk — a stalled
 // multi-GB transfer can sit for hours by design — inside exactly the cache
-// directory [[baseurl]] points at.
+// directory (<dataDir>/cache, cache.DirName) that /data/cache/ and TFTP serve.
 //
 // Case-insensitive: both suffixes are always written lowercase, but on a
 // case-insensitive dev filesystem (e.g. macOS/APFS) a request for

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -317,4 +318,28 @@ func resetCmd(t *testing.T) {
 		Cmd.SetOut(nil)
 		Cmd.SetErr(nil)
 	})
+}
+
+func TestWarnShadowedBootFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ipxe.efi"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A directory of the same name is not a regular file and is not served.
+	if err := os.Mkdir(filepath.Join(dir, "snponly.efi"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+
+	warnShadowedBootFiles(dir, []string{"undionly.kpxe", "ipxe.efi", "snponly.efi"}, log)
+
+	got := buf.String()
+	if !strings.Contains(got, "embedded iPXE file shadows a file in dataDir; the dataDir copy is not served") ||
+		!strings.Contains(got, "file=ipxe.efi") {
+		t.Errorf("missing warning for ipxe.efi:\n%s", got)
+	}
+	if strings.Contains(got, "undionly.kpxe") || strings.Contains(got, "snponly.efi") {
+		t.Errorf("warned about a file that is absent or not a regular file:\n%s", got)
+	}
 }
