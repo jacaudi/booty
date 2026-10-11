@@ -85,3 +85,7 @@ export function revokeHost(mac: string): Promise<unknown> {
 export function setMenuMode(mac: string): Promise<unknown> {
   return request(`/hosts/${mac}/menu`, { method: 'POST' })
 }
+
+export function wakeHost(mac: string): Promise<{ sentTo: string[] } | undefined> {
+  return request(`/hosts/${mac}/wake`, { method: 'POST' })
+}
