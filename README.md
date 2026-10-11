@@ -128,6 +128,8 @@ options, or booty's `--proxyDHCPEnabled`.
      --serverHttpPort=8080
    ```
 
+   > Images are not currently published by CI; build one locally with `task image` and use `booty:dev`.
+
    (Or build it yourself — see *Building from source* below.)
 
 3. **Register a machine** so it boots an OS instead of the holding loop. This is a management-plane
@@ -290,13 +292,15 @@ landed.
 Requires Go 1.26+ and Node.js (for the web UI).
 
 ```bash
-make build          # → bin/booty (static, CGO_ENABLED=0)
-make run            # build the web UI and run against ./data
-make image          # build the container image
-make docker-buildx  # multi-arch (linux/amd64, linux/arm64) image
+task build          # → bin/booty (static, CGO_ENABLED=0)
+task run            # build the web UI and run against ./data
+task image          # build the container image
+task image:buildx   # multi-arch (linux/amd64, linux/arm64) image
 ```
 
-The container is a distroless image with the binary at `/booty` and the web UI bundled in.
+Install go-task: `go install github.com/go-task/task/v3/cmd/task@v3.54.0`
+
+The container is a distroless static image with the binary at `/booty` and the web UI bundled in.
 
 ## Deployment notes
 
