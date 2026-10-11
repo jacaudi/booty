@@ -2,13 +2,13 @@ package http
 
 import (
 	"flag"
-	ignitionConfig "github.com/coreos/ignition/v2/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	ignitionConfig "github.com/coreos/ignition/v2/config"
 	"github.com/spf13/viper"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -84,7 +84,8 @@ func TestIgnitionOutputsStable(t *testing.T) {
 // Ignition error instead of rebooting.
 func TestRebootConfigIsValidIgnition(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "ignition.yaml"), []byte("variant: fcos\nversion: 1.5.0\n"), 0o600); err != nil {
+	tmpl := []byte("variant: fcos\nversion: 1.5.0\n")
+	if err := os.WriteFile(filepath.Join(dir, "ignition.yaml"), tmpl, 0o600); err != nil {
 		t.Fatalf("write template: %v", err)
 	}
 	viper.Reset()
