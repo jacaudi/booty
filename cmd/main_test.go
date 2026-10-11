@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +82,38 @@ func TestResolveServerHTTPPort(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := resolveServerHTTPPort(tc.serverHTTPPort, tc.httpPort); got != tc.want {
 				t.Errorf("resolveServerHTTPPort(%d, %d) = %d, want %d", tc.serverHTTPPort, tc.httpPort, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveServerIP(t *testing.T) {
+	ok := func(ip string) func() (string, error) { return func() (string, error) { return ip, nil } }
+	fail := func() (string, error) { return "", errors.New("no route") }
+	cases := []struct {
+		name     string
+		explicit string
+		detect   func() (string, error)
+		want     string
+		wantErr  bool
+	}{
+		{"explicit wins over a failing detector", "10.0.0.5", fail, "10.0.0.5", false},
+		{"explicit wins over a working detector", "10.0.0.5", ok("192.168.1.9"), "10.0.0.5", false},
+		{"empty uses detector", "", ok("192.168.1.9"), "192.168.1.9", false},
+		{"detector error", "", fail, "", true},
+		{"detector returns loopback", "", ok("127.0.0.1"), "", true},
+		{"detector returns unspecified", "", ok("0.0.0.0"), "", true},
+		{"detector returns IPv6", "", ok("fd00::1"), "", true},
+		{"detector returns garbage", "", ok("not-an-ip"), "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolveServerIP(c.explicit, c.detect)
+			if (err != nil) != c.wantErr || got != c.want {
+				t.Fatalf("resolveServerIP(%q) = %q, %v; want %q, err=%v", c.explicit, got, err, c.want, c.wantErr)
+			}
+			if c.wantErr && !strings.Contains(err.Error(), "set --serverIP") {
+				t.Fatalf("error must tell the operator what to do: %v", err)
 			}
 		})
 	}

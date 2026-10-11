@@ -253,7 +253,7 @@ you most likely need:
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--dataDir` | `/data` | State directory: cache, templates, host DB |
-| `--serverIP` | `127.0.0.1` | LAN IP clients use to reach booty (set this!) |
+| `--serverIP` | `detected` | LAN IP clients use to reach booty; detected from the default route when empty (set it on multi-homed hosts) |
 | `--httpPort` | `8080` | HTTP listener port |
 | `--serverHttpPort` | `80` | HTTP port advertised to clients (if different from the listener) |
 | `--cacheInterval` | `5m` | Interval between cache reconcile passes (discovery refresh) |
