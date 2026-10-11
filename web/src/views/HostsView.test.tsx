@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { message } from 'antd'
 import type { Host } from '../api/types'
 import HostsView from './HostsView'
 import * as client from '../api/client'
@@ -240,5 +241,62 @@ describe('HostsView', () => {
     expect(client.getHostHealth).toHaveBeenCalledWith('mac')
     expect(await screen.findByText('Health: mac')).toBeInTheDocument()
     expect(await screen.findByText('sshd.service')).toBeInTheDocument()
+  })
+
+  it('ignores a late health response for a previously opened host', async () => {
+    const h = (running: string) => ({ running, kernel: 'k', firmware: 'uefi', receivedAt: 't', failedUnitCount: 0, vendor: 'v', product: 'p' })
+    vi.mocked(client.listHosts).mockResolvedValue([
+      host({ mac: 'mac-a', approved: true, health: h('1.0.0') }),
+      host({ mac: 'mac-b', approved: true, health: h('2.0.0') }),
+    ])
+    const detail = (kernel: string) => ({
+      running: 'r', kernel, firmware: 'uefi', receivedAt: 't', bootID: 'b',
+      failedUnits: [], journalErrors: [], dmi: { vendor: 'v', product: 'p', biosVersion: '1' },
+    })
+    let resolveA: (v: ReturnType<typeof detail>) => void = () => {}
+    vi.mocked(client.getHostHealth).mockImplementation((mac: string) =>
+      mac === 'mac-a' ? new Promise((r) => { resolveA = r }) : Promise.resolve(detail('kernel-of-B')),
+    )
+    render(<HostsView />)
+    await userEvent.click(await screen.findByRole('tab', { name: /Approved/ }))
+    await userEvent.click(screen.getByRole('button', { name: /1\.0\.0/ }))
+    await userEvent.click(screen.getByRole('button', { name: /2\.0\.0/ }))
+    expect(await screen.findByText('Kernel: kernel-of-B')).toBeInTheDocument()
+    resolveA(detail('kernel-of-A'))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.getByText('Health: mac-b')).toBeInTheDocument()
+    expect(screen.getByText('Kernel: kernel-of-B')).toBeInTheDocument()
+    expect(screen.queryByText('Kernel: kernel-of-A')).not.toBeInTheDocument()
+  })
+
+  it('lists duplicate failed unit names without key collisions', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(client.listHosts).mockResolvedValue([
+      host({ mac: 'mac', approved: true, health: { running: '9.9.9', kernel: 'k', firmware: 'uefi', receivedAt: 't', failedUnitCount: 2, vendor: 'v', product: 'p' } }),
+    ])
+    vi.mocked(client.getHostHealth).mockResolvedValue({
+      running: '9.9.9', kernel: 'k', firmware: 'uefi', receivedAt: 't', bootID: 'b',
+      failedUnits: ['dup.service', 'dup.service'], journalErrors: [], dmi: { vendor: 'v', product: 'p', biosVersion: '1' },
+    })
+    render(<HostsView />)
+    await userEvent.click(await screen.findByRole('tab', { name: /Approved/ }))
+    await userEvent.click(screen.getByRole('button', { name: /9\.9\.9/ }))
+    expect(await screen.findAllByText('dup.service')).toHaveLength(2)
+    expect(errSpy.mock.calls.flat().join(' ')).not.toMatch(/same key/)
+    errSpy.mockRestore()
+  })
+
+  it('reports a failed health fetch with message.error and keeps rendering', async () => {
+    const errSpy = vi.spyOn(message, 'error').mockImplementation(() => ({}) as ReturnType<typeof message.error>)
+    vi.mocked(client.listHosts).mockResolvedValue([
+      host({ mac: 'mac', approved: true, health: { running: '7.7.7', kernel: 'k', firmware: 'uefi', receivedAt: 't', failedUnitCount: 0, vendor: 'v', product: 'p' } }),
+    ])
+    vi.mocked(client.getHostHealth).mockRejectedValue(new Error('boom'))
+    render(<HostsView />)
+    await userEvent.click(await screen.findByRole('tab', { name: /Approved/ }))
+    await userEvent.click(screen.getByRole('button', { name: /7\.7\.7/ }))
+    await waitFor(() => expect(errSpy).toHaveBeenCalledWith('boom'))
+    expect(screen.getByText('Health: mac')).toBeInTheDocument()
+    errSpy.mockRestore()
   })
 })
