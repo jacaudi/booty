@@ -14,7 +14,7 @@ Served on `--httpPort` (default `8080`).
 |--------|------|---------|----------|
 | `GET` | `/` | Redirect to the web UI. | `302 → /ui/` |
 | `GET` | `/ignition.json` | Ignition config for a Flatcar/CoreOS host. MAC resolved from a query param or by ARP; unknown hosts get a reboot-loop config. | Ignition v3.4.0 JSON |
-| `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. | YAML (`text/yaml`) |
+| `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. An invalid `?hostname=` is ignored (logged), not an error. | YAML (`text/yaml`) |
 | `GET` | `/version.txt` | Current cached versions, env-var format. | `FLATCAR_VERSION=…\nCOREOS_VERSION=…\n` |
 | `GET` | `/version.json` | Current cached versions, JSON. | `{"flatcar":"…","coreos":"…"}` |
 | `GET` | `/healthz` | Liveness probe. | `200` |
