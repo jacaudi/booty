@@ -14,6 +14,7 @@ config file.
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--httpPort` | `8080` | Port the HTTP server listens on. |
+| `--tftpPort` | `69` | UDP port the TFTP server listens on. |
 | `--debug` | `false` | Enable debug-level (verbose) logging. |
 | `--cacheInterval` | `5m` | Interval between cache reconcile passes (discovery refresh). |
 | `--cacheConcurrency` | `4` | Max concurrent artifact downloads during a reconcile pass. |
@@ -634,7 +635,7 @@ In addition to the auto-bound flag env vars, a few settings are read directly fr
 | Port | Protocol | When | Purpose |
 |------|----------|------|---------|
 | `8080` (`--httpPort`) | TCP | always | HTTP: boot configs, artifacts, API, web UI. |
-| `69` | UDP | always | TFTP: iPXE binaries and the `booty.ipxe` chain script. |
+| `69` (`--tftpPort`) | UDP | always | TFTP: iPXE binaries and the `booty.ipxe` chain script. |
 | `67` | UDP | `--proxyDHCPEnabled` | proxyDHCP pass-1 (firmware PXE request). |
 | `4011` | UDP | `--proxyDHCPEnabled` | proxyDHCP pass-2 (iPXE re-request). |
 
