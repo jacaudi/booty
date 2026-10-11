@@ -890,3 +890,32 @@ late_command: |
 		t.Errorf("D5 four-source order violated: ssh=%d sudo=%d esp=%d op=%d\nline: %s", sshIdx, sudoIdx, espIdx, opIdx, lateLine)
 	}
 }
+
+func TestDebianconfigRefusesControlCharacters(t *testing.T) {
+	for _, tc := range []struct{ name, src, want string }{
+		{"hostname", "hostname: \"a\\nb\"\n", "hostname contains a control character"},
+		{"domain", "domain: \"ex\\tample.com\"\n", "domain contains a control character"},
+	} {
+		_, err := translateDebianConfig([]byte(tc.src))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want it to contain %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+func TestDebianconfigPlainHostnameStillEmits(t *testing.T) {
+	if got := translate(t, "hostname: node1\n"); !strings.Contains(got, "d-i netcfg/get_hostname string node1") {
+		t.Errorf("plain hostname not emitted: %q", got)
+	}
+}
+
+func TestDebianconfigTemplateHostnameRenders(t *testing.T) {
+	src := []byte("hostname: \"{{ .Hostname }}\"\n")
+	out, _, _, err := renderConfig("debianconfig", src, TemplateVars{Hostname: "node7"})
+	if err != nil {
+		t.Fatalf("renderConfig: %v", err)
+	}
+	if !strings.Contains(string(out), "get_hostname string node7") {
+		t.Errorf("templated hostname not rendered: %q", out)
+	}
+}
