@@ -41,7 +41,10 @@ func TestBootScriptHandlers(t *testing.T) {
 		want    string
 	}{
 		{"unknown MAC", bootScriptHandler(noARP), "/booty.ipxe?mac=aa:bb:cc:dd:ee:a0", "", "not yet approved"},
-		{"malformed MAC", bootScriptHandler(noARP), "/booty.ipxe?mac=zz", "", "not yet approved"},
+		{
+			"malformed MAC never falls back to ARP", bootScriptHandler(menuARP),
+			"/booty.ipxe?mac=zz", "10.0.0.9:1", "not yet approved",
+		},
 		{"menu host", bootScriptHandler(noARP), "/booty.ipxe?mac=" + menuMAC, "", menuMarker},
 		{"ARP fallback", bootScriptHandler(menuARP), "/booty.ipxe", "10.0.0.9:1", menuMarker},
 		{

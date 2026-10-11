@@ -14,7 +14,7 @@ Served on `--httpPort` (default `8080`).
 |--------|------|---------|----------|
 | `GET` | `/` | Redirect to the web UI. | `302 → /ui/` |
 | `GET` | `/ignition.json` | Ignition config for a Flatcar/CoreOS host. MAC resolved from a query param or by ARP; unknown hosts get a reboot-loop config. | Ignition v3.4.0 JSON |
-| `GET` | `/booty.ipxe?mac=` | Per-host iPXE script (holding / assigned OS / menu). Open and read-only; the host is identified by `?mac=` with ARP fallback. | iPXE script (`text/plain`) |
+| `GET` | `/booty.ipxe?mac=` | Per-host iPXE script (holding / assigned OS / menu). Open and read-only; the host is identified by `?mac=` with ARP fallback. | iPXE script (`text/plain`). Other methods fall through to the UI redirect. |
 | `GET` | `/menu/<os>/<segment>/<arch>/<version>/boot.ipxe?mac=` | iPXE script for one boot-menu selection. Open and read-only; identified by `?mac=` with ARP fallback; only menu-mode hosts get a boot script, others get the holding script. | iPXE script (`text/plain`) |
 | `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. | YAML (`text/yaml`) |
 | `GET` | `/version.txt` | Current cached versions, env-var format. | `FLATCAR_VERSION=…\nCOREOS_VERSION=…\n` |
@@ -503,16 +503,16 @@ Cache inventory: the set of on-disk boot artifacts tracked in `cache_entries`. A
 
 ### Boot dispatch (P1c)
 
-`booty.ipxe` (the TFTP magic file) now dispatches per host state rather than solely by `host.OS`:
+`booty.ipxe` (a TFTP stub that chains to HTTP `/booty.ipxe?mac=`, which renders the script) dispatches per host state rather than solely by `host.OS`:
 
 | Host state | Boot outcome |
 |-----------|-------------|
-| Unknown MAC (no ARP match) or unregistered | Holding pattern — serves `holding.ipxe`, which re-chains to `booty.ipxe` and loops until the host is registered and approved. |
+| Unknown or malformed MAC (not identified by `?mac=` or ARP) or unregistered | Holding pattern — serves `holding.ipxe`, which re-chains to `booty.ipxe` and loops until the host is registered and approved. |
 | Registered but **not approved** | Holding pattern (same as above). |
 | Approved + `boot_mode='assigned'` | Boots the newest cached version of `assigned_os` (falls back to `host.os` if `assigned_os` is empty). |
-| Approved + `boot_mode='menu'` | Serves a dynamically generated interactive iPXE boot menu (over TFTP) listing every currently-cached `(os, version)` image. The node selects a version and boots it. The selection is ephemeral — nothing is written back. See [BOOT-MENU.md](../BOOT-MENU.md). |
+| Approved + `boot_mode='menu'` | Serves a dynamically generated interactive iPXE boot menu (rendered by HTTP `/booty.ipxe`) listing every currently-cached `(os, version)` image. The node selects a version and boots it. The selection is ephemeral — nothing is written back. See [BOOT-MENU.md](../BOOT-MENU.md). |
 
-Menu selections chain a synthetic TFTP path, `menu/<os>/<schematic>/<arch>/<version>/boot.ipxe`,
+Menu selections chain `http://<serverIP>[:port]/menu/<os>/<schematic>/<arch>/<version>/boot.ipxe?mac=${mac}`,
 which booty validates against the on-disk cache and re-gates on host state (a host not in menu mode
 receives the holding script regardless of the tuple). Malformed, unknown, or uncached tuples fall
 back to holding; arbitrary files are never served through this path. Operator-facing detail lives in
