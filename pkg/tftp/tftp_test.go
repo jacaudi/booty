@@ -344,7 +344,7 @@ func TestDebianIPXE_ExpandsPreseedAndBaseURL(t *testing.T) {
 		"[[debian-baseurl]]": "http://10.0.0.1:8080/data/cache/debian/12/amd64/12.15.0/install.amd64",
 		"[[debian-arch]]":    "amd64",
 	})
-	if !strings.Contains(out, "preseed/url=http://10.0.0.1:8080/preseed") {
+	if !strings.Contains(out, "preseed/url=http://10.0.0.1:8080/preseed?mac=${mac}") {
 		t.Fatalf("kernel line must fetch /preseed:\n%s", out)
 	}
 	if !strings.Contains(out, "/data/cache/debian/") || !strings.Contains(out, "install.amd64/linux") {
@@ -556,5 +556,20 @@ func TestAssignedToolServesHoldingNotABrokenScript(t *testing.T) {
 	}
 	if !strings.Contains(got, "not yet approved") {
 		t.Errorf("a tool assignment must fall back to the holding script, got:\n%s", got)
+	}
+}
+
+func TestConfigURLsCarryMAC(t *testing.T) {
+	for key, want := range map[string]string{
+		"flatcar.ipxe": "ignition.config.url=http://[[server]]/ignition.json?mac=${mac}",
+		"coreos.ipxe":  "set CONFIGURL http://[[server]]/ignition.json?mac=${mac}",
+		"debian.ipxe":  "preseed/url=http://[[server]]/preseed?mac=${mac}",
+	} {
+		if !strings.Contains(PXEConfig[key], want) {
+			t.Errorf("%s does not contain %q:\n%s", key, want, PXEConfig[key])
+		}
+	}
+	if strings.Contains(PXEConfig["flatcar"], "${mac}") {
+		t.Error("pxelinux flatcar entry must stay free of iPXE variables")
 	}
 }
