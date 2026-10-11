@@ -29,6 +29,7 @@ keep cache and registration across restarts.
 > any directory listing. Everything else returns `404`. Put anything a booted node must fetch in
 > `public/`; anything booty renders server-side stays in `config/`.
 > TFTP applies the same allowlist (plus the top-level iPXE bootfile names).
+> Both TFTP and HTTP `/data/` open files through `os.Root`, so a symlink cannot reach outside `--dataDir`. A symlink that stays inside `--dataDir` (for example `public/x -> ../api-token`) is followed: booty creates no symlinks, so do not create one that points at a non-public file.
 
 > **As of P1b:** `version.txt` / `<channel>.json` are no longer read for version state — the newest
 > cached version is derived from the `cache/` directory for every OS (not just Talos).
