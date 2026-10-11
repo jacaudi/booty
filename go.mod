@@ -4,11 +4,6 @@ go 1.26.1
 
 toolchain go1.26.2
 
-replace (
-	github.com/flatcar-linux/container-linux-config-transpiler => github.com/flatcar-linux/container-linux-config-transpiler v0.9.2
-	github.com/pin/tftp => github.com/pin/tftp v0.0.0-20210809155059-0161c5dd2e96
-)
-
 require (
 	filippo.io/age v1.3.1
 	github.com/ProtonMail/go-crypto v1.4.1
@@ -20,7 +15,7 @@ require (
 	github.com/insomniacslk/dhcp v0.0.0-20260603135910-a415979eb11e
 	github.com/j-keck/arping v1.0.3
 	github.com/joho/godotenv v1.4.0
-	github.com/pin/tftp v2.2.0+incompatible
+	github.com/pin/tftp/v3 v3.2.0
 	github.com/siderolabs/talos/pkg/machinery v1.13.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.10.1
