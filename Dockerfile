@@ -7,7 +7,7 @@ COPY web/ .
 RUN npm run build
 
 ### Stage Two: build the Go binary (embeds the web assets)
-FROM --platform=$BUILDPLATFORM golang:1.26.2-alpine AS build-golang
+FROM --platform=$BUILDPLATFORM golang:1.26.9-alpine AS build-golang
 
 # Cross-compilation targets. BuildKit/buildx auto-populates TARGETOS/TARGETARCH
 # per target platform. Do NOT default these: a default (e.g. amd64) overrides
