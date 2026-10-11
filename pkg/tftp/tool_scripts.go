@@ -67,7 +67,7 @@ boot
 :notefi
 echo UEFI Shell requires an EFI client; this machine booted in BIOS mode.
 sleep 10
-chain tftp://[[server-ip]]/booty.ipxe || shell`
+chain http://[[server]]/booty.ipxe?mac=${mac} || shell`
 
 	// Upstream type "memtest": utils-efi and utils-pcbios-64 BOTH resolve
 	// util_path to mt86p_x86_64, so no firmware branch is needed on amd64
@@ -115,7 +115,7 @@ boot
 :notefi
 echo ZFSBootMenu requires an EFI client; this machine booted in BIOS mode.
 sleep 10
-chain tftp://[[server-ip]]/booty.ipxe || shell`
+chain http://[[server]]/booty.ipxe?mac=${mac} || shell`
 
 	// Upstream: menu/shredos.ipxe.j2 :shredos_boot for the kernel line, plus its
 	// warning menu ported here (design D12/§6.5).
@@ -147,7 +147,7 @@ item wipe Continue to ShredOS
 choose --timeout 300000 --default back sel || goto back
 iseq ${sel} wipe && goto wipe || goto back
 :back
-chain tftp://[[server-ip]]/booty.ipxe || shell
+chain http://[[server]]/booty.ipxe?mac=${mac} || shell
 exit 0
 :wipe
 echo Starting ShredOS. nwipe will list your disks; erasure is irreversible.

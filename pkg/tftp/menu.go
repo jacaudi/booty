@@ -7,9 +7,7 @@ import (
 	"strings"
 
 	"github.com/jeefy/booty/pkg/cache"
-	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/hardware"
-	"github.com/spf13/viper"
 )
 
 // osTitle maps an on-disk cache name to a friendly menu label prefix.
@@ -86,7 +84,7 @@ func renderMenuSelection(filename, urlHost string) (string, error) {
 	return applyTokens(tmpl, bootTokensFor(cacheName, segment, arch, version, urlHost)), nil
 }
 
-// menuSelectionScript returns the iPXE script to serve for a TFTP
+// MenuSelectionScript returns the iPXE script to serve for a HTTP
 // "menu/<tuple>/boot.ipxe" request. It gates on host state via bootDispatch,
 // mirroring the gate that the booty.ipxe branch already applies — only a host
 // that bootDispatch classifies as "menu" (approved + boot_mode='menu') may boot
@@ -97,11 +95,8 @@ func renderMenuSelection(filename, urlHost string) (string, error) {
 // For menu-mode hosts, renderMenuSelection validates the tuple and renders the
 // OS template; on any validation error the holding fallback is still served
 // (behaviour unchanged from before this gate was added).
-func menuSelectionScript(host *hardware.Host, filename, urlHost string) string {
-	holding := applyTokens(PXEConfig["holding.ipxe"], map[string]string{
-		"[[server]]":    urlHost,
-		"[[server-ip]]": viper.GetString(config.ServerIP),
-	})
+func MenuSelectionScript(host *hardware.Host, filename, urlHost string) string {
+	holding := holdingScript(urlHost)
 	// Gate: restore symmetry with the booty.ipxe branch — only menu-mode hosts
 	// may boot a selection.
 	kind, _ := bootDispatch(host)
@@ -116,6 +111,27 @@ func menuSelectionScript(host *hardware.Host, filename, urlHost string) string {
 	return toServe
 }
 
+// writeMenuGuards emits the sentinel dispatch that follows the main choose.
+func writeMenuGuards(b *strings.Builder, hasTools, hasArchived bool) {
+	// One guarded line per sentinel with an explicit fall-through label. The
+	// `|| goto` is MANDATORY, not stylistic: iPXE aborts a script on the first
+	// failing command and iseq fails on mismatch, so a bare
+	// `iseq ${sel} tools && goto tools` would kill the menu on every other
+	// selection.
+	switch {
+	case hasTools && hasArchived:
+		b.WriteString("iseq ${sel} tools && goto tools || goto nottools\n")
+		b.WriteString(":nottools\n")
+		b.WriteString("iseq ${sel} archived && goto archived || goto boot\n")
+	case hasTools:
+		b.WriteString("iseq ${sel} tools && goto tools || goto boot\n")
+	case hasArchived:
+		b.WriteString("iseq ${sel} archived && goto archived || goto boot\n")
+	default:
+		b.WriteString("goto boot\n")
+	}
+}
+
 // renderMenu builds the iPXE menu script for the partitioned cache entries.
 // inWindow entries appear in the main menu; archived entries (in_window=0) are
 // grouped under a nested "Archived OSes" sub-menu reachable from the main block.
@@ -123,10 +139,10 @@ func menuSelectionScript(host *hardware.Host, filename, urlHost string) string {
 // real target and an empty cache still produces a valid (loop-only) menu.
 // The item KEY is the cache-relative path <cacheName>/<segment>/<arch>/<version>,
 // which maps directly to the selection-boot path menu/<key>/boot.ipxe.
-// ASCII only for iPXE-build compatibility. serverIP is the bare server IP.
+// ASCII only for iPXE-build compatibility. urlHost is serverIP[:port].
 // The invariant is the guarded iseq/goto dispatch shape: nav sentinels use
 // goto-label, boot tuples fall through to the chain command.
-func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
+func renderMenu(inWindow, archived []cache.CacheEntry, urlHost string) string {
 	var osEntries, toolEntries []cache.CacheEntry
 	for _, e := range inWindow {
 		if isToolOS(e.CacheName) {
@@ -151,25 +167,9 @@ func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
 		b.WriteString("item archived Archived OSes...\n")
 	}
 	b.WriteString("choose --timeout 300000 --default retry sel || goto retry\n")
-	// One guarded line per sentinel with an explicit fall-through label. The
-	// `|| goto` is MANDATORY, not stylistic: iPXE aborts a script on the first
-	// failing command and iseq fails on mismatch, so a bare
-	// `iseq ${sel} tools && goto tools` would kill the menu on every other
-	// selection.
-	switch {
-	case len(toolEntries) > 0 && len(archived) > 0:
-		b.WriteString("iseq ${sel} tools && goto tools || goto nottools\n")
-		b.WriteString(":nottools\n")
-		b.WriteString("iseq ${sel} archived && goto archived || goto boot\n")
-	case len(toolEntries) > 0:
-		b.WriteString("iseq ${sel} tools && goto tools || goto boot\n")
-	case len(archived) > 0:
-		b.WriteString("iseq ${sel} archived && goto archived || goto boot\n")
-	default:
-		b.WriteString("goto boot\n")
-	}
+	writeMenuGuards(&b, len(toolEntries) > 0, len(archived) > 0)
 	b.WriteString(":boot\n")
-	b.WriteString("chain tftp://" + serverIP + "/menu/${sel}/boot.ipxe || goto retry\n")
+	b.WriteString("chain http://" + urlHost + "/menu/${sel}/boot.ipxe?mac=${mac} || goto retry\n")
 
 	if len(archived) > 0 {
 		b.WriteString(":archived\n")
@@ -181,7 +181,7 @@ func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
 		b.WriteString("choose --timeout 300000 --default back asel || goto top\n")
 		b.WriteString("iseq ${asel} back && goto top || goto bootarchived\n")
 		b.WriteString(":bootarchived\n")
-		b.WriteString("chain tftp://" + serverIP + "/menu/${asel}/boot.ipxe || goto top\n")
+		b.WriteString("chain http://" + urlHost + "/menu/${asel}/boot.ipxe?mac=${mac} || goto top\n")
 	}
 
 	if len(toolEntries) > 0 {
@@ -195,10 +195,10 @@ func renderMenu(inWindow, archived []cache.CacheEntry, serverIP string) string {
 		b.WriteString("choose --timeout 300000 --default back tsel || goto top\n")
 		b.WriteString("iseq ${tsel} back && goto top || goto boottools\n")
 		b.WriteString(":boottools\n")
-		b.WriteString("chain tftp://" + serverIP + "/menu/${tsel}/boot.ipxe || goto top\n")
+		b.WriteString("chain http://" + urlHost + "/menu/${tsel}/boot.ipxe?mac=${mac} || goto top\n")
 	}
 
 	b.WriteString(":retry\n")
-	b.WriteString("chain tftp://" + serverIP + "/booty.ipxe || shell\n")
+	b.WriteString("chain http://" + urlHost + "/booty.ipxe?mac=${mac} || shell\n")
 	return b.String()
 }

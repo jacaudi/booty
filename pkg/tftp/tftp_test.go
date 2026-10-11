@@ -255,13 +255,12 @@ func TestHoldingTemplateExists(t *testing.T) {
 	if !ok {
 		t.Fatalf("holding.ipxe template missing")
 	}
-	// The holding loop must re-chain over TFTP (booty.ipxe is TFTP-only; there
-	// is no HTTP /booty.ipxe route — the / catch-all 302s to /ui/).
-	if !strings.Contains(tmpl, "tftp://[[server-ip]]/booty.ipxe") {
-		t.Errorf("holding.ipxe must chain via tftp://[[server-ip]]/booty.ipxe, got:\n%s", tmpl)
+	// The holding loop re-chains over HTTP so the MAC travels in the URL (design item 7).
+	if !strings.Contains(tmpl, "http://[[server]]/booty.ipxe?mac=${mac}") {
+		t.Errorf("holding.ipxe must chain via http://[[server]]/booty.ipxe?mac=${mac}, got:\n%s", tmpl)
 	}
-	if strings.Contains(tmpl, "http://[[server]]/booty.ipxe") {
-		t.Errorf("holding.ipxe must NOT chain via http://[[server]]/booty.ipxe (no HTTP route exists), got:\n%s", tmpl)
+	if strings.Contains(tmpl, "tftp://") {
+		t.Errorf("holding.ipxe must not chain over tftp://, got:\n%s", tmpl)
 	}
 }
 
@@ -528,10 +527,10 @@ func TestToolScriptFullySubstituted(t *testing.T) {
 			t.Errorf("%s: unsubstituted token remains:\n%s", name, out)
 		}
 		// Absence of "[[" is NOT sufficient: an empty [[server-ip]] also removes
-		// the marker while emitting "chain tftp:///booty.ipxe". Assert the value
+		// the marker while emitting "chain http:///booty.ipxe". Assert the value
 		// actually landed.
-		if strings.Contains(out, "tftp:///") {
-			t.Errorf("%s: [[server-ip]] substituted as empty:\n%s", name, out)
+		if strings.Contains(out, "http:///") {
+			t.Errorf("%s: [[server]] substituted as empty:\n%s", name, out)
 		}
 	}
 }
