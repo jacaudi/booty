@@ -193,4 +193,13 @@ func TestRenderBootScriptKinds(t *testing.T) {
 
 ### Phase exit check
 
-`go build ./... && go vet ./... && go test -race ./...` → all `ok`.
+- `go build ./... && go vet ./... && go test -race ./...` → all `ok`.
+- QEMU re-run (phase 5 Task 5 script, without `UNTIL=tftp`):
+
+```bash
+go build -o bin/booty ./cmd
+sudo env BOOTY=bin/booty TOPO=proxy OUT=/tmp/pxe-proxy test/qemu/pxe-check.sh
+sudo env BOOTY=bin/booty TOPO=dhcp  OUT=/tmp/pxe-dhcp  test/qemu/pxe-check.sh
+```
+
+  Expected for both: `result=HTTP_BOOT_SCRIPT`, and `booty.log` contains `boot script` with `kind=holding mac=52:54:00:12:34:58`. Append the result lines to `docs/testing/2026-10-ipxe-qemu.md` and commit with `test(qemu): HTTP boot script reached over the full UEFI chain`. If either run gives another result, keep the `OUT` directory and report; do not adjust code to fit.
