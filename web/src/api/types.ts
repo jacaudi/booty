@@ -16,6 +16,30 @@ export interface Host {
   assignedParams?: string
   uuid?: string
   serial?: string
+  health?: HostHealthSummary
+}
+
+// Mirrors nodereport.Summary (pkg/nodereport/health.go).
+export interface HostHealthSummary {
+  running: string
+  kernel: string
+  firmware: string
+  receivedAt: string
+  failedUnitCount: number
+  vendor: string
+  product: string
+}
+
+// Mirrors nodereport.Health (pkg/nodereport/health.go).
+export interface HostHealth {
+  receivedAt: string
+  bootID: string
+  running: string
+  failedUnits: string[]
+  journalErrors: string[]
+  dmi: { vendor: string; product: string; biosVersion: string }
+  firmware: string
+  kernel: string
 }
 
 // A host is pending iff it is not approved. hardware.Host serializes `approved`
