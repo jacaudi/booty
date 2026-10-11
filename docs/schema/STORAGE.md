@@ -8,6 +8,7 @@ keep cache and registration across restarts.
 ├── booty.db                      # SQLite state: hosts + targets (see DATABASE.md)
 ├── booty.db-wal                  # SQLite write-ahead log (WAL mode)
 ├── booty.db-shm                  # SQLite shared-memory index
+├── node-report-key               # 32-byte HMAC key for node report tokens (0600, created with --nodeReports)
 ├── hardware.json.migrated        # legacy host DB, imported into booty.db at first start
 ├── version.txt                   # Flatcar: current cached version marker
 ├── <channel>.json                # CoreOS: streams metadata (e.g. stable.json)

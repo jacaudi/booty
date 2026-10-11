@@ -17,6 +17,7 @@ Served on `--httpPort` (default `8080`).
 | `GET` | `/booty.ipxe?mac=` | Per-host iPXE script (holding / assigned OS / menu). Open and read-only; the host is identified by `?mac=` with ARP fallback. | iPXE script (`text/plain`). Other methods fall through to the UI redirect. |
 | `GET` | `/menu/<os>/<segment>/<arch>/<version>/boot.ipxe?mac=` | iPXE script for one boot-menu selection. Open and read-only; identified by `?mac=` with ARP fallback; only menu-mode hosts get a boot script, others get the holding script. | iPXE script (`text/plain`) |
 | `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. | YAML (`text/yaml`) |
+| `POST` | `/node/report?mac=` | Node health report from a host's injected unit. Only registered when `--nodeReports` is on (otherwise `404` for every method). Authenticated by the per-host token in the `X-Booty-Node-Token` header, not by the API token. Body: JSON health report, max 64 KiB. Limits: 10/min per source IP, 1 per 10 s per host. See [Node reports](../CONFIGURATION.md#node-reports). | `204` / `400` bad MAC, bad JSON or unknown firmware / `401` missing or wrong token, unknown host / `405` not `POST` (`Allow: POST`) / `413` body too large / `429` rate limited |
 | `GET` | `/version.txt` | Current cached versions, env-var format. | `FLATCAR_VERSION=…\nCOREOS_VERSION=…\n` |
 | `GET` | `/version.json` | Current cached versions, JSON. | `{"flatcar":"…","coreos":"…"}` |
 | `GET` | `/healthz` | Liveness probe. | `200` |
@@ -329,8 +330,14 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 | `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). | `204` |
 | `POST` | `/api/v1/hosts/{mac}/menu` | Approve (if needed) and put the host into interactive boot-menu mode (`boot_mode='menu'`). Does **not** route through `SetAssignment`; `approved_os` is unchanged. `404` if MAC is unknown. | host JSON / `404` |
 | `POST` | `/api/v1/hosts/{mac}/wake` | Sends Wake-on-LAN magic packets (3 rounds, 1 s apart, UDP 9) to every local broadcast address, 255.255.255.255 and the host's last IP. `404` unknown host, `422` bad MAC, `502` nothing sent, `503` unavailable. The NIC/firmware must have WoL enabled and booty must share the L2 segment, or directed broadcast must be routed. | `200` `{sentTo}` |
+| `GET` | `/api/v1/hosts/{mac}/health` | Latest node health report (`receivedAt`, `bootID`, `running`, `failedUnits`, `journalErrors`, `dmi{vendor,product,biosVersion}`, `firmware`, `kernel`). `422` bad MAC, `404` unknown host or `no report yet`. | `200` / `404` / `422` |
+| `POST` | `/api/v1/hosts/{mac}/report-token/rotate` | Bump the host's report-token generation; the old token is refused at once. `404` unknown host, `409` when `--nodeReports` is off, `422` bad MAC. | `200` `{"generation":n}` / `404` / `409` / `422` |
 | `PUT` | `/api/v1/hosts/{mac}` | **Wired but not implemented yet: `403` regardless of credential.** | `403` |
 | `DELETE` | `/api/v1/hosts/{mac}` | Delete a host. `RemoveMacAddress` is idempotent, so existence is checked first to give a truthful `404` for a MAC that was never registered rather than a `204`. | `204` / `404` |
+
+> **`health` on list-hosts.** Each item of `GET /api/v1/hosts` carries an optional `health` summary
+> once the host has reported: `{running, kernel, firmware, receivedAt, failedUnitCount, vendor, product}`.
+> It is omitted for a host that has not reported.
 
 > **Family-match validation (P4).** Both `approve` and `bind` validate a present `configId` against
 > the host's OS family before writing it: the config's `kind` must be one the family accepts —

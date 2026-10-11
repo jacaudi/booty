@@ -7,6 +7,8 @@
 
 - booty embeds iPXE v2.0.0 (undionly.kpxe, ipxe.efi, snponly.efi) and serves it over TFTP and /boot/; staging iPXE in --dataDir is no longer needed (except ARM64).
 
+- Opt-in node health reports (--nodeReports): Flatcar, CoreOS and debianconfig Debian hosts report their running OS version, failed units and boot errors; shown on the Hosts page.
+
 ## Changes
 
 - booty.ipxe is now rendered over HTTP (/booty.ipxe?mac=) and identifies hosts by the MAC iPXE reports; TFTP serves a one-line stub. DoInstall is no longer cleared on boot; it never changed what booted.
