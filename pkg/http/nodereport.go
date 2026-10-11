@@ -31,8 +31,8 @@ type NodeReports struct {
 	// Key is the 32-byte HMAC key the per-host report tokens derive from.
 	Key []byte
 
-	// receiver is set by nodeReportHandler so token rotation can
-	// invalidate its generation cache.
+	// receiver is set by nodeReportHandler so token rotation can update
+	// its generation cache.
 	receiver *reportReceiver
 }
 
@@ -84,9 +84,16 @@ func (c *genCache) Lookup(mac string) (int64, error) {
 	return gen, nil
 }
 
+// put caches gen. Generations only increase, so a live entry is never
+// lowered: a lookup that read the database before a rotation and puts after
+// it must not bring the old token back. An expired entry is replaced, which
+// lets a deleted and re-added host (generation back at 0) recover.
 func (c *genCache) put(mac string, gen int64, exp time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if e, ok := c.m[mac]; ok && e.gen > gen && c.now().Before(e.exp) {
+		return
+	}
 	if _, ok := c.m[mac]; !ok && len(c.m) >= genCacheCapacity {
 		for k := range c.m { // evict an arbitrary entry
 			delete(c.m, k)
@@ -94,13 +101,6 @@ func (c *genCache) put(mac string, gen int64, exp time.Time) {
 		}
 	}
 	c.m[mac] = genEntry{gen: gen, exp: exp}
-}
-
-// Invalidate forgets mac's cached generation (call after rotating its token).
-func (c *genCache) Invalidate(mac string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.m, mac)
 }
 
 // reportReceiver serves POST /node/report. It is unauthenticated at the
@@ -136,6 +136,7 @@ func (rr *reportReceiver) reject(w http.ResponseWriter, r *http.Request, rawMAC 
 
 func (rr *reportReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
@@ -218,4 +219,9 @@ func (n *NodeReports) script(store *db.Store, host *hardware.Host) (string, stri
 		return "", "", false
 	}
 	return script, nodereport.Unit(nodereport.ScriptPath), true
+}
+
+// Set stores gen for mac with a fresh TTL (call after rotating its token).
+func (c *genCache) Set(mac string, gen int64) {
+	c.put(mac, gen, c.now().Add(genCacheTTL))
 }

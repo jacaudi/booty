@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/nodereport"
 )
 
 func hostsTestSetup(t *testing.T) APIDeps {
@@ -709,5 +712,155 @@ func TestWakeHost(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) { runWakeCase(t, tc) })
+	}
+}
+
+// storeHealth writes a stored health report for mac.
+func storeHealth(t *testing.T, s *db.Store, mac string, h nodereport.Health) {
+	t.Helper()
+	b, err := json.Marshal(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.UpsertHostHealth(mac, h.ReceivedAt, b); err != nil {
+		t.Fatalf("UpsertHostHealth: %v", err)
+	}
+}
+
+func TestListHostsIncludesHealthSummary(t *testing.T) {
+	deps := hostsTestSetup(t)
+	api := newTestAPI(t, deps)
+	const withMAC, withoutMAC = "aa:bb:cc:00:00:11", "aa:bb:cc:00:00:12"
+	for _, mac := range []string{withMAC, withoutMAC} {
+		if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	storeHealth(t, deps.Store, withMAC, nodereport.Health{
+		ReceivedAt: "2026-10-11T12:00:00Z", Running: "4152.2.0", FailedUnits: []string{"a.service"},
+	})
+
+	resp := api.Get("/api/v1/hosts")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("list = %d: %s", resp.Code, resp.Body.String())
+	}
+	var body struct {
+		Hosts []map[string]any `json:"hosts"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Hosts) != 2 {
+		t.Fatalf("hosts = %d, want 2", len(body.Hosts))
+	}
+	for _, h := range body.Hosts {
+		health, has := h["health"].(map[string]any)
+		switch h["mac"] {
+		case withMAC:
+			if !has || health["running"] != "4152.2.0" || health["failedUnitCount"] != float64(1) {
+				t.Errorf("%v health = %v, want running 4152.2.0 and 1 failed unit", h["mac"], h["health"])
+			}
+		case withoutMAC:
+			if has {
+				t.Errorf("%v has health %v, want none", h["mac"], h["health"])
+			}
+		default:
+			t.Errorf("unexpected host %v", h["mac"])
+		}
+	}
+}
+
+func TestGetHostHealth(t *testing.T) {
+	deps := hostsTestSetup(t)
+	api := newTestAPI(t, deps)
+	const reported, silent = "aa:bb:cc:00:00:21", "aa:bb:cc:00:00:22"
+	for _, mac := range []string{reported, silent} {
+		if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	storeHealth(t, deps.Store, reported, nodereport.Health{ReceivedAt: "2026-10-11T12:00:00Z", Running: "4152.2.0"})
+
+	tests := []struct {
+		name, mac, wantBody string
+		want                int
+	}{
+		{"bad MAC", "zz", "", http.StatusUnprocessableEntity},
+		{"unknown host", "aa:bb:cc:99:99:99", "", http.StatusNotFound},
+		{"no report yet", silent, "no report yet", http.StatusNotFound},
+		{"report", reported, `"running":"4152.2.0"`, http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := api.Get("/api/v1/hosts/" + tc.mac + "/health")
+			if resp.Code != tc.want {
+				t.Fatalf("= %d, want %d: %s", resp.Code, tc.want, resp.Body.String())
+			}
+			if !strings.Contains(resp.Body.String(), tc.wantBody) {
+				t.Fatalf("body %s missing %q", resp.Body.String(), tc.wantBody)
+			}
+		})
+	}
+}
+
+func TestRotateHostReportTokenOffIs409(t *testing.T) {
+	api := newTestAPI(t, hostsTestSetup(t))
+	const mac = "aa:bb:cc:00:00:31"
+	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar"}); err != nil {
+		t.Fatal(err)
+	}
+	resp := api.Post("/api/v1/hosts/" + mac + "/report-token/rotate")
+	if resp.Code != http.StatusConflict || !strings.Contains(resp.Body.String(), "node reports are off") {
+		t.Fatalf("rotate off = %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestRotateHostReportTokenErrors(t *testing.T) {
+	deps := hostsTestSetup(t)
+	deps.NodeReports = &NodeReports{Key: nodeReportKey()}
+	api := newTestAPI(t, deps)
+	if resp := api.Post("/api/v1/hosts/zz/report-token/rotate"); resp.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("bad MAC = %d", resp.Code)
+	}
+	if resp := api.Post("/api/v1/hosts/aa:bb:cc:99:99:99/report-token/rotate"); resp.Code != http.StatusNotFound {
+		t.Fatalf("unknown host = %d", resp.Code)
+	}
+}
+
+// TestRotateHostReportTokenInvalidatesOldToken rotates through the API and
+// proves the old token stops working at the receiver while the new one works.
+func TestRotateHostReportTokenInvalidatesOldToken(t *testing.T) {
+	deps := hostsTestSetup(t)
+	key := nodeReportKey()
+	deps.NodeReports = &NodeReports{Key: key}
+	h := nodeReportHandler(deps) // also sets deps.NodeReports.receiver
+	api := newTestAPI(t, deps)
+	const mac = "aa:bb:cc:00:00:32"
+	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar"}); err != nil {
+		t.Fatal(err)
+	}
+	send := func(remote, token string) int {
+		req := httptest.NewRequest(http.MethodPost, "/node/report?mac="+mac, strings.NewReader(reportBody))
+		req.RemoteAddr = remote
+		req.Header.Set("X-Booty-Node-Token", token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	oldTok, newTok := nodereport.Token(key, mac, 0), nodereport.Token(key, mac, 1)
+	// A wrong token still populates the generation cache with gen 0.
+	if got := send("10.2.0.1:1", newTok); got != http.StatusUnauthorized {
+		t.Fatalf("pre-rotation wrong token = %d, want 401", got)
+	}
+
+	resp := api.Post("/api/v1/hosts/" + mac + "/report-token/rotate")
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"generation":1`) {
+		t.Fatalf("rotate = %d: %s", resp.Code, resp.Body.String())
+	}
+	if got := send("10.2.0.2:1", oldTok); got != http.StatusUnauthorized {
+		t.Fatalf("old token after rotation = %d, want 401", got)
+	}
+	if got := send("10.2.0.3:1", newTok); got != http.StatusNoContent {
+		t.Fatalf("new token after rotation = %d, want 204", got)
 	}
 }
