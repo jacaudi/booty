@@ -233,13 +233,13 @@ func init() {
 		&args.proxyDHCPBootfileBIOS,
 		"proxyDHCPBootfileBIOS",
 		"undionly.kpxe",
-		"BIOS iPXE binary named in the proxyDHCP ACK (embedded for undionly.kpxe and ipxe.efi; other names are served from dataDir)",
+		"BIOS iPXE binary named in the proxyDHCP ACK (embedded: undionly.kpxe, ipxe.efi, snponly.efi; other names are served from dataDir)",
 	)
 	flags.StringVar(
 		&args.proxyDHCPBootfileUEFI,
 		"proxyDHCPBootfileUEFI",
 		"ipxe.efi",
-		"UEFI iPXE binary named in the proxyDHCP ACK (embedded for undionly.kpxe and ipxe.efi; other names are served from dataDir)",
+		"UEFI iPXE binary named in the proxyDHCP ACK (embedded: undionly.kpxe, ipxe.efi, snponly.efi; other names are served from dataDir)",
 	)
 	flags.StringVar(
 		&args.proxyDHCPBootfileARM64,
@@ -530,6 +530,8 @@ func run(cmd *cobra.Command, argv []string) error {
 		nodeReports = &bootyHTTP.NodeReports{Key: key}
 	}
 
+	warnShadowedBootFiles(viper.GetString(config.DataDir), boot.Names, slog.Default())
+
 	// Single cache reconciler replaces the per-OS version-check crons. Start it
 	// after the host store is loaded; it owns all target/version DB writes and
 	// eager artifact caching. Serving (TFTP/HTTP below) may begin immediately —
@@ -616,6 +618,17 @@ func run(cmd *cobra.Command, argv []string) error {
 
 	slog.Info("Booty stopped")
 	return runErr
+}
+
+// warnShadowedBootFiles logs a warning for each embedded iPXE name that also
+// exists as a regular file in dataDir: the embedded copy is served first, so
+// the dataDir copy is dead weight the operator may think is in use.
+func warnShadowedBootFiles(dataDir string, names []string, log *slog.Logger) {
+	for _, name := range names {
+		if fi, err := os.Stat(filepath.Join(dataDir, name)); err == nil && fi.Mode().IsRegular() {
+			log.Warn("embedded iPXE file shadows a file in dataDir; the dataDir copy is not served", "file", name)
+		}
+	}
 }
 
 // startProxyDHCP starts the proxyDHCP responder when enabled. It is
