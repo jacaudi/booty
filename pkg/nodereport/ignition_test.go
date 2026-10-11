@@ -92,3 +92,11 @@ func TestMergeIgnitionInvalidJSON(t *testing.T) {
 		t.Fatal("want error")
 	}
 }
+
+func TestMergeIgnitionNotAnObject(t *testing.T) {
+	for _, in := range []string{"null", "[]", `"x"`, "1"} {
+		if _, err := MergeIgnition([]byte(in), "s", "u"); err == nil {
+			t.Errorf("%s: want error", in)
+		}
+	}
+}

@@ -19,7 +19,12 @@ const (
 
 // Token derives the per-host report token: lowercase hex of
 // HMAC-SHA256(key, "booty-node-report\x00" + mac + "\x00" + gen).
+//
+// It returns "" when key is not keyLen bytes, which ValidToken rejects.
 func Token(key []byte, mac string, gen int64) string {
+	if len(key) != keyLen {
+		return ""
+	}
 	m := hmac.New(sha256.New, key)
 	m.Write([]byte("booty-node-report\x00" + mac + "\x00" + strconv.FormatInt(gen, 10)))
 	return hex.EncodeToString(m.Sum(nil))
@@ -28,7 +33,11 @@ func Token(key []byte, mac string, gen int64) string {
 // ValidToken reports whether presented is the token for mac and gen, in
 // constant time.
 func ValidToken(key []byte, mac string, gen int64, presented string) bool {
-	return hmac.Equal([]byte(Token(key, mac, gen)), []byte(presented))
+	want := Token(key, mac, gen)
+	if want == "" {
+		return false
+	}
+	return hmac.Equal([]byte(want), []byte(presented))
 }
 
 // LoadOrCreateKey returns the 32-byte token key at path, creating it with
@@ -54,29 +63,55 @@ func LoadOrCreateKey(path string) ([]byte, error) {
 	return key, nil
 }
 
-// writeKey writes key to a temp file beside path (mode 0600) and renames it
-// into place, so a reader never sees a partial key.
+// writeKey writes key to a temp file beside path (mode 0600), syncs it,
+// renames it into place and syncs the directory, so a reader never sees a
+// partial key and a crash cannot lose a key that was handed out.
 func writeKey(path string, key []byte) (err error) {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".node-report-key-*")
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".node-report-key-*")
 	if err != nil {
 		return fmt.Errorf("create node report key: %w", err)
 	}
+	tmpPath := tmp.Name()
 	defer func() {
+		// A successful rename leaves nothing at tmpPath; on error discard it.
 		if err != nil {
-			err = errors.Join(err, tmp.Close(), os.Remove(tmp.Name()))
+			_ = os.Remove(tmpPath)
 		}
 	}()
-	if err = tmp.Chmod(keyMode); err != nil {
-		return fmt.Errorf("chmod node report key: %w", err)
+	if cerr := tmp.Chmod(keyMode); cerr != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod node report key: %w", cerr)
 	}
-	if _, err = tmp.Write(key); err != nil {
-		return fmt.Errorf("write node report key: %w", err)
+	if _, werr := tmp.Write(key); werr != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write node report key: %w", werr)
 	}
-	if err = tmp.Close(); err != nil {
-		return fmt.Errorf("close node report key: %w", err)
+	if serr := tmp.Sync(); serr != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync node report key: %w", serr)
 	}
-	if err = os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("install node report key: %w", err)
+	if cerr := tmp.Close(); cerr != nil {
+		return fmt.Errorf("close node report key: %w", cerr)
+	}
+	if rerr := os.Rename(tmpPath, path); rerr != nil {
+		return fmt.Errorf("install node report key: %w", rerr)
+	}
+	return syncDir(dir)
+}
+
+// syncDir fsyncs a directory so a rename into it is durable.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open node report key dir: %w", err)
+	}
+	if serr := d.Sync(); serr != nil {
+		_ = d.Close()
+		return fmt.Errorf("sync node report key dir: %w", serr)
+	}
+	if cerr := d.Close(); cerr != nil {
+		return fmt.Errorf("close node report key dir: %w", cerr)
 	}
 	return nil
 }

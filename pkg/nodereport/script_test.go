@@ -2,6 +2,7 @@ package nodereport
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,12 +10,27 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/coreos/go-systemd/v22/unit"
 )
+
+const (
+	testMAC   = "aa:bb:cc:dd:ee:01"
+	testToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+)
+
+func mustScript(t *testing.T, server string) string {
+	t.Helper()
+	s, err := Script(server, testMAC, testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
 
 func writeStub(t *testing.T, dir, name, body string) {
 	t.Helper()
@@ -113,7 +129,7 @@ EOF
 printf '%s\n' "booty-k8s-join.service loaded failed failed Join" "var-lib-containerd.mount loaded failed failed Mount"
 `,
 	)
-	writeStub(t, stubs, "ip", `echo "ip must not be called when BOOTY_MAC is set" >&2; exit 2`)
+	writeStub(t, stubs, "ip", `echo "script must not discover the MAC itself" >&2; exit 2`)
 	writeFile(
 		t,
 		filepath.Join(dir, "os-release"),
@@ -130,7 +146,7 @@ printf '%s\n' "booty-k8s-join.service loaded failed failed Join" "var-lib-contai
 	proc := filepath.Join(dir, "proc")
 	writeFile(t, filepath.Join(proc, "sys", "kernel", "random", "boot_id"), "5b1c6b2e-4a9e-4e7b-9a0e-2d3f4a5b6c7d\n")
 	script := filepath.Join(dir, "health-report")
-	writeFile(t, script, Script(strings.TrimPrefix(srv.URL, "http://"), "aa:bb:cc:dd:ee:01", "tok"))
+	writeFile(t, script, mustScript(t, strings.TrimPrefix(srv.URL, "http://")))
 
 	run := func(t *testing.T, extraEnv ...string) string {
 		t.Helper()
@@ -157,8 +173,8 @@ printf '%s\n' "booty-k8s-join.service loaded failed failed Join" "var-lib-contai
 	if len(bodies) != 1 || macs[0] != "aa:bb:cc:dd:ee:01" || ctype[0] != "application/json" {
 		t.Fatalf("bodies=%d macs=%v ctype=%v", len(bodies), macs, ctype)
 	}
-	if tokens[0] != "tok" {
-		t.Fatalf("X-Booty-Node-Token = %q, want tok", tokens[0])
+	if tokens[0] != testToken {
+		t.Fatalf("X-Booty-Node-Token = %q, want %s", tokens[0], testToken)
 	}
 	var got healthBody
 	if err := json.Unmarshal([]byte(bodies[0]), &got); err != nil {
@@ -225,7 +241,7 @@ func TestHealthReportScriptEmptyLists(t *testing.T) {
 	writeStub(t, stubs, "systemctl", "exit 0")
 	writeFile(t, filepath.Join(dir, "os-release"), "ID=flatcar\nVERSION_ID=4757.2.0\n")
 	script := filepath.Join(dir, "health-report")
-	writeFile(t, script, Script(strings.TrimPrefix(srv.URL, "http://"), "aa:bb:cc:dd:ee:01", "tok"))
+	writeFile(t, script, mustScript(t, strings.TrimPrefix(srv.URL, "http://")))
 	cmd := exec.Command("bash", script)
 	cmd.Env = append(
 		os.Environ(),
@@ -267,7 +283,7 @@ func TestHealthReportScriptFailsWhenBootyRefuses(t *testing.T) {
 	writeStub(t, stubs, "systemctl", "exit 0")
 	writeFile(t, filepath.Join(dir, "os-release"), "ID=flatcar\nVERSION_ID=4757.2.0\n")
 	script := filepath.Join(dir, "health-report")
-	writeFile(t, script, Script(strings.TrimPrefix(srv.URL, "http://"), "aa:bb:cc:dd:ee:01", "tok"))
+	writeFile(t, script, mustScript(t, strings.TrimPrefix(srv.URL, "http://")))
 	cmd := exec.Command("bash", script)
 	cmd.Env = append(
 		os.Environ(),
@@ -306,5 +322,66 @@ func TestHealthUnitParses(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("%s = %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+// TestScriptUsesEmbeddedMAC runs the script without BOOTY_MAC and checks the
+// posted ?mac= is the value baked in by Script.
+func TestScriptUsesEmbeddedMAC(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl not installed")
+	}
+	var mac string
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		mac = r.URL.Query().Get("mac")
+	}))
+	t.Cleanup(srv.Close)
+	dir := t.TempDir()
+	stubs := filepath.Join(dir, "bin")
+	if err := os.Mkdir(stubs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeStub(t, stubs, "journalctl", "exit 0")
+	writeStub(t, stubs, "systemctl", "exit 0")
+	writeFile(t, filepath.Join(dir, "os-release"), "ID=flatcar\nVERSION_ID=4757.2.0\n")
+	script := filepath.Join(dir, "health-report")
+	writeFile(t, script, mustScript(t, strings.TrimPrefix(srv.URL, "http://")))
+	cmd := exec.Command("bash", script)
+	cmd.Env = append(os.Environ(), "PATH="+stubs+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"BOOTY_OS_RELEASE="+filepath.Join(dir, "os-release"), "BOOTY_SYS="+filepath.Join(dir, "nosys"),
+		"BOOTY_PROC="+filepath.Join(dir, "noproc"), "BOOTY_MAC=")
+	cmd.Env = slices.DeleteFunc(cmd.Env, func(e string) bool { return e == "BOOTY_MAC=" })
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if mac != testMAC {
+		t.Fatalf("posted mac = %q, want %q", mac, testMAC)
+	}
+}
+
+func TestScriptRejectsBadInput(t *testing.T) {
+	tests := []struct{ name, server, mac, token string }{
+		{"mac injection", "h:1", "x}; touch /tmp/pwn; : ${y", testToken},
+		{"mac uppercase", "h:1", "AA:BB:CC:DD:EE:01", testToken},
+		{"mac short", "h:1", "aa:bb", testToken},
+		{"token quote", "h:1", testMAC, "ab'cd" + testToken[5:]},
+		{"token short", "h:1", testMAC, "tok"},
+		{"token empty", "h:1", testMAC, ""},
+		{"server subshell", `h"$(id)"`, testMAC, testToken},
+		{"server empty", "", testMAC, testToken},
+		{"server space", "h 1", testMAC, testToken},
+		{"server newline", "h\n1", testMAC, testToken},
+		{"server backtick", "h`id`", testMAC, testToken},
+		{"server dollar", "h$x", testMAC, testToken},
+		{"server single quote", "h'1", testMAC, testToken},
+		{"server backslash", `h\1`, testMAC, testToken},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := Script(tt.server, tt.mac, tt.token)
+			if !errors.Is(err, ErrInvalidScriptInput) || s != "" {
+				t.Fatalf("got %v, %q; want ErrInvalidScriptInput and empty script", err, s)
+			}
+		})
 	}
 }

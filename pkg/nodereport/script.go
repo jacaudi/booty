@@ -1,5 +1,42 @@
 package nodereport
 
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"unicode"
+)
+
+// ErrInvalidScriptInput is returned by Script for a server, MAC or token
+// that could not be embedded in the shell script safely.
+var ErrInvalidScriptInput = errors.New("invalid health script input")
+
+var (
+	macPattern   = regexp.MustCompile(`^[0-9a-f]{2}(:[0-9a-f]{2}){5}$`)
+	tokenPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
+
+// validateScriptInput accepts only values that are inert inside the script's
+// double-quoted URL, ${BOOTY_MAC:-...} default and single-quoted header.
+func validateScriptInput(server, mac, token string) error {
+	if !macPattern.MatchString(mac) {
+		return fmt.Errorf("%w: mac must be lowercase aa:bb:cc:dd:ee:ff", ErrInvalidScriptInput)
+	}
+	if !tokenPattern.MatchString(token) {
+		return fmt.Errorf("%w: token must be 64 lowercase hex characters", ErrInvalidScriptInput)
+	}
+	if server == "" || strings.ContainsFunc(server, func(r rune) bool {
+		return strings.ContainsRune("\"'$`\\", r) || unicode.IsSpace(r)
+	}) {
+		return fmt.Errorf(
+			"%w: server must be non-empty without quotes, $, backtick, backslash or whitespace",
+			ErrInvalidScriptInput,
+		)
+	}
+	return nil
+}
+
 // Ported from jeefy/booty pkg/ignition/health.go @ 27fafe8 (MIT).
 
 const (
@@ -41,7 +78,10 @@ WantedBy=multi-user.target
 // test, which runs the script with stubs and a fake os-release.
 // product_uuid is root-only in sysfs; read_file yields "" when it cannot
 // be read and the report stays valid.
-func Script(server, mac, token string) string {
+func Script(server, mac, token string) (string, error) {
+	if err := validateScriptInput(server, mac, token); err != nil {
+		return "", err
+	}
 	return `#!/bin/bash
 set -u
 export LC_ALL=C
@@ -104,5 +144,5 @@ BODY=$(printf '{"running":%s,"failedUnits":%s,"journalErrors":%s,"dmi":{"vendor"
   "$(json_string "$(read_file "$PROC/sys/kernel/random/boot_id")")")
 printf '%s' "$BODY" | curl -fsS --max-time 20 --retry 2 --retry-connrefused -X POST -H 'Content-Type: application/json' -H 'X-Booty-Node-Token: ` + token + `' --data-binary @- "http://` + server + `/node/report?mac=$MAC" >/dev/null || { echo "booty unreachable or refused the health report" >&2; exit 1; }
 echo "health reported: running=$RUNNING failedUnits=${#FAILED[@]} journalErrors=${#ERRORS[@]}"
-`
+`, nil
 }
