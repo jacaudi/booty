@@ -17,6 +17,7 @@ import (
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/nodereport"
 	"github.com/spf13/viper"
 )
 
@@ -24,6 +25,14 @@ import (
 // DB-resolved config (precedence rungs 1–2) can be tried before falling
 // through to the existing file-based path (rungs 3–4, unchanged).
 func handleIgnitionRequest(store *db.Store) http.HandlerFunc {
+	return ignitionHandler(store, nil)
+}
+
+// ignitionHandler is handleIgnitionRequest with the optional node health
+// report unit (n nil = feature off, output unchanged).
+//
+//nolint:gocognit,funlen // existing handler body moved unchanged; splitting it is out of scope
+func ignitionHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// If we don't identify the host, tell FlatCar to reboot
 		// Reboot the host till we identify it
@@ -81,7 +90,8 @@ func handleIgnitionRequest(store *db.Store) http.HandlerFunc {
 					return
 				}
 				w.Header().Set("Content-Type", ct)
-				_, _ = w.Write(out)
+				//nolint:gosec // G705: Ignition JSON served as application/json, not HTML
+				_, _ = w.Write(withNodeReport(n, store, host, out))
 				return
 			}
 		}
@@ -173,8 +183,25 @@ WantedBy=default.target
 			}
 		}
 
-		w.Write(ignCfg)
+		//nolint:gosec // G705: Ignition JSON served as application/json, not HTML
+		_, _ = w.Write(withNodeReport(n, store, host, ignCfg))
 	}
+}
+
+// withNodeReport merges the health-report unit into an Ignition config when
+// the feature is on for host; on any failure it logs and returns out as is.
+func withNodeReport(n *NodeReports, store *db.Store, host *hardware.Host, out []byte) []byte {
+	s, u, ok := n.script(store, host)
+	if !ok {
+		return out
+	}
+	merged, err := nodereport.MergeIgnition(out, s, u)
+	if err != nil {
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Warn("node report injection skipped", "mac", host.MAC, "err", err)
+		return out
+	}
+	return merged
 }
 
 // ignitionVars populates TemplateVars for the IGNITION family: .ServerIP is

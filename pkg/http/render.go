@@ -78,19 +78,32 @@ func renderPreseedFile(source []byte, vars TemplateVars) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// renderConfig executes source as a text/template against vars, then translates
-// per kind. It is the SHARED step consumed by both the serving handlers and
-// POST /configs/{id}/preview. vars must already be populated by the caller.
-func renderConfig(kind string, source []byte, vars TemplateVars) (out []byte, contentType, report string, err error) {
+const (
+	kindDebianConfig = "debianconfig"
+	contentTypeText  = "text/plain"
+)
+
+// executeTemplate executes source as a text/template against vars.
+func executeTemplate(source []byte, vars TemplateVars) ([]byte, error) {
 	tpl, err := template.New("config").Parse(string(source))
 	if err != nil {
-		return nil, "", "", fmt.Errorf("http: parse config template: %w", err)
+		return nil, fmt.Errorf("http: parse config template: %w", err)
 	}
 	var buf bytes.Buffer
 	if err := tpl.Execute(&buf, vars); err != nil {
-		return nil, "", "", fmt.Errorf("http: render config template: %w", err)
+		return nil, fmt.Errorf("http: render config template: %w", err)
 	}
-	rendered := buf.Bytes()
+	return buf.Bytes(), nil
+}
+
+// renderConfig executes source as a text/template against vars, then translates
+// per kind. It is the SHARED step consumed by both the serving handlers and
+// POST /configs/{id}/preview. vars must already be populated by the caller.
+func renderConfig(kind string, source []byte, vars TemplateVars) ([]byte, string, string, error) {
+	rendered, err := executeTemplate(source, vars)
+	if err != nil {
+		return nil, "", "", err
+	}
 
 	switch kind {
 	case "butane":
@@ -104,7 +117,7 @@ func renderConfig(kind string, source []byte, vars TemplateVars) (out []byte, co
 		return ignCfg, "application/json", rep.String(), nil
 	case "machineconfig":
 		return rendered, "text/yaml", "", nil
-	case "debianconfig":
+	case kindDebianConfig:
 		// Curated Debian authoring: the post-template source is a structured
 		// YAML booty translates into a flat d-i preseed (debiangen.go). Same
 		// serve surface as raw preseed: text/plain, served at /preseed.
@@ -112,7 +125,7 @@ func renderConfig(kind string, source []byte, vars TemplateVars) (out []byte, co
 		if terr != nil {
 			return nil, "", "", terr
 		}
-		return body, "text/plain", "", nil
+		return body, contentTypeText, "", nil
 	default:
 		return nil, "", "", fmt.Errorf("http: unknown config kind %q", kind)
 	}

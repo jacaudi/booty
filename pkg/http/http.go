@@ -34,9 +34,9 @@ func baseMux(deps APIDeps) *http.ServeMux {
 
 	// All URLs will be handled by this function
 	myHandler.HandleFunc("/", handleRequest)
-	myHandler.HandleFunc("/ignition.json", handleIgnitionRequest(deps.Store))
+	myHandler.HandleFunc("/ignition.json", ignitionHandler(deps.Store, deps.NodeReports))
 	myHandler.HandleFunc("/machineconfig", handleMachineConfigRequest(deps.Store))
-	myHandler.HandleFunc("/preseed", handlePreseedRequest(deps.Store))
+	myHandler.HandleFunc("/preseed", preseedHandler(deps.Store, deps.NodeReports))
 	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(arpLookup))
 	myHandler.Handle("GET /menu/", menuSelectionHandler(arpLookup))
 	myHandler.Handle("POST /node/report", nodeReportHandler(deps))
