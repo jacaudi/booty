@@ -9,6 +9,7 @@
 
 ## Changes
 
+- booty.ipxe is now rendered over HTTP (/booty.ipxe?mac=) and identifies hosts by the MAC iPXE reports; TFTP serves a one-line stub. DoInstall is no longer cleared on boot; it never changed what booted.
 - TFTP refuses write requests with an error instead of an invalid reply.
 - TFTP no longer follows absolute symlinks, or symlinks leading out of --dataDir. booty itself creates none.
 - New flag --tftpPort (default 69).

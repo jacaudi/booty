@@ -243,9 +243,8 @@ remove hosts.
   registered is an *unknown host*: it's served a reboot-loop config and listed in the `unknown` array
   of `GET /api/v1/hosts` until you register it. This prevents a stray machine from booting into
   something unintended.
-- **One-shot install.** A host can carry a `DoInstall` flag. The first time it fetches `booty.ipxe`,
-  booty flips the flag off — so you can boot an installer once, then fall through to booting from
-  disk on subsequent network boots.
+- **DoInstall.** The host record carries a DoInstall flag for a future install-once feature. booty does
+  not act on it yet.
 - **Per-host Talos schematics.** A Talos host may set its own Image Factory `schematic`; booty caches
   and serves artifacts for each schematic independently.
 
@@ -306,12 +305,10 @@ The container is a distroless image with the binary at `/booty` and the web UI b
   `undionly.kpxe`, `ipxe.efi` and `snponly.efi`, also downloadable from
   `http://<booty>:8080/boot/<name>`), or `pxelinux.cfg/default` for legacy PXE. With `--proxyDHCPEnabled`, booty selects the right
   iPXE binary by client architecture automatically.
-- **Networking.** booty must share a layer-2 segment with the machines it boots (it resolves a
-  requester's MAC by ARP). Make sure UDP/69 (and UDP/67 + 4011 for proxyDHCP) are reachable.
-  Machines on a different VLAN/subnet cannot be identified and will sit in the holding loop —
-  pointing your own DHCP server's `next-server` at booty does **not** work around this, because
-  the `booty.ipxe` script it fetches is still rendered from ARP identity. Routed/VLAN support is
-  tracked in [#71](https://github.com/jacaudi/booty/issues/71).
+- **Networking.** Make sure UDP/69 (and UDP/67 + 4011 for proxyDHCP) are reachable. Routed networks:
+  the boot script and menu work across routers (hosts are identified by the `?mac=` iPXE reports),
+  but TFTP and proxyDHCP still need L2 adjacency or a relay (`--proxyDHCPRelay`), and Talos cluster
+  members need ARP (design item 0b). Background: [#71](https://github.com/jacaudi/booty/issues/71).
 
 ## Project status
 
