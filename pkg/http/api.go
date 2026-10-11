@@ -25,6 +25,8 @@ type APIDeps struct {
 	Waker interface {
 		Wake(ctx context.Context, mac, hostIP string) ([]string, error)
 	}
+	// NodeReports enables POST /node/report; nil leaves the feature off (404).
+	NodeReports *NodeReports
 }
 
 // RegisterAPI mounts the Huma /api/v1 surface on mux (the existing booty
