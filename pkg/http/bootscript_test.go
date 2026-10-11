@@ -86,3 +86,24 @@ func TestBootScriptRejectsPost(t *testing.T) {
 		t.Fatalf("status = %d, want 405", rr.Code)
 	}
 }
+
+func TestBootScriptDoesNotChangeDoInstall(t *testing.T) {
+	servingStore(t)
+	const mac = "aa:bb:cc:dd:ee:d1"
+	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, DoInstall: true}); err != nil {
+		t.Fatal(err)
+	}
+	noARP := func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp") }
+	rr := httptest.NewRecorder()
+	bootScriptHandler(noARP)(rr, httptest.NewRequest(http.MethodGet, "/booty.ipxe?mac="+mac, nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	host, err := hardware.GetMacAddress(mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !host.DoInstall {
+		t.Fatal("DoInstall was cleared by fetching /booty.ipxe")
+	}
+}

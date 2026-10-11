@@ -16,6 +16,8 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
+	"github.com/jeefy/booty/pkg/hardware"
 )
 
 func startTestServer(t *testing.T, dataDir string, bootFiles fs.FS) (*Server, *tftp.Client) {
@@ -141,5 +143,54 @@ func TestServerPrefersEmbeddedBootFiles(t *testing.T) {
 				t.Fatalf("got %q, want %q", buf.String(), c.want)
 			}
 		})
+	}
+}
+
+func TestTFTPStubDoesNotChangeDoInstall(t *testing.T) {
+	const mac = "aa:bb:cc:dd:ee:d0"
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.ServerIP, "127.0.0.1")
+	viper.Set(config.ServerHttpPort, 8080)
+	store, err := db.Open(filepath.Join(t.TempDir(), "b.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hardware.SetStore(store)
+	t.Cleanup(func() { hardware.SetStore(nil); store.Close() })
+	if err = hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, DoInstall: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := Start(Config{
+		Port:    0,
+		DataDir: t.TempDir(),
+		ARP:     func(net.IP) (net.HardwareAddr, error) { return net.ParseMAC(mac) },
+	}, make(chan error, 1))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(srv.Shutdown)
+	c, err := tftp.NewClient(net.JoinHostPort("127.0.0.1", strconv.Itoa(srv.Addr().(*net.UDPAddr).Port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := c.Receive("booty.ipxe", "octet")
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err = wt.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != StubScript("127.0.0.1:8080") {
+		t.Fatalf("got %q, want the stub", buf.String())
+	}
+	host, err := hardware.GetMacAddress(mac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !host.DoInstall {
+		t.Fatal("DoInstall was cleared by fetching the stub")
 	}
 }

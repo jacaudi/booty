@@ -15,6 +15,9 @@ Served on `--httpPort` (default `8080`).
 | `GET` | `/` | Redirect to the web UI. | `302 → /ui/` |
 | `GET` | `/ignition.json` | Ignition config for a Flatcar/CoreOS host. MAC resolved from a query param or by ARP; unknown hosts get a reboot-loop config. | Ignition v3.4.0 JSON |
 | `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. An invalid `?hostname=` is ignored (logged), not an error. | YAML (`text/yaml`) |
+| `GET` | `/booty.ipxe?mac=` | Per-host iPXE script (holding / assigned OS / menu). Open and read-only; the host is identified by `?mac=` with ARP fallback. | iPXE script (`text/plain`) |
+| `GET` | `/menu/<os>/<segment>/<arch>/<version>/boot.ipxe?mac=` | iPXE script for one boot-menu selection. Open and read-only; identified by `?mac=` with ARP fallback; only menu-mode hosts get a boot script, others get the holding script. | iPXE script (`text/plain`) |
+| `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. | YAML (`text/yaml`) |
 | `GET` | `/version.txt` | Current cached versions, env-var format. | `FLATCAR_VERSION=…\nCOREOS_VERSION=…\n` |
 | `GET` | `/version.json` | Current cached versions, JSON. | `{"flatcar":"…","coreos":"…"}` |
 | `GET` | `/healthz` | Liveness probe. | `200` |
@@ -47,12 +50,11 @@ other unrecognized path: `302 → /ui/`, not `404`. Their successors are all und
 
 ## TFTP boot filenames
 
-Served on UDP `:69`. The host's OS is resolved by ARP-ing the requesting IP and looking it up in the
-host database. Most filenames are served as plain cached files; two are **magic**:
+Served on UDP `:69`. Hosts are identified by `?mac=` (ARP fallback). Most filenames are served as plain cached files; two are **magic**:
 
 | Filename | Behavior |
 |----------|----------|
-| `booty.ipxe` | Dynamically generated per-host iPXE script — selects the OS template and substitutes boot tokens (below). If the host's `DoInstall` flag is set, it is flipped off on this fetch (one-shot install). |
+| `booty.ipxe` | A stub that chains to `http://<serverIP>[:port]/booty.ipxe?mac=${mac}`. The per-host script (holding / assigned OS / menu) is rendered over HTTP. |
 | `pxelinux.cfg/default` | Legacy PXE config, for firmware that boots PXE rather than iPXE. |
 | *(any other path)* | Served only if below cache/ or public/, or one of the iPXE bootfile names (undionly.kpxe, ipxe.efi, snponly.efi, ipxe-arm64.efi and the --proxyDHCPBootfile* values); everything else is "file not found". |
 

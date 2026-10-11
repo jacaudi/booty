@@ -242,9 +242,9 @@ Useful when debugging with a TFTP client or reading logs:
 
 | Step | What happens |
 |------|--------------|
-| 1 | Host fetches `booty.ipxe` over TFTP. booty identifies it by MAC (via ARP on the requesting IP). |
-| 2 | Approved + `boot_mode='menu'` → booty renders the menu script and serves it in place of an OS script. |
-| 3 | The chosen item chains `tftp://<serverIP>/menu/<os>/<schematic>/<arch>/<version>/boot.ipxe`. |
+| 1 | Host fetches `booty.ipxe` over TFTP, a stub that chains to `http://<serverIP>[:port]/booty.ipxe?mac=${mac}`. booty identifies the host by that MAC (ARP is the fallback). |
+| 2 | Approved + `boot_mode='menu'` → the HTTP `/booty.ipxe?mac=` renders the menu script in place of an OS script. |
+| 3 | The chosen item chains `http://<serverIP>[:port]/menu/<os>/<schematic>/<arch>/<version>/boot.ipxe?mac=${mac}`. |
 | 4 | booty validates that synthetic path against the cache and renders that exact tuple's OS boot script. |
 | 5 | The machine boots that image, fetching its config (`/ignition.json`, `/machineconfig`, `/preseed`) as usual. |
 
@@ -263,8 +263,8 @@ before it appears.
 
 **The host loops on "not yet approved" instead of showing a menu.** booty didn't identify
 the host, or it isn't approved. Confirm the MAC is registered and approved, and that the
-machine is on the **same layer-2 segment** as booty — host identification uses ARP, which
-doesn't cross a router (see [Networking](../README.md#deployment-notes)).
+machine's iPXE reports its MAC. Identification uses the MAC iPXE reports; ARP is only a fallback
+(see [Networking](../README.md#deployment-notes)).
 
 **An expected image isn't listed.** It's declared but not yet on disk, or it rotated out of
 the retention window — check the `Archived OSes...` submenu, and see `retain` above.
@@ -281,7 +281,4 @@ regenerated menu will reflect what's actually there.
   choice stick, assign the host to that OS instead.
 - **No filtering or theming** — every cached tuple is offered to every menu-mode host; there
   is no per-host allowlist, no default-OS auto-boot, and no branding.
-- **TFTP-only** — the menu and its selection round-trip are served over TFTP; there is no
-  HTTP equivalent.
-- **Same layer-2 segment required** — like all of booty's boot path, menu mode depends on
-  ARP-based host identification and cannot serve machines on another VLAN.
+- **Routed networks:** the boot script and menu work across routers (identification by ?mac=), but TFTP and proxyDHCP still need L2 adjacency or a relay (--proxyDHCPRelay), and Talos cluster members need ARP (design item 0b).
