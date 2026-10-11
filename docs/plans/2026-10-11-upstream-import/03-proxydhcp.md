@@ -79,7 +79,7 @@ Expected: the two sha256 lines are equal.
   - `package proxydhcp`, plus the provenance comment `// Ported from jeefy/booty pkg/dhcp/pxe_test.go @ d7d92a7 (MIT).`
   - In `portFor`, replace `pkt.MessageType() == dhcpv4.MessageTypeRequest && !isHTTPBootClient(pkt)` with `pkt.MessageType() == dhcpv4.MessageTypeRequest`.
   - Keep: the helpers (lines 14-81) and these tests: `TestDiscoverProducesPXEOffer`, `TestRequestAckBootFileByArch`, `TestRequestCopiesClientFields`, `TestSilentWithoutClassIdentifier`, `TestSilentForNonPXEClass`, `TestSilentWithoutArchitecture`, `TestRelayedPacketsNeedRelayFlag`, `TestSilentForOtherServersAndOwnReplies`, `TestIPXEUserClassGetsScriptNotBinary`, `TestConfigFileOverrides`, `TestReplyDestination`, `TestParseSubOptionsRejectsMalformed`, `TestOfferVendorOptionsLayout`, `TestRequestOnPort67IsIgnored`.
-  - Delete: `TestParsePorts`, `TestStartRejectsBadServerIP`, `TestStartServesDiscoverAndShutsDown`, and any helper only they use. The compiler and `go vet` report helpers left unused.
+  - Delete: `TestParsePorts`, `TestStartRejectsBadServerIP`, `TestStartServesDiscoverAndShutsDown`, and the helpers only they use (including `freePorts`). Afterwards, run `grep -n '^func ' pkg/proxydhcp/pxe_test.go` and confirm every remaining helper is called somewhere in the package.
   - `TestDiscoverProducesPXEOffer` asserts that a firmware OFFER has no boot file (upstream `pxe_test.go:115-116`). Its packets carry no user class, so it stays valid unchanged and already covers "firmware OFFER has no file".
 - [ ] **Step 4: Add the iPXE OFFER test** to `pkg/proxydhcp/pxe_test.go`:
 
@@ -161,7 +161,7 @@ for f in pkg/proxydhcp/testdata/golden/*.hex; do n=$(basename $f); [ "$n" = disc
 - Modify: `pkg/config/config.go` (const block; `LoadConfig`)
 - Modify: `cmd/main.go` (`args`; `init()` near lines 200-223; `startProxyDHCP` lines 516-541)
 
-- [ ] **Step 1:** Add the constant `ProxyDHCPRelay = "proxyDHCPRelay"` to `pkg/config/config.go`, and `viper.SetDefault(ProxyDHCPRelay, false)` next to line 76.
+- [ ] **Step 1:** Add the constant `ProxyDHCPRelay = "proxyDHCPRelay"` to `pkg/config/config.go`, and `viper.SetDefault(ProxyDHCPRelay, false)` next to the proxyDHCP defaults (`config.go:76-79`).
 - [ ] **Step 2:** In `cmd/main.go`, add the field `proxyDHCPRelay bool` and, after the `proxyDHCPBootfileARM64` flag:
 
 ```go
@@ -202,7 +202,7 @@ relayed replies go to giaddr:67."
 
 ### Task 4: Docs
 
-- [ ] **Step 1:** In `docs/schema/API.md`, replace the two "Pass 1" / "Pass 2" bullets (lines 81-84) with:
+- [ ] **Step 1:** In `docs/schema/API.md`, replace the two "Pass 1" / "Pass 2" bullets (lines 80-84, starting `- **Pass 1** (UDP` and ending `handing control to the TFTP chain above.`) with:
   - `**Firmware** (PXE ROM): DISCOVER on UDP 67 → OFFER naming booty as the only boot server (no file); REQUEST on UDP 4011 → ACK with the architecture's iPXE binary (--proxyDHCPBootfileBIOS / UEFI / ARM64). A REQUEST on 67 belongs to the site DHCP server and is ignored.`
   - `**iPXE** (user class iPXE): the OFFER itself carries booty.ipxe, because iPXE does not send the 4011 REQUEST.`
   - `Ignored: packets without option 93, INFORM, packets naming another server (option 54), and relayed packets (giaddr set) unless --proxyDHCPRelay is set; relayed replies are sent to the relay on UDP 67.`

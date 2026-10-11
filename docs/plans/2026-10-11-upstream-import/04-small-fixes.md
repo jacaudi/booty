@@ -87,7 +87,7 @@ func TestConfigURLsCarryMAC(t *testing.T) {
 		}
 ```
 
-- [ ] **Step 6: Write the failing machineconfig test** in `pkg/http/machineconfig_test.go`, using the setup of `TestMachineConfig_RendersTemplate` (lines 29-58):
+- [ ] **Step 6: Write the failing machineconfig test** in `pkg/http/machineconfig_test.go`, using the setup of `TestMachineConfig_RendersTemplate` (lines 29-58). Call `machineConfigHandler(store, failingARP)` (phase 1 test helper) so no real ARP runs:
   - `/machineconfig?hostname=bad_name` → 400;
   - `/machineconfig?hostname=` → 200;
   - `/machineconfig?hostname=node-x` → 200 and the body contains `node-x`.
@@ -181,7 +181,7 @@ func TestConfigURLsCarryMAC(t *testing.T) {
     - assert `err == nil`;
     - assert `string(out)` contains `get_hostname string node7`.
 - [ ] **Step 2:** Run `go test ./pkg/http/ -run 'Debian|debianconfig'`. Expected: `TestDebianconfigRefusesControlCharacters` FAILS (no error returned); the other two pass.
-- [ ] **Step 3:** In `translateDebianConfig`, after `yaml.Unmarshal` succeeds and before `buildPreseedView`, add:
+- [ ] **Step 3:** Add `"unicode"` to the imports of `pkg/http/debiangen.go`. In `translateDebianConfig`, after `yaml.Unmarshal` succeeds and before `buildPreseedView`, add:
 
 ```go
 	for field, v := range map[string]string{"hostname": spec.Hostname, "domain": spec.Domain} {
@@ -207,7 +207,7 @@ func TestConfigURLsCarryMAC(t *testing.T) {
   - `func config.CloseQuietly(c io.Closer, what string)`: port of upstream `pkg/config/config.go:618-625`.
   - `func resolveServerIP(explicit string, detect func() (string, error)) (string, error)` in `cmd/main.go`.
 
-- [ ] **Step 1: Write the failing table test** in `cmd/main_test.go`:
+- [ ] **Step 1: Write the failing table test** in `cmd/main_test.go` (add `errors` and `strings` to its imports if absent):
 
 ```go
 func TestResolveServerIP(t *testing.T) {
@@ -248,7 +248,7 @@ func TestResolveServerIP(t *testing.T) {
   - If `explicit != ""`, return it unchanged.
   - Otherwise call `detect()`. On error, return `fmt.Errorf("no default route (%w); set --serverIP to the address clients reach booty on", err)`.
   - Parse the result with `net.ParseIP`. If it is nil, loopback, unspecified, or `To4() == nil`, return `fmt.Errorf("detected %q is not a usable LAN IPv4 address; set --serverIP to the address clients reach booty on", ip)`.
-- [ ] **Step 4:** Port `DetectServerIP` and `CloseQuietly` into `pkg/config/config.go` and add the `net` import. Add `TestDetectServerIPReturnsAnIPOrError` in `pkg/config/config_test.go`: call it, and if `err == nil` assert `net.ParseIP(ip) != nil`. Do not assert non-loopback: the function does not guarantee it, and `resolveServerIP` enforces it.
+- [ ] **Step 4:** Port `DetectServerIP` and `CloseQuietly` into `pkg/config/config.go` and add the `net` import (`io` and `log/slog` are already imported). Add `TestDetectServerIPReturnsAnIPOrError` in `pkg/config/config_test.go`: call it, and if `err == nil` assert `net.ParseIP(ip) != nil`. Do not assert non-loopback: the function does not guarantee it, and `resolveServerIP` enforces it.
 - [ ] **Step 5:** In `cmd/main.go`:
   - change the `serverIP` flag default from `"127.0.0.1"` to `""`, with help text `"IP address clients use to reach booty; detected from the default route when empty"`;
   - immediately before the `ServerHttpPort` resolution line (371), add:

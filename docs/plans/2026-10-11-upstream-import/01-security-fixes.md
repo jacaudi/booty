@@ -271,7 +271,7 @@ func TestNonMemberIgnoresARP(t *testing.T) {
 }
 ```
 
-The frozen bytes in `seedMember` must contain the text `frozen bytes` (copy `machineconfig_cluster_test.go:23`).
+The frozen bytes in `seedMember` must contain the text `frozen bytes` (copy `machineconfig_cluster_test.go:23`). The test file's imports are `errors`, `net`, `net/http`, `net/http/httptest`, `strings`, `testing`, `github.com/jeefy/booty/pkg/config`, `github.com/jeefy/booty/pkg/db`, `github.com/jeefy/booty/pkg/hardware` and `github.com/spf13/viper`.
 
 - [ ] **Step 2: Run and confirm failure**
 
@@ -283,7 +283,7 @@ Expected: FAIL, `undefined: arpFunc` / `machineConfigHandler`.
 - [ ] **Step 4: Refactor the handler.** In `pkg/http/machineconfig.go`:
   - rename the body of `handleMachineConfigRequest` into `machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc`;
   - in it, replace the direct `arping.Ping(net.ParseIP(ip))` call (lines 36-40) with `arp(net.ParseIP(ip))` (same error handling);
-  - replace the member branch (lines 52-61) with:
+  - replace the member branch, `pkg/http/machineconfig.go` lines 52-62 **inclusive** (from `if host != nil {` through its closing `}` on line 62, which wraps the `if host.NodeConfigID != nil` block), with:
 
 ```go
 		if host != nil && host.NodeConfigID != nil {
