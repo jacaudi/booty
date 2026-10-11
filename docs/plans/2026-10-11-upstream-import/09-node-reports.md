@@ -98,7 +98,8 @@ func (h Health) Summary() Summary
   - `func DebianLateCommand(script, unit string) string`.
 
 - [ ] **Step 1: Port the script tests.** Copy `git show upstream/main:pkg/ignition/health_test.go` into `pkg/nodereport/script_test.go`, then:
-  - change the package to `nodereport`;
+  - change the package clause from `package ignition` to `package nodereport`;
+  - `HealthUnit(HealthReportScriptPath)` → `Unit(ScriptPath)`, and every other `HealthReportScriptPath` (including the expected `Service/ExecStart` value) → `ScriptPath`;
   - replace `HealthReportScript(srv.URL[len("http://"):])` calls with `Script(srv.URL[len("http://"):], "aa:bb:cc:dd:ee:01", "tok")`;
   - change the server's expected path `/health` to `/node/report`;
   - add an assertion that the request header `X-Booty-Node-Token` equals `tok`;
@@ -158,7 +159,7 @@ func (h Health) Summary() Summary
 
 **Interfaces:**
 - Produces (package `db`):
-  - `func (s *Store) UpsertHostHealth(mac, receivedAt string, report []byte) error`
+  - `func (s *Store) UpsertHostHealth(mac, receivedAt string, report []byte) error`: in one transaction, upserts the `host_health` row **and** runs `UPDATE hosts SET last_seen = datetime('now') WHERE mac = ?` (design item 10).
   - `func (s *Store) GetHostHealth(mac string) (receivedAt string, report []byte, err error)`, which returns `sql.ErrNoRows` on a miss
   - `func (s *Store) ListHostHealth() (map[string][]byte, error)`, keyed by MAC
   - `func (s *Store) HostReportTokenGen(mac string) (int64, error)`, which returns `sql.ErrNoRows` for an absent host
@@ -184,7 +185,16 @@ ALTER TABLE hosts ADD COLUMN report_token_gen INTEGER NOT NULL DEFAULT 0;
   - an absent host → `sql.ErrNoRows`;
   - `ListHostHealth` returns both hosts.
 
-  Also add `TestMigrate0010_HostHealth`, following `TestMigrate0008_DebianColumns` (`migrate_test.go:465-494`): `user_version == 10` and `report_token_gen` defaults to 0. Seed hosts with the existing `UpsertHost`.
+  Also add `TestMigrate0010UpgradesV9WithHosts`, the upgrade path (README Review Focus 1). Build a v9 database by hand, modelled on `seedPreDropDB` (`migrate_test.go:495-530`):
+  - apply `0001`..`0009` from `migrationsFS`;
+  - set `PRAGMA user_version = 9`;
+  - `INSERT INTO hosts (mac, hostname) VALUES ('aa:bb:cc:dd:ee:f0', 'old')`.
+
+  Close it, then `Open` it (which runs `0010`), and assert:
+  - `user_version == 10`;
+  - the host still exists with hostname `old`;
+  - `HostReportTokenGen` returns 0;
+  - `host_health` exists and is empty.
 - [ ] **Step 3:** Implement. Update the five `user_version` assertions and the comment at line 64 from 9 to 10.
 - [ ] **Step 4:** Run `go test -race ./pkg/db/`. Expected: `ok`. Commit: `git add pkg/db && git commit -m "feat(db): host_health table and per-host report token generation"`.
 
@@ -201,7 +211,7 @@ ALTER TABLE hosts ADD COLUMN report_token_gen INTEGER NOT NULL DEFAULT 0;
   - `genCache`: a mutex-guarded `map[string]genEntry{gen int64; exp time.Time}`, TTL 60 s, capacity 4096 (when full, evict an arbitrary entry), plus `func (c *genCache) Invalidate(mac string)`. A miss calls `store.HostReportTokenGen` (host absent → not cached).
   - Limiter settings: per IP `NewLimiter(10, time.Minute, 4096, now)`; per MAC `NewLimiter(1, 10*time.Second, 4096, now)`.
 
-- [ ] **Step 1: Tests**, as a table driving `rr.ServeHTTP` with `httptest`:
+- [ ] **Step 1: Tests**, as a table driving `rr.ServeHTTP` with `httptest`. **Each row builds its own `newReportReceiver`, seeds its own host with a distinct MAC (`aa:bb:cc:dd:ee:c<row>`) and uses its own `RemoteAddr` (`10.1.0.<row>:1000`)**, so limiter state never leaks between rows. The "second valid report" row sends two requests to the same receiver. The flood row and the capacity check send a **non-empty** `X-Booty-Node-Token` (any value), because a missing header is rejected with 401 before the per-IP limiter runs:
   - Setup: `servingStore(t)`, host `aa:bb:cc:dd:ee:c0` (gen 0), key `bytes.Repeat([]byte{1}, 32)`, a fixed clock, and the valid body `{"running":"4152.2.0","kernel":"6.6","firmware":"uefi"}`.
   - Status cases:
 
@@ -233,7 +243,7 @@ ALTER TABLE hosts ADD COLUMN report_token_gen INTEGER NOT NULL DEFAULT 0;
   10. set `h.ReceivedAt = now().UTC().Format(time.RFC3339)`; `json.Marshal(h)`; `store.UpsertHostHealth(mac, h.ReceivedAt, b)` (error → 401: the host was deleted mid-request);
   11. 204.
 
-  Every 401 uses the same `writeError(w, http.StatusUnauthorized, "unauthorized", nil)`.
+  Every 400/401/429 rejection uses `slog.Debug("node report rejected", "status", code, "mac", rawMAC, "remote", r.RemoteAddr)` followed by `http.Error(w, http.StatusText(code), code)`. Do **not** use `writeError`, which logs at Error level and would let a flood fill the logs. Every 401 body is therefore `Unauthorized\n`.
 - [ ] **Step 3: Wire it.** In `baseMux`, add:
 
 ```go
@@ -299,9 +309,10 @@ ALTER TABLE hosts ADD COLUMN report_token_gen INTEGER NOT NULL DEFAULT 0;
   - 404 for an unknown host;
   - 404 with the message `no report yet` when the host exists but has no report;
   - 200 with body `nodereport.Health`.
-- `POST /api/v1/hosts/{mac}/report-token/rotate` (`rotate-host-report-token`):
-  - 404 for an unknown host;
-  - 409 with the message `node reports are off` when `deps.NodeReports == nil`;
+- `POST /api/v1/hosts/{mac}/report-token/rotate` (`rotate-host-report-token`), checks in this order:
+  - `hardware.HasHost` error → 422;
+  - not found → 404;
+  - `deps.NodeReports == nil` → 409 with the message `node reports are off`;
   - otherwise `store.BumpHostReportTokenGen`, then `deps.NodeReports.receiver.Invalidate(mac)` when the receiver is non-nil;
   - 200 `{"generation": <n>}`.
 
