@@ -5,6 +5,7 @@ package proxydhcp
 import (
 	"bytes"
 	"encoding/binary"
+	"log/slog"
 	"net"
 	"testing"
 
@@ -416,6 +417,51 @@ func TestAckEchoesRequestedBootItem(t *testing.T) {
 		if got := subOptions(t, reply)[pxeBootItem]; !bytes.Equal(got, item) {
 			t.Errorf("PXE_BOOT_ITEM = %x, want echoed %x", got, item)
 		}
+	}
+}
+
+// TestAckBootItemFallsBackToDefault: a REQUEST whose option 43 is malformed,
+// or whose PXE_BOOT_ITEM is not 4 bytes, gets Booty's own item (0x8000,
+// layer 0) instead of an echo.
+func TestAckBootItemFallsBackToDefault(t *testing.T) {
+	want := []byte{0x80, 0x00, 0x00, 0x00}
+	for _, tc := range []struct {
+		name  string
+		opt43 []byte
+	}{
+		// A non-default item with no end tag: parseSubOptions rejects it.
+		{"malformed option 43", appendSubOption(nil, pxeBootItem, []byte{0x80, 0x00, 0x00, 0x01})},
+		{"item of the wrong length", append(appendSubOption(nil, pxeBootItem, []byte{0x80, 0x01}), pxeEnd)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pkt := pxePacket(t, dhcpv4.MessageTypeRequest, iana.EFI_X86_64,
+				dhcpv4.WithClientIP(net.IPv4(192, 168, 1, 50)),
+				dhcpv4.WithOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, tc.opt43)))
+			reply, ok := handle(pkt, testConfig(), 4011)
+			if !ok {
+				t.Fatal("expected an ACK")
+			}
+			if got := subOptions(t, reply)[pxeBootItem]; !bytes.Equal(got, want) {
+				t.Errorf("PXE_BOOT_ITEM = %x, want default %x", got, want)
+			}
+		})
+	}
+}
+
+// TestBuildRepliesLogAtDebug: per-packet OFFER/ACK lines are Debug, so an
+// Info-level log carries only respond's "proxyDHCP reply".
+func TestBuildRepliesLogAtDebug(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if _, ok := buildOffer(pxePacket(t, dhcpv4.MessageTypeDiscover, iana.EFI_X86_64), testConfig(), log); !ok {
+		t.Fatal("expected an OFFER")
+	}
+	req := pxePacket(t, dhcpv4.MessageTypeRequest, iana.EFI_X86_64, dhcpv4.WithClientIP(net.IPv4(192, 168, 1, 50)))
+	if _, ok := buildAck(req, testConfig(), iana.EFI_X86_64, log); !ok {
+		t.Fatal("expected an ACK")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("buildOffer/buildAck logged at Info or above:\n%s", buf.String())
 	}
 }
 

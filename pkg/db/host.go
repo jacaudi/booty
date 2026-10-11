@@ -206,7 +206,7 @@ func (s *Store) SetHostNodeConfig(mac string, nodeConfigID *int64) error {
 }
 
 // PreserveExistingHostBoot is a one-time upgrade backfill: it marks every
-// already-registered host (os != ”) approved + boot_mode='assigned' +
+// already-registered host (non-empty os) approved + boot_mode='assigned' +
 // assigned_os=os, so hosts that booted under the pre-P1c (host.OS-driven) path
 // keep booting identically instead of dropping to the holding pattern. Gated by
 // the meta flag "host_boot_preserved" so it runs exactly once at the upgrade
