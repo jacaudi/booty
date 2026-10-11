@@ -13,32 +13,12 @@ func TestMemberServesFrozenBytesVerbatim(t *testing.T) {
 	s := servingStore(t)
 	testSecretsKey(t)
 	const mac = "aa:bb:cc:dd:ee:70"
-	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos", Approved: true}); err != nil {
-		t.Fatal(err)
-	}
-	cid, err := s.CreateCluster("serve", "https://10.0.0.10:6443", "v1.13.5", "v1.34.0", []byte("x"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	frozen := []byte("version: v1alpha1\nmachine:\n  type: controlplane\n# frozen bytes\n")
-	enc, err := encryptSecrets(frozen)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ncID, _, err := s.AddClusterNodeConfig(mac, cid, enc, "sha", "generated", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := hardware.SetHostCluster(mac, &cid); err != nil {
-		t.Fatal(err)
-	}
-	if err := hardware.SetHostNodeConfig(mac, &ncID); err != nil {
-		t.Fatal(err)
-	}
+	frozen := seedMember(t, s, mac)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil)
-	handleMachineConfigRequest(s)(rr, req)
+	req.RemoteAddr = "10.0.0.50:1234"
+	machineConfigHandler(s, fixedARP(mac))(rr, req)
 
 	if rr.Code != 200 {
 		t.Fatalf("member machineconfig = %d: %s", rr.Code, rr.Body.String())
@@ -92,7 +72,8 @@ func TestMemberWithUndecryptableConfigFailsLoud(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil)
-	handleMachineConfigRequest(s)(rr, req)
+	req.RemoteAddr = "10.0.0.50:1234"
+	machineConfigHandler(s, fixedARP(mac))(rr, req)
 	if rr.Code != 500 {
 		t.Fatalf("member with undecryptable config = %d, want 500 (never fall through)", rr.Code)
 	}
