@@ -1,16 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jeefy/booty/pkg/auth"
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
@@ -216,4 +220,101 @@ func TestNodeReportsFlagRegistered(t *testing.T) {
 	if f.Usage != wantUsage {
 		t.Errorf("--nodeReports usage = %q", f.Usage)
 	}
+}
+
+// TestRunTFTPListenFailureIsQuietAndClean proves a runtime startup error
+// (here: the TFTP port is taken) is returned without cobra's usage text.
+func TestRunTFTPListenFailureIsQuietAndClean(t *testing.T) {
+	pc, err := net.ListenPacket("udp", ":0")
+	if err != nil {
+		t.Fatalf("occupy UDP port: %v", err)
+	}
+	defer pc.Close()
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+
+	resetCmd(t)
+
+	var out bytes.Buffer
+	Cmd.SetOut(&out)
+	Cmd.SetErr(&out)
+	Cmd.SetArgs([]string{
+		"--dataDir", t.TempDir(),
+		"--serverIP", "127.0.0.1",
+		"--tftpPort", strconv.Itoa(port),
+		"--httpPort", "0",
+	})
+	err = Cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "tftp: listen") {
+		t.Fatalf("Execute() error = %v, want one containing %q", err, "tftp: listen")
+	}
+	if strings.Contains(out.String(), "Usage:") {
+		t.Errorf("runtime error printed usage:\n%s", out.String())
+	}
+}
+
+// TestFlagParseErrorStillPrintsUsage keeps usage for a bad flag (cobra prints
+// usage for every error unless SilenceUsage is set, so booty re-adds it here).
+func TestFlagParseErrorStillPrintsUsage(t *testing.T) {
+	t.Cleanup(func() { Cmd.SetArgs(nil); Cmd.SetOut(nil); Cmd.SetErr(nil) })
+	var out bytes.Buffer
+	Cmd.SetOut(&out)
+	Cmd.SetErr(&out)
+	Cmd.SetArgs([]string{"--no-such-flag"})
+	if err := Cmd.Execute(); err == nil {
+		t.Fatal("Execute() succeeded with an unknown flag")
+	}
+	if !strings.Contains(out.String(), "Usage:") {
+		t.Errorf("flag-parse error did not print usage:\n%s", out.String())
+	}
+}
+
+// TestRunBadNodeReportKeyFailsBeforeServicesStart proves the key is loaded
+// before the TFTP server: with both a taken TFTP port and an unreadable key,
+// the key error wins.
+func TestRunBadNodeReportKeyFailsBeforeServicesStart(t *testing.T) {
+	pc, err := net.ListenPacket("udp", ":0")
+	if err != nil {
+		t.Fatalf("occupy UDP port: %v", err)
+	}
+	defer pc.Close()
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+
+	dataDir := t.TempDir()
+	// A directory where the key file belongs makes LoadOrCreateKey fail.
+	if mkErr := os.Mkdir(filepath.Join(dataDir, "node-report-key"), 0o700); mkErr != nil {
+		t.Fatal(mkErr)
+	}
+	resetCmd(t)
+	var out bytes.Buffer
+	Cmd.SetOut(&out)
+	Cmd.SetErr(&out)
+	Cmd.SetArgs([]string{
+		"--dataDir", dataDir,
+		"--serverIP", "127.0.0.1",
+		"--tftpPort", strconv.Itoa(port),
+		"--httpPort", "0",
+		"--nodeReports",
+	})
+	err = Cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "node reports") {
+		t.Fatalf("Execute() error = %v, want one containing %q", err, "node reports")
+	}
+}
+
+// resetCmd restores the process-global Cmd (flags, args, writers) and the
+// viper keys run() overrides, after a test that executes it. It must not call
+// viper.Reset: that would drop the flag bindings made in init().
+func resetCmd(t *testing.T) {
+	t.Helper()
+	restoreViper(t, config.ServerIP)
+	restoreViper(t, config.ServerHttpPort)
+	t.Cleanup(func() {
+		Cmd.Flags().VisitAll(func(f *pflag.Flag) {
+			_ = f.Value.Set(f.DefValue)
+			f.Changed = false
+		})
+		Cmd.SetArgs(nil)
+		Cmd.SetOut(nil)
+		Cmd.SetErr(nil)
+	})
 }

@@ -31,6 +31,17 @@ var Cmd = &cobra.Command{
 	Use:  "booty",
 	Long: "Easy iPXE server for Flatcar, CoreOS, and more",
 	RunE: run,
+	// A runtime error (port in use, bad key file) is not a usage mistake.
+	// cobra's ExecuteC prints usage for every error unless this is set, flag
+	// parse errors included, so flagErrorUsage re-adds usage for those.
+	SilenceUsage: true,
+}
+
+// flagErrorUsage keeps the usage text for flag-parse errors, which
+// SilenceUsage would otherwise suppress along with runtime errors.
+func flagErrorUsage(c *cobra.Command, err error) error {
+	c.Println(c.UsageString())
+	return err
 }
 
 var args struct {
@@ -83,6 +94,7 @@ var (
 )
 
 func init() {
+	Cmd.SetFlagErrorFunc(flagErrorUsage)
 	flags := Cmd.Flags()
 
 	flags.IntVar(
@@ -506,6 +518,17 @@ func run(cmd *cobra.Command, argv []string) error {
 	// --noAuth the reload is a no-op that logs, which is the right behaviour.
 	watchSIGHUP(ctx, tokenStore, noAuth, explicit)
 
+	// Load the node-report key before anything starts: a bad key file must fail
+	// startup with nothing running.
+	var nodeReports *bootyHTTP.NodeReports
+	if viper.GetBool(config.NodeReports) {
+		key, keyErr := nodereport.LoadOrCreateKey(filepath.Join(viper.GetString(config.DataDir), "node-report-key"))
+		if keyErr != nil {
+			return fmt.Errorf("node reports: %w", keyErr)
+		}
+		nodeReports = &bootyHTTP.NodeReports{Key: key}
+	}
+
 	// Single cache reconciler replaces the per-OS version-check crons. Start it
 	// after the host store is loaded; it owns all target/version DB writes and
 	// eager artifact caching. Serving (TFTP/HTTP below) may begin immediately —
@@ -526,16 +549,8 @@ func run(cmd *cobra.Command, argv []string) error {
 		BootFiles:         boot.Files,
 	}, tftpErr)
 	if err != nil {
+		reconciler.Stop()
 		return err
-	}
-
-	var nodeReports *bootyHTTP.NodeReports
-	if viper.GetBool(config.NodeReports) {
-		key, keyErr := nodereport.LoadOrCreateKey(filepath.Join(viper.GetString(config.DataDir), "node-report-key"))
-		if keyErr != nil {
-			return fmt.Errorf("node reports: %w", keyErr)
-		}
-		nodeReports = &bootyHTTP.NodeReports{Key: key}
 	}
 
 	// Start the HTTP server (non-blocking; returns the running server).
@@ -549,6 +564,8 @@ func run(cmd *cobra.Command, argv []string) error {
 		NodeReports: nodeReports,
 	})
 	if err != nil {
+		reconciler.Stop()
+		tftpServer.Shutdown()
 		return fmt.Errorf("http: %w", err)
 	}
 
