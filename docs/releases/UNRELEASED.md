@@ -18,3 +18,4 @@
 - proxyDHCP ignores PXE packets without client architecture (option 93) and INFORM; very old BIOS boot ROMs that omit option 93 need the site DHCP server pointed at booty.
 - New --proxyDHCPRelay.
 - --serverIP is detected from the default route when unset. Hosts or containers with no default route (for example --network none) now refuse to start until --serverIP is set; previously they started on 127.0.0.1, which no client can reach.
+- Butane 0.29 / Ignition 2.27: the fcos 1.6.0-experimental variant no longer translates (use fcos 1.6.0); flatcar 1.2.0-experimental now emits Ignition 3.7.0-experimental. Stable variants are unchanged.
