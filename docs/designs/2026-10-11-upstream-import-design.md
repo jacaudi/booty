@@ -1,6 +1,6 @@
 # Design: import the worthwhile parts of upstream `jeefy/booty`
 
-**Status:** design, awaiting approval. Nothing below is built yet.
+**Status:** design, decisions reviewed with the maintainer 2026-10-11; awaiting final approval. Nothing below is built yet.
 **Base:** `main` @ `eaea955` (the #86 merge).
 **Upstream reviewed:** `jeefy/booty` `main` @ `8a5a227` (2026-10-08). Common ancestor `d9eafed`
 (2024-10-12); 392 upstream commits since, ~65k lines changed on each side.
@@ -65,8 +65,9 @@ the wire with OVMF).
 
 **Change.** Rewrite `buildReply` as `buildReply(req, cfg, localPort)` following
 `upstream:pkg/dhcp/pxe.go` `handle()`:
-- DISCOVER answered **only on 67** with an OFFER carrying PXE option 43 (no bootfile needed;
-  keep it anyway, harmless and helps non-conforming ROMs **(builder's call)**).
+- DISCOVER answered **only on 67** with an OFFER carrying PXE option 43 and **no** bootfile,
+  option 66 or `sname`, exactly as upstream (review decision 8). Spec-following clients,
+  including iPXE, take the boot file from the 4011 ACK.
 - REQUEST answered **only on 4011** with an ACK carrying the bootfile; `ciaddr` echoed.
 - INFORM: dropped (upstream drops it; nothing in the PXE flow needs it).
 - Drop packets with `giaddr` set unless a new `--proxyDHCPRelay` flag (default false) is on.
@@ -75,16 +76,19 @@ the wire with OVMF).
   list with booty only, one-entry menu "Booty", zero-timeout prompt); ACK gets
   `ackVendorOptions` (boot item). Port verbatim with attribution.
 - iPXE detection: port `hasUserClass` (raw and RFC 3004 forms) to replace the substring check.
-- **Keep the fork's behaviour** of treating a missing option 93 as BIOS (upstream drops such
-  packets). Old BIOS ROMs omit it. **(builder's call)**
+- A PXE packet with **no option 93** (client architecture) is **dropped**, as upstream does
+  (review decision 3), with a debug log naming the MAC. This changes today's behaviour (the fork
+  assumes BIOS): pre-PXE-2.1 ROMs that omit option 93 stop being answered by proxyDHCP. Call it out
+  in the release notes; such machines still boot with the site DHCP server pointed at booty.
 - `handle()` passes the listener's port; `loop` already knows which conn it reads.
 
 **Tests.** Port `upstream:pkg/dhcp/golden_test.go`'s `goldenCases`: synthetic request packets
 built in code for 9 PXE/iPXE cases (3 DISCOVER, 6 REQUEST: BIOS, EFI x64, EFI BC, ARM64, iPXE
-raw user-class, iPXE RFC 3004). Upstream's `.hex` files are *its own replies* and will not match
-the fork's (bootfile kept on the OFFER, option 66/`sname` set, missing option 93 → BIOS), so
-**regenerate the fork's own `.hex` files with `-update`** and commit them as regression guards
-**(builder's call)**. The protocol behaviour that matters is asserted directly by table tests: REQUEST on 67 → silent; DISCOVER on 4011 → silent; giaddr with/without
+raw user-class, iPXE RFC 3004). Upstream's `.hex` files are its replies to those packets, run
+against OVMF in QEMU upstream. The fork's replies must be **byte-identical** to upstream's, so copy
+the 9 `.hex` files **unchanged** and use them as a parity check (review decision 8). Test config
+values must match upstream's `testConfig`. The protocol behaviour that matters is also asserted
+directly by table tests: no option 93 → silent; REQUEST on 67 → silent; DISCOVER on 4011 → silent; giaddr with/without
 relay; foreign server-id → silent.
 
 **Docs.** `docs/CONFIGURATION.md` (`--proxyDHCPRelay`), README proxyDHCP note.
@@ -125,19 +129,28 @@ Butane, Talos YAML and Debian preseed (`d-i netcfg/get_hostname`); a newline inj
 - Port `upstream:pkg/hardware/hostname.go` `ValidateHostname` + `MaxHostnameLen` +
   `ErrInvalidHostname` (RFC 1123 label or dotted name, ≤253 chars, labels ≤63) and its test into
   `pkg/hardware/hostname.go`. Do **not** port the hostname-template half.
-- Call it wherever a hostname enters through `/api/v1`: `create-host` (POST `/hosts`),
-  `put-host` (PUT `/hosts/{mac}`), and the `hostname:` field of a **debianconfig** body on config
-  create/update (`pkg/http/debiangen.go:21,39`; it reaches `d-i netcfg/get_hostname` at
-  `debiangen.go:549`) and of the preseed→debianconfig converter (`preseedconv.go:23,38`)
-  **(builder's call: same injection risk, same fix)**. Cluster-member add takes no hostname
-  (`api_clusters.go:41` is an output struct). Empty stays allowed (means "unset"). Invalid → 400 via the
+- Call it wherever a host's hostname enters through `/api/v1`: `create-host` (POST `/hosts`) and
+  `put-host` (PUT `/hosts/{mac}`). Cluster-member add takes no hostname (`api_clusters.go:41` is an
+  output struct). Empty stays allowed (means "unset"). Invalid → 400 via the
   existing huma error path.
 - `/machineconfig`: a **non-empty** `?hostname=` that fails validation → **400** (maintainer's
   decision). Empty is still allowed (DHCP often gives none).
-- Existing rows are not migrated or rewritten. A stored invalid hostname keeps rendering, with a
-  `slog.Warn` at render time so operators can find it **(builder's call)**.
+- **Existing rows** (review decision 4) are not migrated or rewritten. At startup booty scans the
+  hosts table once and logs every hostname that fails validation in one warning. Separately, every
+  render path (Butane/Ignition, Talos machineconfig, preseed/debianconfig) **strips control
+  characters** (newlines included) from the host's hostname before substituting it. That closes
+  injection for old rows without refusing to boot a host whose stored name is merely non-RFC
+  (e.g. contains `_`).
+- **debianconfig `hostname:` / `domain:`** (review decision 9): **no** save-time check, because the
+  documented form is the template `hostname: "{{ .Hostname }}"` (`docs/CONFIGURATION.md:261`), which
+  would fail RFC validation before templating, and the same config's `raw_preseed:` and
+  `late_command:` already let its author emit any line. Instead, `translateDebianConfig` **refuses
+  to render** (error → 500 on serve and preview, with the reason) when the *templated* hostname or
+  domain contains a control character.
 
-**Tests.** Upstream's table test; API 400 cases; machineconfig 400 and empty-passes cases.
+**Tests.** Upstream's table test; API 400 cases; machineconfig 400 and empty-passes cases; startup
+scan lists invalid rows; a stored `"a\nb"` renders as `ab` in all three families; debianconfig with
+`{{ .Hostname }}` saves and renders; one that templates to a newline refuses to render.
 
 ### Item 5. Auto-detect `--serverIP`
 
@@ -178,12 +191,14 @@ plain `go build` works anywhere, air-gapped; embedded copies **take precedence**
     `//go:generate ./build-ipxe.sh` and
     `//go:embed undionly.kpxe ipxe.efi snponly.efi` into `var Files embed.FS`, plus a
     `Lookup(name string) ([]byte, bool)` helper.
-  - The three binaries, `VERSION`, `SHA256SUMS`, committed. **First commit (builder's call):**
-    run `go generate ./boot/` if podman or docker is available on the build host. If not, copy
-    upstream's committed `boot/` outputs, which were built by the same script from the same
-    `embed.ipxe` and `v2.0.0` tag, keeping upstream's `VERSION` (it records the iPXE commit, builder
-    image and make line) plus a line naming the upstream commit they came from. The next
-    `go generate` replaces them.
+  - The three binaries, `VERSION`, `SHA256SUMS`, committed.
+  - **Native mode** (review decision 10): `build-ipxe.sh` also runs without a container when
+    `IPXE_NATIVE=1`, or automatically when neither podman nor docker can run a container, using the
+    host's gcc, make, perl and liblzma. `VERSION` records which mode and toolchain built the bytes.
+  - **First build** (review decision 10): built from source in the implementing session. Start
+    `dockerd` and run `go generate ./boot/` with the container recipe; if the daemon cannot start
+    there, use native mode. Upstream's prebuilt bytes are **not** copied. If QEMU is available,
+    boot the result under OVMF and SeaBIOS before committing.
 - `THIRD_PARTY_NOTICES.md` at the root: iPXE is GPL-2.0-or-later (with UBDL); state the source
   URL, tag, commit, and that the corresponding source is the pinned upstream tag. Port upstream's
   text.
@@ -212,9 +227,10 @@ plain `go build` works anywhere, air-gapped; embedded copies **take precedence**
   The HTTP fallback only reaches booty on port 80 (the port is unknown at iPXE build time). The
   TFTP leg is the normal path and item 7 makes it chain to HTTP on the right port.
 - **Task**: `task ipxe` runs `go generate ./boot/` (item 13).
-- **Drift guard**: there is no CI to run it in after item 11, so `task check:ipxe` verifies
-  `sha256sum -c SHA256SUMS` locally and fails if a binary does not match. Reproducing a byte-identical
-  rebuild is a non-goal (gcc versions vary); the guard is that the committed bytes match their sums.
+- **Drift guard** (review decision 5): a Go test in `boot/` hashes each file in the embedded FS and
+  compares it with `SHA256SUMS`. It runs under `go test ./...`, so in the existing `go-test.yml`
+  CI (kept by item 11) and in `task test`; `task check:ipxe` is a thin wrapper for `go test ./boot/`.
+  Reproducing a byte-identical rebuild is a non-goal (gcc versions vary).
 
 **Tests.** `boot.Lookup` finds all three and rejects others; TFTP serves the embedded copy even
 when `dataDir` has a same-named file; `/boot/ipxe.efi` returns 200 with the right length and type,
@@ -338,20 +354,24 @@ autopilot-specific.
   header, post to `/node/report`, and **use a MAC baked into the rendered script** (the
   `?mac=` the config was fetched with, i.e. the booting NIC) instead of upstream's default-route
   NIC lookup. The token is derived from that MAC, so on a multi-NIC host the two would differ and
-  every report would 401 **(builder's call)**. Unit: `HealthUnit`, minus the
+  every report would 401 (review decision 11). Unit: `HealthUnit`, minus the
   upstream `booted` unit dependency.
 - **Ignition (Flatcar/CoreOS):** after Butane → Ignition translation in `pkg/http/ignition.go`
-  (both the DB-bound path and the file-template path), merge an Ignition fragment that writes
+  (both the DB-bound path and the file-template path), merge **at the JSON level** (review
+  decision 6: append to `storage.files` and `systemd.units`, which mean the same in every 3.x spec,
+  so any operator-chosen spec version works) a fragment that writes
   `/opt/booty/health-report` (0755, contains server and token) and enables
   `booty-health.service`. A config that already defines a unit or file with the same name wins
-  (operator override); log at debug.
+  (operator override); log at debug. Validate the merged result with Ignition's own parser for its
+  declared version before serving; on failure serve the un-merged config and warn.
 - **Debian (debianconfig only):** `buildPreseedView` (`pkg/http/debiangen.go`) composes
   one more ordered `late_command` source that writes the script and unit with `in-target` and
   enables it; adds `curl` to the package list via `appendIfAbsent`. Raw preseed files (rung 4,
   `--preseedFile`) are **not** modified: debconf keeps only the last `late_command`, so appending
   would silently replace the operator's.
-- **Opt-out:** `--nodeReports` flag, default **on**. When off, nothing is injected and
-  `/node/report` returns 404.
+- **Opt-in** (review decision 2): `--nodeReports` flag, default **off**, so configs served by an
+  existing deployment do not change on upgrade. When off, nothing is injected and `/node/report`
+  returns 404. README and the Hosts page's empty Running column say how to turn it on.
 
 **API + UI.**
 - `GET /api/v1/hosts` and `GET /api/v1/hosts/{mac}` gain an optional `health` object (running,
@@ -384,10 +404,10 @@ locally (`task image`).
 - Butane/Ignition: the fork imports
   `github.com/coreos/ignition/v2/config/v3_5_experimental/types` (`pkg/http/ignition.go:15`).
   That package no longer exists in newer Ignition (it has `v3_5` stable and
-  `v3_6_experimental`), so the bump **must** change the import to `config/v3_5/types`. The
-  hand-built reboot config (`ignition.go:129`) keeps declaring version `3.4.0`; operator Butane
-  output keeps whatever spec its `variant`/`version` produce. No spec change is intended
-  **(builder's call)**.
+  `v3_6_experimental`), so the import must change. Use **`config/v3_4/types`** for the hand-built
+  reboot config (`ignition.go:129`), matching the `3.4.0` it declares so the two cannot drift
+  (review decision 6). Operator Butane output keeps whatever spec its `variant`/`version` produce.
+  No emitted spec version changes.
 - Viper 1.21 drops HCL/INI/old mapstructure; check flag binding, duration parsing and any
   `Unmarshal` call for behaviour changes.
 
@@ -417,8 +437,10 @@ Update README, `docs/development.md` and `docs/standards.md` references from `ma
 - Add `-s -w` to ldflags.
 - Final stage: OCI labels (`org.opencontainers.image.source`, `.version`, `.revision`,
   `.licenses`), `EXPOSE 8080/tcp 69/udp`.
-- Keep `gcr.io/distroless/base-debian12` and the no-default `TARGETOS`/`TARGETARCH` handling.
-  (Moving to `distroless/static` is possible since sqlite is pure Go, but not confirmed; leave it.)
+- Final image becomes **`gcr.io/distroless/static-debian12`** (root user; review decision 7). The
+  binary is pure Go (`CGO_ENABLED=0`, `modernc.org/sqlite`), so `base`'s glibc and OpenSSL were
+  unused. Keep the no-default `TARGETOS`/`TARGETARCH` handling. Update `docs/standards.md` §1.1,
+  which names the base image.
 - The iPXE binaries are committed, so the image build needs no iPXE toolchain.
 
 ### Item 14. Vendor obra/superpowers skills
@@ -464,18 +486,32 @@ Separate commits (or small PRs), in this order, each green on `go test -race ./.
 - v3 `pin/tftp` API adaptation details.
 - Exact Taskfile variable plumbing.
 
-## 6. Calls made without the maintainer (please check)
+## 6. Decisions confirmed in review (2026-10-11)
 
-1. Item 10 token is **HMAC-derived with a per-host generation**, not "stored hashed" (see item 10).
-2. Item 10 health reporting is **on by default** (`--nodeReports`), with Debian limited to
-   debianconfig-kind configs.
-3. Item 1 keeps treating a missing option 93 as BIOS instead of dropping the packet.
-4. Item 4 leaves existing invalid hostnames in place and only warns.
-5. Item 6 drift guard is a local `task check:ipxe` (no CI after item 11).
-6. Item 12 moves the import to `config/v3_5/types` but changes no emitted spec version.
-8. Item 1 golden `.hex` files are regenerated against the fork, not copied from upstream.
-9. Item 4 also validates the debianconfig `hostname:` field.
-10. Item 6's first commit may copy upstream's prebuilt iPXE bytes if no container runtime is
-    available here.
-11. Item 10's script uses a MAC baked in at render time.
-7. Item 13 keeps the distroless **base** image.
+Each was put to the maintainer one at a time with its reasoning, pros and cons, and alternatives.
+
+1. **Item 10 token:** HMAC-derived from a key file, the MAC and a per-host counter. Nothing secret
+   in SQLite; rotate by bumping the counter. (Replaces "stored hashed", which cannot work for hosts
+   that re-render their config each boot.)
+2. **Item 10 default:** `--nodeReports` is **off** by default. Debian injection is limited to
+   debianconfig-kind configs; raw preseed files are never modified.
+3. **Item 1, missing option 93:** **drop** the packet, as upstream does, with a debug log. A
+   behaviour change for old ROMs; release-noted.
+4. **Item 4, existing invalid hostnames:** one startup warning listing them, and control characters
+   stripped from hostnames at render time.
+5. **Item 6 drift guard:** a Go test in `boot/` comparing the embedded files to `SHA256SUMS`, run
+   by the existing `go-test.yml` CI.
+6. **Item 12 Ignition:** `config/v3_4/types` for the reboot config; item 10's fragment merged at the
+   JSON level and validated before serving.
+7. **Item 13 base image:** `gcr.io/distroless/static-debian12`, still root.
+8. **Item 1 replies:** byte-identical to upstream's (OFFER carries no bootfile, option 66 or
+   `sname`); upstream's 9 golden `.hex` files copied unchanged as a parity check.
+9. **Item 4, debianconfig hostname:** no save-time check; refuse to render when the templated
+   hostname or domain contains a control character.
+10. **Item 6 first build:** from source in the implementing session, via `dockerd` + `go generate`,
+    falling back to a new native mode in `build-ipxe.sh`. Upstream's bytes are not copied.
+11. **Item 10 report MAC:** baked into the script at render time (the boot NIC's `?mac=`).
+
+Smaller calls still left to the builder: the per-MAC report rate limit (one per 10 s, else 429);
+an operator-defined unit or file of the same name wins over the injected health fragment; INFORM
+packets are dropped (as upstream).
