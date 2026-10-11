@@ -29,17 +29,10 @@ func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 // machineConfigHandler is handleMachineConfigRequest with the ARP lookup
 // injected.
 //
-//nolint:gocognit,funlen // pre-existing handler complexity; this change only injects the ARP lookup and gates members, then validates the hostname
+//nolint:gocognit // pre-existing handler complexity; this change only injects the ARP lookup and gates members, then filters the hostname
 func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("machineconfig request", "uri", r.RequestURI)
-
-		if h := r.URL.Query().Get("hostname"); h != "" {
-			if err := hardware.ValidateHostname(h); err != nil {
-				writeError(w, http.StatusBadRequest, "invalid hostname", err)
-				return
-			}
-		}
 
 		macAddress := r.URL.Query().Get("mac")
 		if macAddress == "" {
@@ -54,6 +47,8 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 				macAddress = hwAddr.String()
 			}
 		}
+
+		hostname := queryHostname(r, macAddress)
 
 		var host *hardware.Host
 		if macAddress != "" {
@@ -85,7 +80,7 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 
 		if host != nil {
 			if src, kind, ok := resolveConfig(store, host); ok && kind == "machineconfig" {
-				out, ct, _, err := renderConfig("machineconfig", src, machineConfigVars(store, r, host))
+				out, ct, _, err := renderConfig("machineconfig", src, machineConfigVars(store, r, host, hostname))
 				if err != nil {
 					writeError(w, http.StatusInternalServerError, "render bound machineconfig", err)
 					return
@@ -108,7 +103,7 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 			JoinString     string
 			Schematic      string
 		}{
-			Hostname:       r.URL.Query().Get("hostname"),
+			Hostname:       hostname,
 			UUID:           r.URL.Query().Get("uuid"),
 			Serial:         r.URL.Query().Get("serial"),
 			ServerIP:       viper.GetString(config.ServerIP),
@@ -157,9 +152,26 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 // talos version for the host's schematic; .Roles from host_roles. Hostname/UUID/
 // Serial seed from the request query string, since Talos legitimately fetches
 // its config before the host exists in the DB.
-func machineConfigVars(store *db.Store, r *http.Request, host *hardware.Host) TemplateVars {
-	return machineConfigVarsCore(store, host,
-		r.URL.Query().Get("hostname"), r.URL.Query().Get("uuid"), r.URL.Query().Get("serial"))
+func machineConfigVars(store *db.Store, r *http.Request, host *hardware.Host, hostname string) TemplateVars {
+	return machineConfigVarsCore(store, host, hostname, r.URL.Query().Get("uuid"), r.URL.Query().Get("serial"))
+}
+
+// queryHostname returns the request's ?hostname=, or "" when it is not a
+// valid RFC 1123 name. The value comes from DHCP on the Talos kernel line,
+// so an invalid one is logged and ignored rather than failing the boot.
+func queryHostname(r *http.Request, macAddress string) string {
+	h := r.URL.Query().Get("hostname")
+	if h == "" {
+		return ""
+	}
+	err := hardware.ValidateHostname(h)
+	if err == nil {
+		return h
+	}
+	mac, _ := hardware.NormalizeMAC(macAddress) // "" when it does not parse
+	//nolint:sloglint // default logger: no injected logger in this package yet
+	slog.Warn("machineconfig: ignoring invalid hostname", "mac", mac, "err", err)
+	return ""
 }
 
 // machineConfigPreviewVars is machineConfigVars' preview-path sibling: preview

@@ -289,7 +289,8 @@ func TestMachineConfig_ValidatesHostnameQuery(t *testing.T) {
 		want     int
 		contains string
 	}{
-		{"hostname=bad_name", http.StatusBadRequest, ""},
+		// An invalid ?hostname= comes from DHCP: it is ignored, not a 400.
+		{"hostname=bad_name", http.StatusOK, "hostname: \n"},
 		{"hostname=", http.StatusOK, ""},
 		{"hostname=node-x", http.StatusOK, "node-x"},
 	} {
@@ -302,6 +303,53 @@ func TestMachineConfig_ValidatesHostnameQuery(t *testing.T) {
 		}
 		if !strings.Contains(rec.Body.String(), tc.contains) {
 			t.Errorf("%s: body %q lacks %q", tc.query, rec.Body.String(), tc.contains)
+		}
+		if strings.Contains(rec.Body.String(), "bad_name") {
+			t.Errorf("%s: invalid hostname reached the template: %q", tc.query, rec.Body.String())
+		}
+	}
+}
+
+// TestMachineConfig_InvalidHostnameQueryIgnoredForKnownHost: a known host's
+// stored hostname still wins, and an invalid query hostname never renders,
+// whether or not the host has a stored hostname.
+func TestMachineConfig_InvalidHostnameQueryIgnoredForKnownHost(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := "machine:\n  hostname: {{ .Hostname }}\n"
+	if err := os.WriteFile(filepath.Join(dir, "machineconfig.yaml"), []byte(tmpl), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, dir)
+	viper.Set(config.HardwareMap, "hardware.json")
+	viper.Set(config.TalosConfigFile, "machineconfig.yaml")
+	if err := hardware.Load(); err != nil {
+		t.Fatalf("hardware.Load: %v", err)
+	}
+	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:01", hardware.Host{Hostname: "stored-01"}); err != nil {
+		t.Fatalf("seed host: %v", err)
+	}
+	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:02", hardware.Host{}); err != nil {
+		t.Fatalf("seed host: %v", err)
+	}
+	store := machineConfigTestStore(t)
+
+	for _, tc := range []struct {
+		mac, contains string
+	}{
+		{"aa:bb:cc:dd:ee:01", "hostname: stored-01\n"},
+		{"aa:bb:cc:dd:ee:02", "hostname: \n"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+tc.mac+"&hostname=bad_name", nil)
+		req.RemoteAddr = "192.0.2.1:12345"
+		rec := httptest.NewRecorder()
+		machineConfigHandler(store, failingARP)(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200; body=%q", tc.mac, rec.Code, rec.Body.String())
+		}
+		if body := rec.Body.String(); !strings.Contains(body, tc.contains) || strings.Contains(body, "bad_name") {
+			t.Errorf("%s: body %q, want %q and no bad_name", tc.mac, body, tc.contains)
 		}
 	}
 }
