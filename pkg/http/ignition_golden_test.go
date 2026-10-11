@@ -2,6 +2,7 @@ package http
 
 import (
 	"flag"
+	ignitionConfig "github.com/coreos/ignition/v2/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -76,4 +77,30 @@ func TestIgnitionOutputsStable(t *testing.T) {
 		}
 		compareIgnitionGolden(t, "example-flatcar.json", out)
 	})
+}
+
+// TestRebootConfigIsValidIgnition parses the config served to unknown hosts with
+// Ignition's own parser: a fatal report makes Flatcar/CoreOS stop at an
+// Ignition error instead of rebooting.
+func TestRebootConfigIsValidIgnition(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ignition.yaml"), []byte("variant: fcos\nversion: 1.5.0\n"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, dir)
+	viper.Set(config.IgnitionFile, "ignition.yaml")
+	viper.Set(config.ServerIP, "127.0.0.1")
+	viper.Set(config.ServerHttpPort, "80")
+
+	req := httptest.NewRequest(http.MethodGet, "/ignition", nil)
+	req.RemoteAddr = "192.0.2.1:12345"
+	rec := httptest.NewRecorder()
+	handleIgnitionRequest(ignitionTestStore(t))(rec, req)
+
+	_, rep, err := ignitionConfig.Parse(rec.Body.Bytes())
+	if rep.IsFatal() {
+		t.Fatalf("reboot config is not valid Ignition: %v\n%s", err, rep.String())
+	}
 }
