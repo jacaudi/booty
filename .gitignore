@@ -10,3 +10,8 @@ data/
 # prompt scratch.
 docs/reports/
 docs/prompts/
+# Runtime state written when booty runs with --dataDir=. (never commit)
+api-token
+booty.db
+booty.db-*
+node-report-key
