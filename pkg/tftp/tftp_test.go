@@ -568,7 +568,4 @@ func TestConfigURLsCarryMAC(t *testing.T) {
 			t.Errorf("%s does not contain %q:\n%s", key, want, PXEConfig[key])
 		}
 	}
-	if strings.Contains(PXEConfig["flatcar"], "${mac}") {
-		t.Error("pxelinux flatcar entry must stay free of iPXE variables")
-	}
 }

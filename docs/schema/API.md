@@ -51,12 +51,11 @@ other unrecognized path: `302 → /ui/`, not `404`. Their successors are all und
 
 ## TFTP boot filenames
 
-Served on UDP `:69`. Hosts are identified by `?mac=` (ARP fallback). Most filenames are served as plain cached files; two are **magic**:
+Served on UDP `:69`. Hosts are identified by `?mac=` (ARP fallback). Most filenames are served as plain cached files; one is **magic**:
 
 | Filename | Behavior |
 |----------|----------|
 | `booty.ipxe` | A stub that chains to `http://<serverIP>[:port]/booty.ipxe?mac=${mac}`. The per-host script (holding / assigned OS / menu) is rendered over HTTP. |
-| `pxelinux.cfg/default` | Legacy PXE config, for firmware that boots PXE rather than iPXE. |
 | *(any other path)* | Served only if below cache/ or public/, or one of the iPXE bootfile names (undionly.kpxe, ipxe.efi, snponly.efi, ipxe-arm64.efi and the --proxyDHCPBootfile* values); everything else is "file not found". |
 
 **Boot-token substitution** (replaced in the generated `booty.ipxe`):

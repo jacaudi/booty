@@ -4,18 +4,6 @@ var PXEConfig map[string]string
 
 func init() {
 	PXEConfig = make(map[string]string)
-	PXEConfig["flatcar"] = `default flatcar
-	prompt 1
-	timeout 5
-	
-	display boot.msg
-	
-	label flatcar
-		menu default
-		kernel flatcar_production_pxe.vmlinuz
-		initrd flatcar_production_pxe_image.cpio.gz
-		append flatcar.first_boot=1 ignition.config.url=http://[[server]]/ignition.json`
-
 	PXEConfig["talos.ipxe"] = `#!ipxe
 	echo Hello from Booty!
 	set BASEURL [[talos-baseurl]]

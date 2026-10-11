@@ -126,22 +126,6 @@ func (s *server) readHandler(filename string, rf io.ReaderFrom) error {
 		return nil
 	}
 
-	if filename == "pxelinux.cfg/default" {
-		// pxelinux.cfg/default — legacy syslinux path; selection preserved verbatim.
-		host := s.hostFromARP(raddr.IP)
-		pxeOS := "flatcar"
-		if host != nil && host.OS != "" {
-			pxeOS = host.OS
-		}
-		r := strings.NewReader(applyTokens(PXEConfig[pxeOS], map[string]string{"[[server]]": urlHost}))
-		n, err := rf.ReadFrom(r)
-		if err != nil {
-			slog.Warn("error reading PXE config", "err", err)
-			return err
-		}
-		slog.Info("bytes sent", "bytes", n, "file", filename)
-		return nil
-	}
 	if served, err := s.serveEmbedded(filename, rf); served {
 		return err
 	}
