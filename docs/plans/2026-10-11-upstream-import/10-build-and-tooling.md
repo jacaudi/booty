@@ -233,7 +233,7 @@ ARG BOOTY_TIMESTAMP
 LABEL org.opencontainers.image.source="https://github.com/jacaudi/booty" \
       org.opencontainers.image.version="${BOOTY_VERSION}" \
       org.opencontainers.image.created="${BOOTY_TIMESTAMP}" \
-      org.opencontainers.image.licenses="MIT AND GPL-2.0-only WITH UBDL"
+      org.opencontainers.image.licenses="<built from boot/LICENCE.txt, see below>"
 
 COPY --from=build-golang /app/bin/booty /
 
@@ -241,7 +241,14 @@ EXPOSE 8080/tcp 69/udp
 ENTRYPOINT [ "/booty" ]
 ```
 
-  The licence label: booty is MIT, and the embedded iPXE binaries carry iPXE's licence. **Before committing, replace the iPXE part with the exact licence that `boot/LICENCE.txt` (phase 5) reports**, written as an SPDX expression. If `boot/LICENCE.txt` does not exist yet, stop and finish phase 5 first.
+  The licence label: booty is MIT, and the embedded iPXE binaries carry iPXE's licence. **Before committing, build the label from `boot/LICENCE.txt` (phase 5).** Map each `The overall licence for this file is: …` line:
+
+  | text in `LICENCE.txt` | SPDX id |
+  |---|---|
+  | `GPL version 2 only` | `GPL-2.0-only` |
+  | `GPL version 2 (or, at your option, any later version)` | `GPL-2.0-or-later` |
+
+  The label is `MIT AND ` followed by the distinct ids joined with ` AND `. If `LICENCE.txt` contains any other licence text, stop and report it; do not invent an SPDX id. If `boot/LICENCE.txt` does not exist yet, finish phase 5 first.
 - [ ] **Step 2: Verify** (requires Docker; if Docker is not available, start `dockerd` as phase 5 does, or report that this step could not run):
   - `task image` succeeds.
   - `docker run --rm booty:dev --help` prints usage.

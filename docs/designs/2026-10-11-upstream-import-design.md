@@ -457,7 +457,27 @@ filename against `PRAGMA user_version`; no `GET /hosts/{mac}`; `readHandler` has
 
 ### 9.6 QEMU test recipe
 
-QEMU-SECTION
+Verified in this container (QEMU 8.2.2, OVMF 2024.02, TCG). Recipes are in
+`research/qemu-recipe-ovmf-*.sh`; the write-up is `research/qemu-ovmf.md`. dnsmasq stood in for
+booty's proxyDHCP.
+- **UEFI PXE.** The NIC is `virtio-net-pci,romfile=` (no option ROM), so EDK2's own PXE client sends
+  `PXEClient:Arch:00007`. It takes the proxy offer, requests on 4011, TFTP-loads `ipxe.efi` and
+  runs it.
+- **Proxy beside a site DHCP.** The embedded iPXE script fetched `booty.ipxe` from the proxy
+  (10.0.2.50), not from the site server's next-server (10.0.2.2), and then made the HTTP request
+  with `?mac=`.
+- **slirp cannot carry HTTP to the tap host.** QEMU's hub floods TCP to slirp, which forges resets.
+  The check therefore uses a Linux bridge with the site DHCP server in a network namespace.
+- **Site DHCP pointed at booty.** The `isset` leg is skipped, and `booty.ipxe` comes from
+  `${next-server}`.
+- **iPXE and a proxy menu.** A proxy offer carrying a PXE menu (43.9) makes iPXE skip the 4011
+  request and use the offer's siaddr directly. Booty's iPXE offer carries siaddr and `booty.ipxe` (§8.3).
+- **Licence.** `make bin-x86_64-efi/ipxe.efi.licence` fails (some drivers lack `FILE_LICENCE()`);
+  `licence_list` plus `util/licence.pl` reports `GPL version 2 only`. `snponly.efi.licence` reports
+  GPL-2.0-or-later.
+- **Build.** About 39 s with `-j4`. Rebuilds are not byte-identical.
+- Phase 5's check runs booty itself in place of dnsmasq; its result is recorded in
+  `docs/testing/2026-10-ipxe-qemu.md` when executed.
 
 ### 9.7 Tooling
 
