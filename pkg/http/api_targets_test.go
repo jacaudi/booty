@@ -140,7 +140,7 @@ func TestCreateTargetUnexpectedParamIs422(t *testing.T) {
 	resp := api.Post("/api/v1/targets", map[string]any{
 		"os": "flatcar", "arch": "amd64",
 		"params": map[string]string{"channel": "beta", "schematic": "../../../etc/pwned"},
-		"mode": "discovery", "retainN": 1,
+		"mode":   "discovery", "retainN": 1,
 	})
 	if resp.Code != 422 {
 		t.Fatalf("unexpected param key = %d, want 422", resp.Code)

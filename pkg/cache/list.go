@@ -68,11 +68,11 @@ func ListCached() []CacheEntry {
 						continue
 					}
 					out = append(out, CacheEntry{
-							CacheName: cn.Name(),
-							Segment:   seg.Name(),
-							Arch:      a.Name(),
-							Version:   v.Name(),
-						})
+						CacheName: cn.Name(),
+						Segment:   seg.Name(),
+						Arch:      a.Name(),
+						Version:   v.Name(),
+					})
 				}
 			}
 		}
@@ -85,7 +85,7 @@ func ListCached() []CacheEntry {
 			return c
 		}
 		o, _ := ostype.Lookup(CacheNameToCanonical(a.CacheName)) // ok guaranteed: walk filter above accepted this cacheName
-		return -o.CompareVersions(a.Version, b.Version) // newest first
+		return -o.CompareVersions(a.Version, b.Version)          // newest first
 	})
 	return out
 }

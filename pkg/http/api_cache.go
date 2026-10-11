@@ -116,14 +116,18 @@ func registerCache(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "pin-cache", Method: http.MethodPost, Path: "/cache/{id}/pin",
 		Summary: "Pin a cached version", Tags: []string{"cache"},
-	}, func(ctx context.Context, in *struct{ ID string `path:"id"` }) (*struct{ Body CacheEntryDTO }, error) {
+	}, func(_ context.Context, in *struct {
+		ID string `path:"id"`
+	}) (*struct{ Body CacheEntryDTO }, error) {
 		return setPinned(in.ID, true)
 	})
 
 	huma.Register(api, huma.Operation{
 		OperationID: "unpin-cache", Method: http.MethodPost, Path: "/cache/{id}/unpin",
 		Summary: "Unpin a cached version", Tags: []string{"cache"},
-	}, func(ctx context.Context, in *struct{ ID string `path:"id"` }) (*struct{ Body CacheEntryDTO }, error) {
+	}, func(_ context.Context, in *struct {
+		ID string `path:"id"`
+	}) (*struct{ Body CacheEntryDTO }, error) {
 		return setPinned(in.ID, false)
 	})
 
@@ -141,7 +145,9 @@ func registerCache(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "reverify-cache", Method: http.MethodPost, Path: "/cache/{id}/reverify",
 		Summary: "Recompute a cached version's verification verdict from disk", Tags: []string{"cache"},
-	}, func(ctx context.Context, in *struct{ ID string `path:"id"` }) (*struct{ Body CacheEntryDTO }, error) {
+	}, func(ctx context.Context, in *struct {
+		ID string `path:"id"`
+	}) (*struct{ Body CacheEntryDTO }, error) {
 		n, err := strconv.ParseInt(in.ID, 10, 64)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("id must be an integer")
@@ -226,7 +232,9 @@ func registerCache(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-cache", Method: http.MethodDelete, Path: "/cache/{id}",
 		Summary: "Delete a cached version (not implemented)", Tags: []string{"cache"},
-	}, func(ctx context.Context, _ *struct{ ID string `path:"id"` }) (*struct{}, error) {
+	}, func(_ context.Context, _ *struct {
+		ID string `path:"id"`
+	}) (*struct{}, error) {
 		return nil, huma.Error403Forbidden(msgDestructiveNotImplemented)
 	})
 }
