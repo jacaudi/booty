@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,46 @@ func TestLoadOrCreateKey(t *testing.T) {
 	}
 	if _, kerr := LoadOrCreateKey(bad); kerr == nil {
 		t.Error("31-byte key file: want error")
+	}
+}
+
+func TestBadKeyLength(t *testing.T) {
+	good := bytes.Repeat([]byte{1}, 32)
+	mac := "aa:bb:cc:dd:ee:01"
+	for _, key := range [][]byte{nil, make([]byte, 31), make([]byte, 33)} {
+		if tok := Token(key, mac, 1); tok != "" {
+			t.Errorf("len %d: Token = %q, want empty", len(key), tok)
+		}
+		if ValidToken(key, mac, 1, "") || ValidToken(key, mac, 1, Token(good, mac, 1)) {
+			t.Errorf("len %d: ValidToken must reject", len(key))
+		}
+	}
+}
+
+func TestLoadOrCreateKeyLeavesNoTemp(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := LoadOrCreateKey(filepath.Join(dir, "k")); err != nil {
+		t.Fatal(err)
+	}
+	// Rename onto a directory fails; the error must not mention a closed file.
+	bad := filepath.Join(dir, "d")
+	if err := os.Mkdir(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bad, "x"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := writeKey(bad, make([]byte, 32))
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if strings.Contains(err.Error(), "already closed") {
+		t.Errorf("spurious close error: %v", err)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".node-report-key-") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
 	}
 }

@@ -2,6 +2,7 @@ package nodereport
 
 import (
 	"container/list"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -26,8 +27,12 @@ type limitEntry struct {
 }
 
 // NewLimiter allows limit events per key per window and remembers at most
-// capacity keys. now supplies the clock.
+// capacity keys. It panics unless both are at least 1 (callers pass
+// constants). now supplies the clock.
 func NewLimiter(limit int, window time.Duration, capacity int, now func() time.Time) *Limiter {
+	if limit < 1 || capacity < 1 {
+		panic(fmt.Sprintf("nodereport: NewLimiter needs limit >= 1 and capacity >= 1, got %d and %d", limit, capacity))
+	}
 	return &Limiter{
 		max:      limit,
 		window:   window,

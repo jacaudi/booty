@@ -79,3 +79,21 @@ func TestLimiterConcurrent(t *testing.T) {
 		t.Errorf("Len = %d, want <= 8", l.Len())
 	}
 }
+
+func TestNewLimiterPanicsOnBadBounds(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		limit, capacity int
+	}{
+		{"zero capacity", 1, 0}, {"negative capacity", 1, -1}, {"zero limit", 0, 1}, {"negative limit", -1, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Error("want panic")
+				}
+			}()
+			NewLimiter(tt.limit, time.Minute, tt.capacity, time.Now)
+		})
+	}
+}
