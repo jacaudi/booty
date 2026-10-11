@@ -611,3 +611,20 @@ func TestListHostsUnknownIsEmptyArrayNotNull(t *testing.T) {
 		t.Errorf(`listing must never carry "unknown":null: %s`, body)
 	}
 }
+
+func TestCreateHostValidatesHostname(t *testing.T) {
+	api := newTestAPI(t, hostsTestSetup(t))
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"invalid", map[string]any{"mac": "aa:bb:cc:dd:ee:90", "hostname": "bad_name"}, 400},
+		{"valid", map[string]any{"mac": "aa:bb:cc:dd:ee:91", "hostname": "good-name"}, 201},
+		{"absent", map[string]any{"mac": "aa:bb:cc:dd:ee:92"}, 201},
+	} {
+		if resp := api.Post("/api/v1/hosts", tc.body); resp.Code != tc.want {
+			t.Errorf("%s: status = %d, want %d: %s", tc.name, resp.Code, tc.want, resp.Body.String())
+		}
+	}
+}

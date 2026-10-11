@@ -269,3 +269,39 @@ func TestMachineConfig_ExecuteFailureIs500(t *testing.T) {
 		t.Errorf("status = %d, want 500", rec.Code)
 	}
 }
+
+func TestMachineConfig_ValidatesHostnameQuery(t *testing.T) {
+	dir := t.TempDir()
+	tmpl := "machine:\n  install:\n    hostname: {{ .Hostname }}\n"
+	if err := os.WriteFile(filepath.Join(dir, "machineconfig.yaml"), []byte(tmpl), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, dir)
+	viper.Set(config.TalosConfigFile, "machineconfig.yaml")
+	viper.Set(config.ServerIP, "10.0.0.1")
+	viper.Set(config.ServerHttpPort, "80")
+	store := machineConfigTestStore(t)
+
+	for _, tc := range []struct {
+		query    string
+		want     int
+		contains string
+	}{
+		{"hostname=bad_name", http.StatusBadRequest, ""},
+		{"hostname=", http.StatusOK, ""},
+		{"hostname=node-x", http.StatusOK, "node-x"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/machineconfig?"+tc.query, nil)
+		req.RemoteAddr = "192.0.2.1:12345"
+		rec := httptest.NewRecorder()
+		machineConfigHandler(store, failingARP)(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("%s: status = %d, want %d; body=%q", tc.query, rec.Code, tc.want, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), tc.contains) {
+			t.Errorf("%s: body %q lacks %q", tc.query, rec.Body.String(), tc.contains)
+		}
+	}
+}
