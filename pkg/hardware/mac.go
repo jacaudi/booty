@@ -73,11 +73,17 @@ var (
 	storeInjected bool
 )
 
+// maxUnknownHosts caps unknownHosts: every unauthenticated ?mac= probe adds
+// an entry, so the oldest is evicted beyond this many.
+const maxUnknownHosts = 1024
+
 // unknownHosts tracks MACs that contacted booty without a record — a runtime
 // only "pending" list for the UI, reset on each Load (never persisted).
 var (
 	unknownMu    sync.Mutex
 	unknownHosts = map[string]*Host{}
+	// unknownOrder holds unknownHosts' keys, earliest-tracked first.
+	unknownOrder []string //nolint:gochecknoglobals // pairs with the existing unknownHosts global under unknownMu; moving both off package state is out of scope
 )
 
 // SetStore injects the shared database store. Call it once at startup before
@@ -127,6 +133,7 @@ func Load() error {
 
 	unknownMu.Lock()
 	unknownHosts = map[string]*Host{}
+	unknownOrder = nil
 	unknownMu.Unlock()
 
 	return importLegacyJSON(st)
@@ -547,14 +554,31 @@ func PreserveBoot() (int64, error) {
 	return n, err
 }
 
+// trackUnknown records key as an unknown host. A new key beyond
+// maxUnknownHosts evicts the earliest-tracked one; re-tracking a key already
+// listed changes nothing.
 func trackUnknown(key string) {
 	unknownMu.Lock()
+	defer unknownMu.Unlock()
+	if _, ok := unknownHosts[key]; ok {
+		return
+	}
+	if len(unknownOrder) >= maxUnknownHosts {
+		delete(unknownHosts, unknownOrder[0])
+		unknownOrder = unknownOrder[1:]
+	}
 	unknownHosts[key] = &Host{}
-	unknownMu.Unlock()
+	unknownOrder = append(unknownOrder, key)
 }
 
 func clearUnknown(key string) {
 	unknownMu.Lock()
+	defer unknownMu.Unlock()
+	if _, ok := unknownHosts[key]; !ok {
+		return
+	}
 	delete(unknownHosts, key)
-	unknownMu.Unlock()
+	if i := slices.Index(unknownOrder, key); i >= 0 {
+		unknownOrder = slices.Delete(unknownOrder, i, i+1)
+	}
 }

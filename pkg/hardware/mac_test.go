@@ -3,8 +3,10 @@ package hardware
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 
@@ -407,5 +409,27 @@ func TestListUnknownHostsReturnsSeenButUnregisteredMACs(t *testing.T) {
 	}
 	if got := ListUnknownHosts(); len(got) != 1 {
 		t.Fatalf("after registering one, ListUnknownHosts() = %v, want 1 entry", got)
+	}
+}
+
+func TestUnknownHostsCapped(t *testing.T) {
+	setupTempDB(t)
+	mac := func(i int) string { return fmt.Sprintf("aa:bb:cc:%02x:%02x:%02x", i>>16&0xff, i>>8&0xff, i&0xff) }
+	for i := range maxUnknownHosts + 10 {
+		trackUnknown(mac(i))
+	}
+	got := ListUnknownHosts()
+	if len(got) != maxUnknownHosts {
+		t.Fatalf("len(ListUnknownHosts()) = %d, want %d", len(got), maxUnknownHosts)
+	}
+	for i := range 10 {
+		if slices.Contains(got, mac(i)) {
+			t.Errorf("earliest-tracked %s still listed", mac(i))
+		}
+	}
+	// Re-tracking a listed MAC neither grows the list nor evicts anything.
+	trackUnknown(mac(10))
+	if got = ListUnknownHosts(); len(got) != maxUnknownHosts || !slices.Contains(got, mac(11)) {
+		t.Fatalf("re-track changed the list: len %d, has %s = %v", len(got), mac(11), slices.Contains(got, mac(11)))
 	}
 }
