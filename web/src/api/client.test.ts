@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { approveHost, bindSchematic, listHosts, login, onUnauthorized, request, revokeHost, setMenuMode } from './client'
+import { approveHost, bindSchematic, listHosts, login, onUnauthorized, request, revokeHost, setMenuMode, wakeHost } from './client'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -38,6 +38,14 @@ describe('api client', () => {
     await setMenuMode('aa:bb')
     expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/hosts/aa:bb/revoke', expect.objectContaining({ method: 'POST' }))
     expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/hosts/aa:bb/menu', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('wakeHost POSTs /hosts/{mac}/wake', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await wakeHost('aa:bb')
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/hosts/aa:bb/wake', expect.objectContaining({ method: 'POST' }))
   })
 
   it('throws on a non-ok response', async () => {
