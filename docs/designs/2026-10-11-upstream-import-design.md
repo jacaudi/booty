@@ -79,22 +79,25 @@ the wire with OVMF).
   packets). Old BIOS ROMs omit it. **(builder's call)**
 - `handle()` passes the listener's port; `loop` already knows which conn it reads.
 
-**Tests.** Import `upstream:pkg/dhcp/testdata/golden/*.hex` (9 OVMF/iPXE captures; drop
-`ovmf-httpv4-discover.hex`, HTTP Boot is out of scope) and port `golden_test.go` against the new
-`buildReply`. Table tests: REQUEST on 67 → silent; DISCOVER on 4011 → silent; giaddr with/without
+**Tests.** Port `upstream:pkg/dhcp/golden_test.go`'s `goldenCases`: synthetic request packets
+built in code for 9 PXE/iPXE cases (3 DISCOVER, 6 REQUEST: BIOS, EFI x64, EFI BC, ARM64, iPXE
+raw user-class, iPXE RFC 3004). Upstream's `.hex` files are *its own replies* and will not match
+the fork's (bootfile kept on the OFFER, option 66/`sname` set, missing option 93 → BIOS), so
+**regenerate the fork's own `.hex` files with `-update`** and commit them as regression guards
+**(builder's call)**. The protocol behaviour that matters is asserted directly by table tests: REQUEST on 67 → silent; DISCOVER on 4011 → silent; giaddr with/without
 relay; foreign server-id → silent.
 
 **Docs.** `docs/CONFIGURATION.md` (`--proxyDHCPRelay`), README proxyDHCP note.
 
 ### Item 2. Pass the MAC on config URLs
 
-**Bug.** `pkg/tftp/pxe_config.go` lines 17, 29, 36, 56: the Flatcar, CoreOS and Debian scripts
+**Bug.** `pkg/tftp/pxe_config.go` lines 29, 36, 56: the Flatcar, CoreOS and Debian iPXE scripts
 fetch `/ignition.json` and `/preseed` with no `?mac=`, so `pkg/http/ignition.go:37` and
 `pkg/http/preseed.go:148` identify the host by ARP only. If ARP fails the host silently gets the
 reboot config. Talos already passes `&mac=${mac}`.
 
-**Change.** Append `?mac=${mac}` to the four URLs (the `pxelinux.cfg/default` Flatcar entry has no
-iPXE variables; leave it). Handlers already prefer `?mac=` over ARP; no handler change.
+**Change.** Append `?mac=${mac}` to those three URLs. The `pxelinux.cfg/default` Flatcar entry
+(line 17) has no iPXE variables; leave it. Handlers already prefer `?mac=` over ARP; no handler change.
 `${mac}` is iPXE's MAC of the booting NIC, same source Talos uses.
 
 **Tests.** Extend the existing pxe_config/tftp tests to assert `mac=${mac}` in each rendered
@@ -123,8 +126,11 @@ Butane, Talos YAML and Debian preseed (`d-i netcfg/get_hostname`); a newline inj
   `ErrInvalidHostname` (RFC 1123 label or dotted name, ≤253 chars, labels ≤63) and its test into
   `pkg/hardware/hostname.go`. Do **not** port the hostname-template half.
 - Call it wherever a hostname enters through `/api/v1`: `create-host` (POST `/hosts`),
-  `put-host` (PUT `/hosts/{mac}`), and any cluster-member endpoint that accepts a hostname
-  (check `api_clusters.go` member add). Empty stays allowed (means "unset"). Invalid → 400 via the
+  `put-host` (PUT `/hosts/{mac}`), and the `hostname:` field of a **debianconfig** body on config
+  create/update (`pkg/http/debiangen.go:21,39`; it reaches `d-i netcfg/get_hostname` at
+  `debiangen.go:549`) and of the preseed→debianconfig converter (`preseedconv.go:23,38`)
+  **(builder's call: same injection risk, same fix)**. Cluster-member add takes no hostname
+  (`api_clusters.go:41` is an output struct). Empty stays allowed (means "unset"). Invalid → 400 via the
   existing huma error path.
 - `/machineconfig`: a **non-empty** `?hostname=` that fails validation → **400** (maintainer's
   decision). Empty is still allowed (DHCP often gives none).
@@ -172,7 +178,12 @@ plain `go build` works anywhere, air-gapped; embedded copies **take precedence**
     `//go:generate ./build-ipxe.sh` and
     `//go:embed undionly.kpxe ipxe.efi snponly.efi` into `var Files embed.FS`, plus a
     `Lookup(name string) ([]byte, bool)` helper.
-  - The three binaries, `VERSION`, `SHA256SUMS`, committed.
+  - The three binaries, `VERSION`, `SHA256SUMS`, committed. **First commit (builder's call):**
+    run `go generate ./boot/` if podman or docker is available on the build host. If not, copy
+    upstream's committed `boot/` outputs, which were built by the same script from the same
+    `embed.ipxe` and `v2.0.0` tag, keeping upstream's `VERSION` (it records the iPXE commit, builder
+    image and make line) plus a line naming the upstream commit they came from. The next
+    `go generate` replaces them.
 - `THIRD_PARTY_NOTICES.md` at the root: iPXE is GPL-2.0-or-later (with UBDL); state the source
   URL, tag, commit, and that the corresponding source is the pinned upstream tag. Port upstream's
   text.
@@ -211,7 +222,7 @@ when `dataDir` has a same-named file; `/boot/ipxe.efi` returns 200 with the righ
 
 ### Item 7. Identify the booting host by MAC over HTTP (ARP fallback)
 
-**Today.** `pkg/tftp/tftp.go:111` learns the MAC with `arping.Ping(raddr.IP)` on every TFTP read;
+**Today.** `pkg/tftp/tftp.go:115` learns the MAC with `arping.Ping(raddr.IP)` on every TFTP read;
 needs `CAP_NET_RAW`, fails across routers, and the whole per-host decision (dispatch, menu,
 DoInstall flip) lives in the TFTP handler.
 
@@ -324,7 +335,10 @@ autopilot-specific.
 
 **Node side.**
 - Script: port `upstream:pkg/ignition/health.go` `HealthReportScript`, changed to send the token
-  header, post to `/node/report`, and identify the MAC the same way. Unit: `HealthUnit`, minus the
+  header, post to `/node/report`, and **use a MAC baked into the rendered script** (the
+  `?mac=` the config was fetched with, i.e. the booting NIC) instead of upstream's default-route
+  NIC lookup. The token is derived from that MAC, so on a multi-NIC host the two would differ and
+  every report would 401 **(builder's call)**. Unit: `HealthUnit`, minus the
   upstream `booted` unit dependency.
 - **Ignition (Flatcar/CoreOS):** after Butane → Ignition translation in `pkg/http/ignition.go`
   (both the DB-bound path and the file-template path), merge an Ignition fragment that writes
@@ -367,9 +381,13 @@ locally (`task image`).
   importer, not in `go.sum`).
 - Bump: `spf13/viper` 1.10.1 → 1.21.x, `coreos/butane` 0.19.0 → 0.29.x, `coreos/ignition/v2`
   2.17.0 → 2.27.x, `joho/godotenv` 1.4 → 1.5.1, `buger/jsonparser` → 1.6.1. Then `go mod tidy`.
-- Butane/Ignition: the fork imports `config/v3_4` Ignition types and `butane TranslateBytes`.
-  Keep emitting spec 3.4.0 (what Flatcar/FCOS in the field accept); do not move to 3.5 in this
-  change **(builder's call)**.
+- Butane/Ignition: the fork imports
+  `github.com/coreos/ignition/v2/config/v3_5_experimental/types` (`pkg/http/ignition.go:15`).
+  That package no longer exists in newer Ignition (it has `v3_5` stable and
+  `v3_6_experimental`), so the bump **must** change the import to `config/v3_5/types`. The
+  hand-built reboot config (`ignition.go:129`) keeps declaring version `3.4.0`; operator Butane
+  output keeps whatever spec its `variant`/`version` produce. No spec change is intended
+  **(builder's call)**.
 - Viper 1.21 drops HCL/INI/old mapstructure; check flag binding, duration parsing and any
   `Unmarshal` call for behaviour changes.
 
@@ -454,5 +472,10 @@ Separate commits (or small PRs), in this order, each green on `go test -race ./.
 3. Item 1 keeps treating a missing option 93 as BIOS instead of dropping the packet.
 4. Item 4 leaves existing invalid hostnames in place and only warns.
 5. Item 6 drift guard is a local `task check:ipxe` (no CI after item 11).
-6. Item 12 stays on Ignition spec 3.4.0.
+6. Item 12 moves the import to `config/v3_5/types` but changes no emitted spec version.
+8. Item 1 golden `.hex` files are regenerated against the fork, not copied from upstream.
+9. Item 4 also validates the debianconfig `hostname:` field.
+10. Item 6's first commit may copy upstream's prebuilt iPXE bytes if no container runtime is
+    available here.
+11. Item 10's script uses a MAC baked in at render time.
 7. Item 13 keeps the distroless **base** image.
