@@ -174,7 +174,7 @@ func buildOffer(pkt *dhcpv4.DHCPv4, c Config, log *slog.Logger) (*dhcpv4.DHCPv4,
 		reply.BootFileName = c.IPXEScript
 		reply.UpdateOption(dhcpv4.OptBootFileName(c.IPXEScript))
 	}
-	log.Info("ProxyDHCP OFFER", "siaddr", c.ServerIP)
+	log.Debug("ProxyDHCP OFFER", "siaddr", c.ServerIP)
 	return reply, true
 }
 
@@ -199,7 +199,7 @@ func buildAck(pkt *dhcpv4.DHCPv4, c Config, arch iana.Arch, log *slog.Logger) (*
 	reply.UpdateOption(dhcpv4.OptBootFileName(file))
 	reply.UpdateOption(dhcpv4.OptTFTPServerName(c.ServerIP.String()))
 	reply.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, ackVendorOptions(pkt)))
-	log.Info("ProxyDHCP ACK", "arch", arch, "file", file, "siaddr", c.ServerIP)
+	log.Debug("ProxyDHCP ACK", "arch", arch, "file", file, "siaddr", c.ServerIP)
 	return reply, true
 }
 

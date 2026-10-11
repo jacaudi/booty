@@ -524,6 +524,9 @@ func TestNodeReportRouteMethods(t *testing.T) {
 			if w.Code != tc.want {
 				t.Fatalf("%s /node/report = %d, want %d", tc.method, w.Code, tc.want)
 			}
+			if tc.want == http.StatusMethodNotAllowed && w.Header().Get("Allow") != http.MethodPost {
+				t.Fatalf("%s /node/report Allow = %q, want %q", tc.method, w.Header().Get("Allow"), http.MethodPost)
+			}
 		})
 	}
 }
