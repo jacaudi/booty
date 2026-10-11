@@ -174,6 +174,12 @@ func registerHosts(api huma.API, deps APIDeps) {
 			}
 		}
 
+		if in.Body.Hostname != "" {
+			if err := hardware.ValidateHostname(in.Body.Hostname); err != nil {
+				return nil, huma.Error400BadRequest("invalid hostname", err)
+			}
+		}
+
 		existing, err := hardware.GetMacAddress(in.Body.MAC)
 		switch {
 		case err == nil:
