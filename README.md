@@ -146,6 +146,10 @@ options, or booty's `--proxyDHCPEnabled`.
    -p 4011:4011/udp` and add `--cap-add=NET_BIND_SERVICE`). Network-boot the machine: it caches on
    first run and comes up on the assigned OS.
 
+   booty ships `undionly.kpxe`, `ipxe.efi` and `snponly.efi` (iPXE v2.0.0) itself: it serves them
+   over TFTP and at `http://<booty>:8080/boot/<name>`, so nothing needs staging in `--dataDir`
+   (ARM64 still does).
+
 Visit **`http://localhost:8080/ui/`** for the web UI, or `GET /api/v1/hosts` (credentialed) for the
 raw host state.
 
@@ -298,8 +302,9 @@ The container is a distroless image with the binary at `/booty` and the web UI b
   holding the Ignition/Butane template, a Deployment of booty, and a Service. booty typically runs
   with host networking so it can answer TFTP (and, optionally, proxyDHCP) on the LAN.
 - **PXE vs. iPXE.** iPXE is recommended (faster, HTTP-capable). The bootfile you point firmware at
-  differs: use an iPXE binary (e.g. `undionly.kpxe` / `ipxe.efi`) for the iPXE chain, or
-  `pxelinux.cfg/default` for legacy PXE. With `--proxyDHCPEnabled`, booty selects the right
+  differs: use an iPXE binary (e.g. `undionly.kpxe` / `ipxe.efi`) for the iPXE chain (booty ships
+  `undionly.kpxe`, `ipxe.efi` and `snponly.efi`, also downloadable from
+  `http://<booty>:8080/boot/<name>`), or `pxelinux.cfg/default` for legacy PXE. With `--proxyDHCPEnabled`, booty selects the right
   iPXE binary by client architecture automatically.
 - **Networking.** booty must share a layer-2 segment with the machines it boots (it resolves a
   requester's MAC by ARP). Make sure UDP/69 (and UDP/67 + 4011 for proxyDHCP) are reachable.

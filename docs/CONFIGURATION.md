@@ -35,9 +35,9 @@ config file.
 | `--talosFactoryURL` | `https://factory.talos.dev` | Talos Image Factory base URL. |
 | `--secretsKey` | `""` (unset) | Path to an age identity file (`age-keygen` output) encrypting Talos cluster secrets and frozen node configs at rest. **Fail-closed** when unset: cluster create/import/add-member/export refuse with `422`. **Fail-fast** when set but invalid: refuses startup (see [below](#talos-cluster-authoring-p6)). |
 | `--proxyDHCPEnabled` | `false` | Enable the proxyDHCP responder (UDP 67 + 4011). |
-| `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | BIOS iPXE binary named in the proxyDHCP ACK (staged in `--dataDir`). |
-| `--proxyDHCPBootfileUEFI` | `ipxe.efi` | UEFI (x86-64) iPXE binary named in the proxyDHCP ACK. |
-| `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | ARM64 iPXE binary named in the proxyDHCP ACK. |
+| `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | BIOS iPXE binary named in the proxyDHCP ACK (embedded for `undionly.kpxe` and `ipxe.efi`; other names are served from `--dataDir`). |
+| `--proxyDHCPBootfileUEFI` | `ipxe.efi` | UEFI (x86-64) iPXE binary named in the proxyDHCP ACK (embedded for `undionly.kpxe` and `ipxe.efi`; other names are served from `--dataDir`). |
+| `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | ARM64 iPXE binary named in the proxyDHCP ACK (not embedded; stage it in `--dataDir`). |
 | `--proxyDHCPRelay` | `false` | Answer relayed PXE requests by replying to the relay agent (giaddr). Talos cluster members behind a relay are refused their config until authenticated fetch exists. |
 | `--preseedFile` | `config/preseed.cfg` | Debian preseed template, relative to `--dataDir` — the rung-4 server-default fallback for hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
 | `--configRevisionsKeep` | `10` | Number of newest config revisions to retain per config, applied after every `PUT /configs/{id}`. The currently-active revision is always kept, even if it falls outside the newest-N window. |

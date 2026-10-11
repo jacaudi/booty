@@ -25,8 +25,9 @@ func init() {
 	//     EFI_LOAD_FILE2_PROTOCOL and the stub prefers that,
 	//   - LOAD-BEARING on older iPXE under UEFI, where its absence means no
 	//     initrd is loaded at all.
-	// booty does not ship iPXE — the operator stages undionly.kpxe/ipxe.efi
-	// themselves — so the build is unknown and the cheap insurance is kept.
+	// booty embeds iPXE v2.0.0 for x86, but the operator may stage other
+	// builds (ARM64, custom) in dataDir — so the build is unknown and the
+	// cheap insurance is kept.
 	// If a filename is ever named here it must be initrd.magic: "initrd=initrd"
 	// would load only the first cpio and silently drop the hook below.
 	//
