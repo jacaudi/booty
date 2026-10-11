@@ -16,10 +16,22 @@ import (
 // path-cleans before dispatch, which is the only reason a literal "…/." spelling
 // never reaches the handler, and it answers escaping paths with a 307 rather
 // than the handler's 404.
-func dataMux(dataDir string) *http.ServeMux {
+func dataMux(t *testing.T, dataDir string) *http.ServeMux {
+	t.Helper()
 	mux := http.NewServeMux()
-	mux.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(dataDir)))
+	mux.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(testDataRoot(t, dataDir))))
 	return mux
+}
+
+// testDataRoot opens an [os.Root] on dir, closed when the test ends.
+func testDataRoot(t *testing.T, dir string) *os.Root {
+	t.Helper()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	return root
 }
 
 // getData issues target against the mux and returns status, body and Location.
@@ -171,7 +183,7 @@ func TestDataFileHandler_ServesOnlyAllowedSubtrees(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mux := dataMux(dataDir)
+	mux := dataMux(t, dataDir)
 	const kernelURL = "/data/cache/talos/-/amd64/v1.9.0/kernel-amd64"
 
 	blocked := []struct {
@@ -247,8 +259,48 @@ func TestDataFileHandler_ServesOnlyAllowedSubtrees(t *testing.T) {
 	})
 }
 
+// TestDataFileHandler_SymlinksStayInDataDir: /data/ serves through an
+// [os.Root] on dataDir, as TFTP does, so a symlink planted in public/ that
+// leaves the root is refused, while one that stays inside it still serves
+// (with Range).
+func TestDataFileHandler_SymlinksStayInDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+	pub := filepath.Join(dataDir, "public")
+	if err := os.MkdirAll(pub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "api-token"), []byte("SECRET-TOKEN"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pub, "ok.txt"), []byte("public bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dataDir, "api-token"), filepath.Join(pub, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("ok.txt", filepath.Join(pub, "rel")); err != nil {
+		t.Fatal(err)
+	}
+	mux := dataMux(t, dataDir)
+
+	if code, body, _ := getData(mux, "/data/public/link"); code != http.StatusNotFound ||
+		bytes.Contains(body, []byte("SECRET")) {
+		t.Errorf("/data/public/link (-> dataDir/api-token) = %d %q, want 404", code, body)
+	}
+	if code, body, _ := getData(mux, "/data/public/rel"); code != http.StatusOK || string(body) != "public bytes" {
+		t.Errorf("/data/public/rel (-> ok.txt) = %d %q, want 200 %q", code, body, "public bytes")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/data/public/ok.txt", nil)
+	req.Header.Set("Range", "bytes=0-5")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusPartialContent || rec.Body.String() != "public" {
+		t.Errorf("ranged /data/public/ok.txt = %d %q, want 206 %q", rec.Code, rec.Body.String(), "public")
+	}
+}
+
 // TestDataFileHandler_NoDirectoryListing covers directories the allowlist
-// ALLOWS — inside cache/ — where suppression is noListingDir's job alone.
+// ALLOWS — inside cache/ — where suppression is noListingFS's job alone.
 //
 // The listing of a cached version directory names the in-flight .partial and
 // .download files sitting in it, which is the discovery half of fetching one.
@@ -266,7 +318,7 @@ func TestDataFileHandler_NoDirectoryListing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(verDir, "big.iso.download"), []byte("X"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	mux := dataMux(dataDir)
+	mux := dataMux(t, dataDir)
 
 	for _, target := range []string{
 		"/data/cache/talos/-/amd64/v1.9.0/",
@@ -333,7 +385,7 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mux := dataMux(dataDir)
+	mux := dataMux(t, dataDir)
 
 	cases := []struct {
 		name        string
@@ -403,7 +455,7 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 // through to the catch-all, while the routes that must survive stay distinct
 // from it.
 func TestRetiredRoutesAreGone(t *testing.T) {
-	mux := baseMux(APIDeps{})
+	mux := baseMux(APIDeps{}, testDataRoot(t, t.TempDir()))
 
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodPost, "/register"},
