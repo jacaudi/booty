@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jeefy/booty/boot"
 	"github.com/jeefy/booty/pkg/auth"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
@@ -512,6 +513,7 @@ func run(cmd *cobra.Command, argv []string) error {
 		Port:              viper.GetInt(config.TFTPPort),
 		DataDir:           viper.GetString(config.DataDir),
 		TopLevelBootFiles: tftp.TopLevelBootFiles(),
+		BootFiles:         boot.Files,
 	}, tftpErr)
 	if err != nil {
 		return err
