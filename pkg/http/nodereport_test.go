@@ -502,8 +502,9 @@ func TestGenCacheSetRespectsCapacity(t *testing.T) {
 // non-POST is 405 (not the catch-all's 302); with it off every method is 404.
 func TestNodeReportRouteMethods(t *testing.T) {
 	s := servingStore(t)
-	on := baseMux(APIDeps{Store: s, NodeReports: &NodeReports{Key: nodeReportKey()}})
-	off := baseMux(APIDeps{Store: s})
+	root := testDataRoot(t, t.TempDir())
+	on := baseMux(APIDeps{Store: s, NodeReports: &NodeReports{Key: nodeReportKey()}}, root)
+	off := baseMux(APIDeps{Store: s}, root)
 	tests := []struct {
 		name   string
 		mux    *http.ServeMux

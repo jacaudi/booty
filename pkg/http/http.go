@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,7 +30,9 @@ import (
 // they are superseded by the gated /api/v1 surface (POST /api/v1/hosts,
 // DELETE /api/v1/hosts/{mac}, GET /api/v1/hosts's unknown field, GET
 // /api/v1/info).
-func baseMux(deps APIDeps) *http.ServeMux {
+//
+// dataRoot is the [os.Root] on dataDir that /data/ serves through.
+func baseMux(deps APIDeps, dataRoot *os.Root) *http.ServeMux {
 	myHandler := http.NewServeMux()
 
 	// All URLs will be handled by this function
@@ -47,7 +50,7 @@ func baseMux(deps APIDeps) *http.ServeMux {
 	myHandler.HandleFunc("/healthz", handleHealthz)
 	myHandler.HandleFunc("/login", handleLogin(deps.Auth))
 	myHandler.HandleFunc("/logout", handleLogout(deps.Auth))
-	myHandler.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(viper.GetString(config.DataDir))))
+	myHandler.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(dataRoot)))
 	uiFS, err := web.DistFS()
 	if err != nil {
 		slog.Error("ui embed", "err", err)
@@ -58,9 +61,31 @@ func baseMux(deps APIDeps) *http.ServeMux {
 	return myHandler
 }
 
+// Server is the running HTTP server. Its Shutdown and Close also close the
+// [os.Root] that /data/ serves through, as tftp.Server does for TFTP.
+type Server struct {
+	*http.Server
+
+	dataRoot *os.Root
+}
+
+// Shutdown drains the server gracefully (see [http.Server.Shutdown]), then
+// closes the /data/ root.
+func (s *Server) Shutdown(ctx context.Context) error {
+	return errors.Join(s.Server.Shutdown(ctx), s.dataRoot.Close())
+}
+
+// Close closes the server immediately (see [http.Server.Close]) and the
+// /data/ root.
+func (s *Server) Close() error {
+	return errors.Join(s.Server.Close(), s.dataRoot.Close())
+}
+
 // StartHTTP starts the HTTP server in a background goroutine and returns it so
 // the caller can Shutdown() it during graceful shutdown. Signal handling and
 // the ordered shutdown live with the caller; this function only starts serving.
+// It opens the [os.Root] on dataDir that /data/ serves through; failing to open
+// it is a startup error.
 //
 // It refuses to start when deps.Auth is nil and deps.NoAuth is false: that
 // combination means no credential was wired at all, and authMiddleware passes
@@ -68,15 +93,20 @@ func baseMux(deps APIDeps) *http.ServeMux {
 // working) -- so this refusal is the only place a silent-open deployment is
 // caught. Returning an error rather than calling os.Exit keeps that refusal
 // testable.
-func StartHTTP(deps APIDeps) (*http.Server, error) {
+func StartHTTP(deps APIDeps) (*Server, error) {
 	if deps.Auth == nil && !deps.NoAuth {
 		return nil, errors.New("http: no Auth token store and --noAuth not set; refusing to start unauthenticated")
+	}
+
+	dataRoot, err := os.OpenRoot(viper.GetString(config.DataDir))
+	if err != nil {
+		return nil, fmt.Errorf("http: open dataDir: %w", err)
 	}
 
 	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
 	slog.Info("starting HTTP server", "addr", port)
 
-	myHandler := baseMux(deps)
+	myHandler := baseMux(deps, dataRoot)
 
 	// Mount the typed /api/v1 surface on the same mux (additive).
 	RegisterAPI(myHandler, deps)
@@ -97,7 +127,7 @@ func StartHTTP(deps APIDeps) (*http.Server, error) {
 	}()
 	slog.Info("server started")
 
-	return s, nil
+	return &Server{Server: s, dataRoot: dataRoot}, nil
 }
 
 // dataFileHandler serves files under dataDir, restricted to the subtrees in
@@ -106,9 +136,11 @@ func StartHTTP(deps APIDeps) (*http.Server, error) {
 //
 // Serving goes through http.FileServer so conditional and ranged GETs keep
 // working — iPXE and the multi-GB ISO paths depend on Range — but over a
-// listing-free FS, so a directory is indistinguishable from a miss.
-func dataFileHandler(dataDir string) http.Handler {
-	dataFS := http.FileServer(noListingDir{http.Dir(dataDir)})
+// listing-free FS, so a directory is indistinguishable from a miss. Files are
+// opened through root (an [os.Root] on dataDir), which refuses any path or
+// symlink that resolves outside dataDir, the same as TFTP.
+func dataFileHandler(root *os.Root) http.Handler {
+	dataFS := http.FileServer(noListingFS{http.FS(root.FS())})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Both predicates must judge the SAME path http.FileServer will open,
 		// which is path.Clean(r.URL.Path) (net/http/fs.go:995). Testing the raw
@@ -143,13 +175,8 @@ var dataSubtrees = []string{"/" + cache.DirName, "/public"}
 //
 // Matching is strictly BELOW each subtree, so the subtree roots are not
 // addressable either. Cleaning first, then prefix-matching, is the same idiom
-// as pkg/tftp's safeJoin (tftp.go:75-80) — and it inherits the same caveat
-// safeJoin documents: no EvalSymlinks, so a symlink planted inside an allowed
-// subtree whose target lies outside it is followed. Nothing booty writes
-// creates one (the cache downloaders write regular files only) and the operator
-// owns dataDir, so this is the same accepted limitation, not a new one. Closing
-// it structurally means os.OpenRoot, which pins an fd to the directory inode
-// for process lifetime; that is a bigger change than this guard warrants.
+// as pkg/tftp's allowedDataFile. Symlinks that leave dataDir are refused by the
+// [os.Root] dataFileHandler opens files through, not here.
 func isAllowedDataPath(p string) bool {
 	// path.Clean needs a leading slash to resolve ".." (StripPrefix leaves none)
 	// and collapses a doubled one when p already had it.
@@ -162,18 +189,22 @@ func isAllowedDataPath(p string) bool {
 	return false
 }
 
-// noListingDir is http.Dir with directory opens refused, so http.FileServer
-// renders no index and cannot answer differently for a directory than for a
-// miss. The listing under a cached version directory named the in-flight
-// .partial/.download files by hand-browsable path, which is the discovery half
-// of fetching one; the 301-on-directory behaviour was also an existence oracle
-// for paths the allowlist otherwise hides.
-type noListingDir struct{ http.Dir }
+// noListingFS is an [http.FileSystem] with directory opens refused, so
+// [http.FileServer] renders no index and cannot answer differently for a
+// directory than for a miss. The listing under a cached version directory
+// named the in-flight .partial/.download files by hand-browsable path, which
+// is the discovery half of fetching one; the 301-on-directory behaviour was
+// also an existence oracle for paths the allowlist otherwise hides.
+type noListingFS struct{ http.FileSystem }
 
-func (d noListingDir) Open(name string) (http.File, error) {
-	f, err := d.Dir.Open(name)
+// Open opens name, refusing directories. Every open failure is reported as a
+// miss, as pkg/tftp's openDataFile does: an [os.Root] escape error (a symlink
+// leaving dataDir) would otherwise be a 500, which tells a prober the path
+// exists.
+func (d noListingFS) Open(name string) (http.File, error) {
+	f, err := d.FileSystem.Open(name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", fs.ErrNotExist, err)
 	}
 	info, err := f.Stat()
 	if err != nil {
