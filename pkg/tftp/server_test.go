@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/pin/tftp/v3"
 	"github.com/spf13/viper"
@@ -112,4 +113,33 @@ func TestShutdownIsIdempotent(t *testing.T) {
 	}
 	s.Shutdown()
 	s.Shutdown()
+}
+
+func TestServerPrefersEmbeddedBootFiles(t *testing.T) {
+	cases := []struct {
+		name      string
+		bootFiles fs.FS
+		want      string
+	}{
+		{"embedded wins over dataDir", fstest.MapFS{"undionly.kpxe": {Data: []byte("EMBEDDED")}}, "EMBEDDED"},
+		{"nil falls back to dataDir", nil, "DISK"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, filepath.Join(dir, "undionly.kpxe"), "DISK")
+			_, client := startTestServer(t, dir, c.bootFiles)
+			wt, err := client.Receive("undionly.kpxe", "octet")
+			if err != nil {
+				t.Fatalf("Receive: %v", err)
+			}
+			var buf bytes.Buffer
+			if _, copyErr := wt.WriteTo(&buf); copyErr != nil {
+				t.Fatalf("WriteTo: %v", copyErr)
+			}
+			if buf.String() != c.want {
+				t.Fatalf("got %q, want %q", buf.String(), c.want)
+			}
+		})
+	}
 }
