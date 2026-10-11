@@ -194,6 +194,11 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 		slog.Info("bytes sent", "bytes", n, "file", filename)
 		return nil
 	}
+	if !allowedDataFile(filename, topLevelBootFiles()) {
+		//nolint:sloglint // readHandler uses the default logger throughout; no injected logger exists yet
+		slog.Warn("TFTP rejected: not an allowlisted path", "client", raddr.String(), "requested", filename)
+		return os.ErrNotExist
+	}
 	path, err := safeJoin(filename)
 	if err != nil {
 		if errors.Is(err, errPathEscapes) {
