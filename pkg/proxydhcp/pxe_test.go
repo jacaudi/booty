@@ -126,11 +126,11 @@ func TestDiscoverProducesPXEOffer(t *testing.T) {
 	if got := subs[pxeDiscoveryControl]; !bytes.Equal(got, []byte{0x07}) {
 		t.Errorf("PXE_DISCOVERY_CONTROL = %x, want 03", got)
 	}
-	wantServers := append([]byte{0x00, 0x00, 0x01}, testServerIP.To4()...)
+	wantServers := append([]byte{0x80, 0x00, 0x01}, testServerIP.To4()...)
 	if got := subs[pxeBootServers]; !bytes.Equal(got, wantServers) {
 		t.Errorf("PXE_BOOT_SERVERS = %x, want %x", got, wantServers)
 	}
-	wantMenu := append([]byte{0x00, 0x00, byte(len("Booty"))}, "Booty"...)
+	wantMenu := append([]byte{0x80, 0x00, byte(len("Booty"))}, "Booty"...)
 	if got := subs[pxeBootMenu]; !bytes.Equal(got, wantMenu) {
 		t.Errorf("PXE_BOOT_MENU = %x, want %x", got, wantMenu)
 	}
@@ -188,8 +188,8 @@ func TestRequestAckBootFileByArch(t *testing.T) { //nolint:gocognit // ported fr
 				t.Errorf("ciaddr = %v, want copied from request", reply.ClientIPAddr)
 			}
 			subs := subOptions(t, reply)
-			if got := subs[pxeBootItem]; !bytes.Equal(got, []byte{0, 0, 0, 0}) {
-				t.Errorf("PXE_BOOT_ITEM = %x, want 00000000", got)
+			if got := subs[pxeBootItem]; !bytes.Equal(got, []byte{0x80, 0, 0, 0}) {
+				t.Errorf("PXE_BOOT_ITEM = %x, want 80000000", got)
 			}
 			if len(subs) != 1 {
 				t.Errorf("ACK option 43 should only carry PXE_BOOT_ITEM, got %v", subs)
@@ -338,6 +338,20 @@ func TestReplyDestination(t *testing.T) {
 			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 60), Port: 68},
 		},
 		{
+			// EDK2's boot-server REQUEST comes from port 4011 and its
+			// ACK must go back there, not to 68.
+			"ciaddr matches source",
+			[]dhcpv4.Modifier{dhcpv4.WithClientIP(net.IPv4(192, 168, 1, 50))},
+			src,
+			src,
+		},
+		{
+			"ciaddr matches source from 68",
+			[]dhcpv4.Modifier{dhcpv4.WithClientIP(net.IPv4(192, 168, 1, 50))},
+			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 68},
+			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 68},
+		},
+		{
 			"relay",
 			[]dhcpv4.Modifier{dhcpv4.WithGatewayIP(net.IPv4(10, 0, 0, 1)), dhcpv4.WithBroadcast(true)},
 			nil,
@@ -374,16 +388,34 @@ func TestOfferVendorOptionsLayout(t *testing.T) {
 	b := offerVendorOptions(testServerIP)
 	want := []byte{
 		6, 1, 0x07,
-		8, 7, 0, 0, 1, 192, 168, 1, 10,
-		9, 8, 0, 0, 5, 'B', 'o', 'o', 't', 'y',
+		8, 7, 0x80, 0, 1, 192, 168, 1, 10,
+		9, 8, 0x80, 0, 5, 'B', 'o', 'o', 't', 'y',
 		10, 6, 0, 'B', 'o', 'o', 't', 'y',
 		255,
 	}
 	if !bytes.Equal(b, want) {
 		t.Errorf("offerVendorOptions =\n%x\nwant\n%x", b, want)
 	}
-	if binary.BigEndian.Uint16(want[5:7]) != 0 {
-		t.Error("boot server type must be 0x0000")
+	if binary.BigEndian.Uint16(want[5:7]) != 0x8000 {
+		t.Error("boot server type must be 0x8000: type 0 is local boot and EDK2 aborts with PXE-E21")
+	}
+}
+
+// TestAckEchoesRequestedBootItem: EDK2's Discover sends PXE_BOOT_ITEM
+// (type, layer) in its 4011 REQUEST; the ACK echoes it as dnsmasq does.
+func TestAckEchoesRequestedBootItem(t *testing.T) {
+	for _, item := range [][]byte{{0x80, 0x00, 0x00, 0x00}, {0x80, 0x00, 0x00, 0x01}} {
+		opt43 := append(appendSubOption(nil, pxeBootItem, item), pxeEnd)
+		pkt := pxePacket(t, dhcpv4.MessageTypeRequest, iana.EFI_X86_64,
+			dhcpv4.WithClientIP(net.IPv4(192, 168, 1, 50)),
+			dhcpv4.WithOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, opt43)))
+		reply, ok := handle(pkt, testConfig(), 4011)
+		if !ok {
+			t.Fatal("expected an ACK")
+		}
+		if got := subOptions(t, reply)[pxeBootItem]; !bytes.Equal(got, item) {
+			t.Errorf("PXE_BOOT_ITEM = %x, want echoed %x", got, item)
+		}
 	}
 }
 
