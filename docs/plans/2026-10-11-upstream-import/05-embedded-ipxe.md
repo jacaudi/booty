@@ -224,7 +224,8 @@ var Names = []string{"undionly.kpxe", "ipxe.efi", "snponly.efi"}
   - `hack/build-ipxe.sh` → `boot/build-ipxe.sh`;
   - `make ipxe` → `go generate ./boot/` (or `task ipxe`);
   - the "License:" bullet → `License: varies by build target; the per-binary verdict from iPXE's own licence tooling is recorded in boot/LICENCE.txt. See COPYING, COPYING.GPLv2 and COPYING.UBDL in the upstream tree at the pinned commit.`;
-  - delete the sentence claiming a rebuild "yields byte-identical binaries" (rebuilds were measured to differ: `research/qemu-ovmf.md` §4);
+  - in the "Rebuilding" code block, replace the three lines with `go generate ./boot/                 # container if podman/docker works, else native`, `IPXE_NATIVE=1 go generate ./boot/   # force a native build`, and `IPXE_REF=<tag|sha> go generate ./boot/  # build a different upstream ref` (there is no `CONTAINER_DNS` any more);
+  - replace the paragraph starting "`BUILD_ID` is pinned" with: `BUILD_ID is pinned and SOURCE_DATE_EPOCH is set to the commit date, but rebuilds are not byte-identical (measured: research/qemu-ovmf.md §4), so boot/SHA256SUMS describes the committed files, not a reproducible build. Run it only when bumping the iPXE version or changing boot/embed.ipxe, then commit boot/ (binaries, VERSION, SHA256SUMS, LICENCE.txt).`;
   - add `Native builds (IPXE_NATIVE=1) use the host toolchain; boot/VERSION records which mode built the committed files.`
 - [ ] **Step 9: Commit.**
 
@@ -247,7 +248,7 @@ checks them against SHA256SUMS. Licence per binary: boot/LICENCE.txt."
 - Produces: the field `BootFiles fs.FS` on `tftp.Config` (nil means none).
 - `TopLevelBootFiles()` now also returns `snponly.efi`. It already did since phase 1; confirm.
 
-- [ ] **Step 1: Test** `TestServerPrefersEmbeddedBootFiles`:
+- [ ] **Step 1: Test** `TestServerPrefersEmbeddedBootFiles`, using `startTestServer(t, dir, bootFiles)` (phase 2 helper, third parameter):
   - `dataDir` has `undionly.kpxe` containing `DISK`;
   - `Config.BootFiles = fstest.MapFS{"undionly.kpxe": {Data: []byte("EMBEDDED")}}`;
   - a client `Receive("undionly.kpxe")` returns `EMBEDDED`;
@@ -288,12 +289,12 @@ checks them against SHA256SUMS. Licence per binary: boot/LICENCE.txt."
 
 ### Task 4: Docs and flag help
 
-- [ ] **Step 1:** In `cmd/main.go`, change the help text of the three `--proxyDHCPBootfile*` flags (lines 207-223):
+- [ ] **Step 1:** In `cmd/main.go`, change the help text of the three `--proxyDHCPBootfile*` flags (find them with `grep -n proxyDHCPBootfile cmd/main.go`; they were at lines 207-223 before phases 2-3 added flags):
   - from `(staged in dataDir)` to `(embedded for undionly.kpxe and ipxe.efi; other names are served from dataDir)`;
   - the ARM64 flag says `(not embedded; stage it in dataDir)`.
 - [ ] **Step 2:** Docs:
   - `docs/CONFIGURATION.md:37-39`: same wording as the flags.
-  - `docs/schema/API.md:83`: `The x86 binaries are embedded in booty; ARM64 must be staged in --dataDir.`
+  - `docs/schema/API.md`, the `**Firmware**` bullet written in phase 3: append `The x86 binaries are embedded in booty; ARM64 must be staged in --dataDir.`
   - `docs/schema/STORAGE.md:20-22`: `undionly.kpxe` and `ipxe.efi` no longer need to be in `dataDir`; `ipxe-arm64.efi` still does.
   - `README.md:144-147` (Quickstart step 4) and `:301`: booty ships `undionly.kpxe`, `ipxe.efi` and `snponly.efi`, also downloadable from `http://<booty>:8080/boot/<name>`.
   - `docs/releases/UNRELEASED.md` `## Features`: `booty embeds iPXE v2.0.0 (undionly.kpxe, ipxe.efi, snponly.efi) and serves it over TFTP and /boot/; staging iPXE in --dataDir is no longer needed (except ARM64).`
@@ -354,6 +355,9 @@ if [ "$TOPO" = proxy ]; then
   ip netns add site; ip link set site1 netns site
   ip -n site addr add 10.0.2.2/24 dev site1; ip -n site link set site1 up; ip -n site link set lo up
   ip addr add $SRV/24 dev br0; ip link set br0 up
+  # booty's proxyDHCP sends 255.255.255.255 from a 0.0.0.0 socket; without this
+  # route Linux may send it out the default-route interface instead of br0.
+  [ "${NOROUTE:-0}" = 1 ] || ip route add 255.255.255.255/32 dev br0 2>/dev/null || true
   IF=br0
   ip netns exec site dnsmasq --conf-file=/dev/null --keep-in-foreground --pid-file="$OUT/site.pid" \
     --user=root --port=0 --interface=site1 --bind-interfaces \
@@ -421,11 +425,20 @@ sudo env BOOTY=bin/booty TOPO=dhcp  UNTIL=tftp OUT=/tmp/pxe-dhcp  test/qemu/pxe-
     Expected timing, from the stand-in runs: under 60 s on TCG.
   - Confirm with `tcpdump -nr /tmp/pxe-proxy/host.pcap 'udp port 69'`: the `RRQ "booty.ipxe"` goes to `10.0.2.50.69`, not `10.0.2.2`.
   - If the result is anything else, do not change booty to make it pass. Save the `OUT` directory, then report the result line and the last 40 lines of `booty.log` and `serial.log`.
+- [ ] **Step 3b: Measure the broadcast-route question.** Run the proxy topology once more with `NOROUTE=1`:
+
+```bash
+sudo env BOOTY=bin/booty TOPO=proxy UNTIL=tftp NOROUTE=1 OUT=/tmp/pxe-noroute test/qemu/pxe-check.sh
+ip route show default
+```
+
+  Record both outputs. This shows whether booty's proxyDHCP replies (sent to 255.255.255.255 from a 0.0.0.0 socket) reach `br0` when the host's default route uses another interface. Either result is acceptable for this phase; it is evidence for the later `--proxyDHCPListen`/routed-boot work (#71). Do not change booty here.
 - [ ] **Step 4: Record the evidence** in `docs/testing/2026-10-ipxe-qemu.md`:
   - the date, booty commit, QEMU/OVMF versions (`dpkg-query -W qemu-system-x86 ovmf`), and the iPXE `mode:` from `boot/VERSION`;
   - both result lines;
   - the grep output;
-  - the tcpdump line.
+  - the tcpdump line;
+  - the Step 3b result and the default-route line.
 - [ ] **Step 5:** Commit: `git add test/qemu docs/testing && git commit -m "test(qemu): UEFI boot-chain check against booty (proxyDHCP beside a site DHCP, and site DHCP pointed at booty)"`.
 
 ### Phase exit check

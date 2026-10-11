@@ -49,7 +49,7 @@ See `README.md`. Keep `SetBlockSize(512)` and `EnableSinglePort()` exactly as to
 - Consumes: `allowedDataFile(name string, topLevel []string) bool` (phase 1).
 - Produces: `func openDataFile(root *os.Root, name string, topLevel []string) (*os.File, error)`. Every refusal returns an error for which `errors.Is(err, os.ErrNotExist)` is true.
 
-- [ ] **Step 1: Write the failing test** in `pkg/tftp/open_test.go`. Build a temp tree: `dataDir/public/ok.txt` ("ok"), `dataDir/public/sub/` (directory), `dataDir/api-token` ("secret"), `dataDir/undionly.kpxe` ("bios"), `outside/secret.txt` next to `dataDir`. Add symlinks `dataDir/public/escape -> ../../outside/secret.txt`, `dataDir/public/abs -> <absolute path of dataDir/public/ok.txt>` and `dataDir/public/rel -> ok.txt`. Open `root, _ := os.OpenRoot(dataDir)` with `t.Cleanup(func(){ root.Close() })`. Use `top := []string{"undionly.kpxe"}`.
+- [ ] **Step 1: Write the failing test** `TestOpenDataFile` in `pkg/tftp/open_test.go`. Build a temp tree: `dataDir/public/ok.txt` ("ok"), `dataDir/public/sub/` (directory), `dataDir/api-token` ("secret"), `dataDir/undionly.kpxe` ("bios"), `outside/secret.txt` next to `dataDir`. Add symlinks `dataDir/public/escape -> ../../outside/secret.txt`, `dataDir/public/abs -> <absolute path of dataDir/public/ok.txt>` and `dataDir/public/rel -> ok.txt`. Open `root, _ := os.OpenRoot(dataDir)` with `t.Cleanup(func(){ root.Close() })`. Use `top := []string{"undionly.kpxe"}`.
 
 ```go
 	cases := []struct {
@@ -99,7 +99,7 @@ See `README.md`. Keep `SetBlockSize(512)` and `EnableSinglePort()` exactly as to
 
   Otherwise return `f`.
 - [ ] **Step 4:** Run `go test ./pkg/tftp/ -run TestOpenDataFile`. Expected: `ok`.
-- [ ] **Step 5:** Delete `TestSafeJoin` from `pkg/tftp/tftp_test.go`, and `absDataDir`, `errPathEscapes` and `safeJoin` from `pkg/tftp/tftp.go`. Remove any import the deletion leaves unused (the compiler names them). The build breaks in `readHandler` and `StartTFTP` until Task 3; do not commit until Task 4.
+- [ ] **Step 5:** Delete `TestSafeJoin` from `pkg/tftp/tftp_test.go`, and `absDataDir` and `safeJoin` from `pkg/tftp/tftp.go`. **Keep `errPathEscapes`**: `pkg/tftp/menu.go:75` (`renderMenuSelection`) still returns it. Remove any import the deletion leaves unused (the compiler names them). The build breaks in `readHandler` and `StartTFTP` until Task 3; do not commit until Task 4.
 
 ### Task 3: `tftp.Config`, `tftp.Start`, server-owned read handler, nil write handler
 
@@ -118,6 +118,7 @@ type Config struct {
 	Port              int
 	DataDir           string
 	TopLevelBootFiles []string
+	BootFiles         fs.FS                                  // embedded iPXE files served first; nil = none (used from phase 5)
 	ARP               func(net.IP) (net.HardwareAddr, error) // nil means arping.Ping
 }
 
@@ -129,12 +130,16 @@ func (s *Server) Addr() net.Addr // the bound local address
 func (s *Server) Shutdown()      // stops serving, closes the socket and the root; idempotent
 ```
 
-  Phase 6 adds a `BootFiles fs.FS` field to `Config`. Phase 7 adds the HTTP stub fields.
+  `Config` also gets `BootFiles fs.FS` now (unused until phase 5 Task 2). Phase 6 adds no `Config` fields.
 
 - [ ] **Step 1: Write the failing tests** in `pkg/tftp/server_test.go`, using the real v3 client against a server on an ephemeral loopback port:
-  - Helper `startTestServer(t, dataDir string) *Server`: calls `Start(Config{Port: 0, DataDir: dataDir, TopLevelBootFiles: []string{"undionly.kpxe"}, ARP: func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp in tests") }}, make(chan error, 1))`, then `t.Cleanup(s.Shutdown)`.
+  - Helper `startTestServer(t *testing.T, dataDir string, bootFiles fs.FS) (*Server, *tftp.Client)`:
+    - calls `Start(Config{Port: 0, DataDir: dataDir, TopLevelBootFiles: []string{"undionly.kpxe"}, BootFiles: bootFiles, ARP: func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp in tests") }}, make(chan error, 1))`;
+    - registers `t.Cleanup(s.Shutdown)`;
+    - builds the client with `tftp.NewClient(net.JoinHostPort("127.0.0.1", strconv.Itoa(s.Addr().(*net.UDPAddr).Port)))`. **Dial 127.0.0.1, not `s.Addr().String()`**: the bound address is the wildcard, and a client dialing it times out (verified).
+    - Callers in this phase pass `nil` for `bootFiles`. `BootFiles` is declared in `Config` now (Task 3) and used from phase 5; until then `Start` ignores it.
   - Set `viper.Reset(); t.Cleanup(viper.Reset); viper.Set(config.ServerIP, "127.0.0.1"); viper.Set(config.ServerHttpPort, 8080)` because `readHandler` still reads these.
-  - `TestServerServesAllowlistedFile`: write `public/hello.txt` = `hello`; `c, _ := tftp.NewClient(s.Addr().String())`; `wt, err := c.Receive("public/hello.txt", "octet")`; `wt.WriteTo(&buf)`; assert `buf.String() == "hello"`.
+  - `TestServerServesAllowlistedFile`: write `public/hello.txt` = `hello`; `s, c := startTestServer(t, dir, nil)`; `wt, err := c.Receive("public/hello.txt", "octet")`; `wt.WriteTo(&buf)`; assert `buf.String() == "hello"`.
   - `TestServerRefusesSecrets`: write `api-token`; `_, err := c.Receive("api-token", "octet")`; assert `err != nil`.
   - `TestServerRefusesWrites`: `_, err := c.Send("public/new.txt", "octet")`; assert `err != nil` and `strings.Contains(err.Error(), "does not support write requests")` (verified message: `pin/tftp/v3@v3.2.0/server.go:428`); assert `public/new.txt` does not exist.
   - `TestStartReturnsBindError`: `l, _ := net.ListenUDP("udp", &net.UDPAddr{Port: 0})`, `defer l.Close()`, `port := l.LocalAddr().(*net.UDPAddr).Port`; `_, err := Start(Config{Port: port, DataDir: t.TempDir()}, make(chan error, 1))`; assert `err != nil`.
@@ -172,7 +177,7 @@ func (s *Server) Shutdown()      // stops serving, closes the socket and the roo
 - Modify: `cmd/main.go` (`args` struct lines 33-71; `init()`; `run` line 456; the block at line 477; shutdown step lines 496-504)
 - Modify: `cmd/shutdown.go` (comment on `stopWithTimeout`)
 
-- [ ] **Step 1:** Add `TFTPPort = "tftpPort"` to the const block in `pkg/config/config.go`, and `viper.SetDefault(TFTPPort, 69)` in `LoadConfig` next to the proxyDHCP defaults (line 76).
+- [ ] **Step 1:** Add `TFTPPort = "tftpPort"` to the const block in `pkg/config/config.go`, and `viper.SetDefault(TFTPPort, 69)` in `LoadConfig` next to the proxyDHCP defaults (`config.go:76-79`).
 - [ ] **Step 2:** In `cmd/main.go`, add field `tftpPort int` to `args`, and in `init()` before line 270:
 
 ```go
