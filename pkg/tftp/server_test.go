@@ -81,6 +81,23 @@ func TestServerRefusesSecrets(t *testing.T) {
 	}
 }
 
+// The legacy PXELINUX path is retired: pxelinux.cfg/default is not
+// allowlisted, so a read gets a TFTP file-not-found error (code 1).
+func TestServerPXELinuxConfigNotFound(t *testing.T) {
+	_, c := startTestServer(t, t.TempDir(), nil)
+	wt, err := c.Receive("pxelinux.cfg/default", "octet")
+	if err == nil {
+		var buf bytes.Buffer
+		_, err = wt.WriteTo(&buf)
+		if err == nil {
+			t.Fatalf("Receive(pxelinux.cfg/default) served %q, want file-not-found", buf.String())
+		}
+	}
+	if !strings.Contains(err.Error(), os.ErrNotExist.Error()) {
+		t.Fatalf("err = %q, want it to contain %q", err, os.ErrNotExist.Error())
+	}
+}
+
 func TestServerRefusesWrites(t *testing.T) {
 	dir := t.TempDir()
 	_, c := startTestServer(t, dir, nil)
