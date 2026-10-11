@@ -1,6 +1,7 @@
 package http
 
 import (
+	"io/fs"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -17,6 +18,8 @@ type APIDeps struct {
 	Trigger func()
 	Auth    *auth.Store
 	NoAuth  bool
+	// BootFiles holds the embedded iPXE binaries served at /boot/<name>; nil serves none.
+	BootFiles fs.FS
 }
 
 // RegisterAPI mounts the Huma /api/v1 surface on mux (the existing booty

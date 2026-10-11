@@ -521,10 +521,11 @@ func run(cmd *cobra.Command, argv []string) error {
 
 	// Start the HTTP server (non-blocking; returns the running server).
 	httpServer, err := bootyHTTP.StartHTTP(bootyHTTP.APIDeps{
-		Store:   store,
-		Trigger: reconciler.Trigger,
-		Auth:    tokenStore,
-		NoAuth:  noAuth,
+		Store:     store,
+		Trigger:   reconciler.Trigger,
+		Auth:      tokenStore,
+		NoAuth:    noAuth,
+		BootFiles: boot.Files,
 	})
 	if err != nil {
 		return fmt.Errorf("http: %w", err)

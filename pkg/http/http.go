@@ -78,7 +78,7 @@ func StartHTTP(deps APIDeps) (*http.Server, error) {
 
 	s := &http.Server{
 		Addr:           port,
-		Handler:        logRequest(myHandler),
+		Handler:        logRequest(withBootRoute(deps.BootFiles, myHandler)),
 		ReadTimeout:    900 * time.Second,
 		WriteTimeout:   900 * time.Second,
 		MaxHeaderBytes: 1 << 20,
