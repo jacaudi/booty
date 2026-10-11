@@ -292,7 +292,7 @@ item 8.
 - Receiver `POST /node/report?mac=…` (base mux; 404 when the flag is off), in this order:
   malformed MAC or missing header → 400/401 with no DB work; per-source-IP limit (10 per minute,
   LRU-capped at 4096 entries) → 429; token check against an in-memory cache of per-host
-  generations (refreshed on rotate, create, delete) → uniform 401; per-MAC limit (1 per 10 s)
+  generations (refreshed on rotate; otherwise entries expire after 60 s) → uniform 401; per-MAC limit (1 per 10 s)
   → 429; `http.MaxBytesReader` 64 KiB → 413; JSON decode / `Normalize` error → 400; upsert
   `host_health`, update `hosts.last_seen` → 204.
 - Injection: Flatcar/CoreOS via `MergeIgnition` on both ignition paths; Debian only for
@@ -433,6 +433,10 @@ Plan files under `docs/plans/2026-10-11-upstream-import/`, each phase green on
    plan phase 7; govulncheck must then report no called vulnerabilities.
 10. Base image `gcr.io/distroless/static-debian13` (debian12 is frozen upstream).
 11. `docs/plans/` is tracked in git (removed from `.gitignore`).
+12. proxyDHCP departs from upstream byte parity (maintainer, 2026-10-11, after the QEMU check): boot-server and menu type 0x8000 instead of 0 (EDK2 PxeBcBoot.c:937-941 treats 0 as local boot and aborts with PXE-E21), the ACK goes to the client's source port when it equals ciaddr (EDK2 listens on 4011 only, PxeBcDhcp4.c), and the ACK echoes the requested PXE_BOOT_ITEM. The 9 goldens taken from upstream differ from it only in that type byte; the fork-only discover-ipxe-userclass golden changed the same byte. Upstream has the same bug.
+13. /node/report also requires the source IP to ARP-resolve to the claimed MAC (maintainer, 2026-10-11, after the adversarial review showed the per-host token is readable by any LAN client from /ignition.json?mac=). Relayed hosts cannot report.
+14. /machineconfig ignores an invalid ?hostname= (logged) instead of answering 400 (maintainer, 2026-10-11): the value comes from DHCP and a 400 would stop the Talos boot. Supersedes the /machineconfig half of item 4's 400.
+15. The legacy pxelinux.cfg/default path is removed (maintainer, 2026-10-11): it could not work under the item 0 TFTP allowlist, and booty now embeds iPXE for BIOS and UEFI.
 
 ## 9. Verified facts (sources)
 
