@@ -1,7 +1,11 @@
 package http
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -626,5 +630,84 @@ func TestCreateHostValidatesHostname(t *testing.T) {
 		if resp := api.Post("/api/v1/hosts", tc.body); resp.Code != tc.want {
 			t.Errorf("%s: status = %d, want %d: %s", tc.name, resp.Code, tc.want, resp.Body.String())
 		}
+	}
+}
+
+type fakeWaker struct {
+	calls []string
+	sent  []string
+	err   error
+}
+
+func (f *fakeWaker) Wake(_ context.Context, mac, hostIP string) ([]string, error) {
+	f.calls = append(f.calls, mac+"|"+hostIP)
+	return f.sent, f.err
+}
+
+type wakeCase struct {
+	name      string
+	seed      bool
+	noWaker   bool
+	sent      []string
+	err       error
+	path      string
+	wantCode  int
+	wantSent  []string
+	wantCalls []string
+}
+
+func runWakeCase(t *testing.T, tc wakeCase) {
+	t.Helper()
+	const known = "aa:bb:cc:dd:ee:b0"
+	deps := hostsTestSetup(t)
+	fw := &fakeWaker{sent: tc.sent, err: tc.err}
+	if !tc.noWaker {
+		deps.Waker = fw
+	}
+	if tc.seed {
+		host := hardware.Host{MAC: known, IP: "10.0.0.7"}
+		if err := hardware.WriteMacAddress(known, host); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp := newTestAPI(t, deps).Post("/api/v1/hosts/" + tc.path + "/wake")
+	if resp.Code != tc.wantCode {
+		t.Fatalf("wake = %d, want %d: %s", resp.Code, tc.wantCode, resp.Body.String())
+	}
+	if !slices.Equal(fw.calls, tc.wantCalls) {
+		t.Fatalf("calls = %v, want %v", fw.calls, tc.wantCalls)
+	}
+	if tc.wantCode != 200 {
+		return
+	}
+	var body struct {
+		SentTo []string `json:"sentTo"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(body.SentTo, tc.wantSent) {
+		t.Fatalf("sentTo = %v, want %v", body.SentTo, tc.wantSent)
+	}
+}
+
+func TestWakeHost(t *testing.T) {
+	const known = "aa:bb:cc:dd:ee:b0"
+	const call = known + "|10.0.0.7"
+	tests := []wakeCase{
+		{
+			name: "wakes known host", seed: true, sent: []string{"10.0.0.255:9"}, path: known,
+			wantCode: 200, wantSent: []string{"10.0.0.255:9"}, wantCalls: []string{call},
+		},
+		{name: "unknown host", path: "aa:bb:cc:dd:ee:b1", wantCode: 404},
+		{name: "malformed MAC", path: "zz", wantCode: 422},
+		{
+			name: "send failed", seed: true, path: known, wantCode: 502, wantCalls: []string{call},
+			err: errors.New("no destination accepted the packet"),
+		},
+		{name: "no waker", seed: true, noWaker: true, path: known, wantCode: 503},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) { runWakeCase(t, tc) })
 	}
 }

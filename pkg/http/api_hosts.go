@@ -353,6 +353,44 @@ func registerHosts(api huma.API, deps APIDeps) {
 		return nil, nil
 	})
 
+	// POST /hosts/{mac}/wake — send Wake-on-LAN magic packets.
+	huma.Register(api, huma.Operation{
+		OperationID: "wake-host", Method: http.MethodPost, Path: "/hosts/{mac}/wake",
+		Summary: "Send Wake-on-LAN packets to a host", Tags: []string{"hosts"},
+	}, func(ctx context.Context, in *struct {
+		MAC string `path:"mac"`
+	}) (*struct {
+		Body struct {
+			SentTo []string `json:"sentTo"`
+		}
+	}, error) {
+		if deps.Waker == nil {
+			return nil, huma.Error503ServiceUnavailable("wake-on-LAN is not available")
+		}
+		ok, err := hardware.HasHost(in.MAC)
+		if err != nil {
+			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
+		}
+		if !ok {
+			return nil, huma.Error404NotFound("host not found")
+		}
+		h, err := hardware.GetMacAddress(in.MAC)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("get host", err)
+		}
+		sent, err := deps.Waker.Wake(ctx, h.MAC, h.IP)
+		if err != nil {
+			return nil, huma.Error502BadGateway("wake failed", err)
+		}
+		out := &struct {
+			Body struct {
+				SentTo []string `json:"sentTo"`
+			}
+		}{}
+		out.Body.SentTo = sent
+		return out, nil
+	})
+
 	// POST /hosts/{mac}/menu — approve (if needed) + set boot_mode='menu'.
 	// MUST NOT route through hardware.SetAssignment (which sets boot_mode='assigned'
 	// and would clobber menu mode). OPEN in the trust window like approve/revoke.
