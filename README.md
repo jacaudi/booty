@@ -41,6 +41,7 @@ It does one job: get your machines netbooted into the right OS.
 - **Offers an interactive boot menu.** A host can be switched to *menu mode* instead of a pinned
   OS: at boot it's shown an iPXE menu of every image booty currently has cached and picks one.
   The choice is per-boot; see [docs/BOOT-MENU.md](docs/BOOT-MENU.md).
+- **Wakes machines.** Send Wake-on-LAN from the Hosts page or the API.
 - **Holds unknown machines safely.** A machine whose MAC isn't registered gets a reboot-loop
   "holding" config instead of booting into something unintended — and shows up in the UI as an
   unknown host awaiting registration.

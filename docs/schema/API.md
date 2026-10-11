@@ -328,6 +328,7 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 | `POST` | `/api/v1/hosts/{mac}/schematic` | **P5.** Bind a Talos schematic to a host. Body: `{"configId"?, "schematic"?}` — **exactly one** of the two, `422` otherwise. See "Schematic binding" below. | host JSON / `404` / `422` |
 | `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). | `204` |
 | `POST` | `/api/v1/hosts/{mac}/menu` | Approve (if needed) and put the host into interactive boot-menu mode (`boot_mode='menu'`). Does **not** route through `SetAssignment`; `approved_os` is unchanged. `404` if MAC is unknown. | host JSON / `404` |
+| `POST` | `/api/v1/hosts/{mac}/wake` | Sends Wake-on-LAN magic packets (3 rounds, 1 s apart, UDP 9) to every local broadcast address, 255.255.255.255 and the host's last IP. `404` unknown host, `422` bad MAC, `502` nothing sent, `503` unavailable. The NIC/firmware must have WoL enabled and booty must share the L2 segment, or directed broadcast must be routed. | `200` `{sentTo}` |
 | `PUT` | `/api/v1/hosts/{mac}` | **Wired but not implemented yet: `403` regardless of credential.** | `403` |
 | `DELETE` | `/api/v1/hosts/{mac}` | Delete a host. `RemoveMacAddress` is idempotent, so existence is checked first to give a truthful `404` for a MAC that was never registered rather than a `204`. | `204` / `404` |
 
@@ -369,7 +370,7 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 > The management UI (`web/`, served at `/ui/`) consumes these hosts endpoints:
 > `GET /api/v1/hosts`, `POST /api/v1/hosts/{mac}/approve`,
 > `POST /api/v1/hosts/{mac}/revoke`, `POST /api/v1/hosts/{mac}/menu`,
-> `POST /api/v1/hosts/{mac}/schematic`. `PUT /api/v1/hosts/{mac}` is wired but not implemented
+> `POST /api/v1/hosts/{mac}/wake`, `POST /api/v1/hosts/{mac}/schematic`. `PUT /api/v1/hosts/{mac}` is wired but not implemented
 > (`403`), so the UI exposes no edit action. `DELETE /api/v1/hosts/{mac}` is implemented, but the
 > UI does not yet offer a delete affordance for hosts — that is a UI gap, not a `403`.
 
