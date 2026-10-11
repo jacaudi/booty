@@ -21,10 +21,18 @@ cleanup() {
   wait 2>/dev/null
   ip link del tap0 2>/dev/null; ip link del br0 2>/dev/null; ip link del site0 2>/dev/null
   ip netns del site 2>/dev/null
+  [ -n "${NFCALL:-}" ] && echo "$NFCALL" > /proc/sys/net/bridge/bridge-nf-call-iptables
   true
 }
 trap cleanup EXIT
 cleanup
+# With net.bridge.bridge-nf-call-iptables=1 and an iptables FORWARD DROP policy,
+# bridged frames between tap0 and the site veth are dropped; turn it off for the
+# run and let cleanup restore the saved value.
+if [ -f /proc/sys/net/bridge/bridge-nf-call-iptables ]; then
+  NFCALL=$(cat /proc/sys/net/bridge/bridge-nf-call-iptables)
+  echo 0 > /proc/sys/net/bridge/bridge-nf-call-iptables
+fi
 ip tuntap add tap0 mode tap
 if [ "$TOPO" = proxy ]; then
   SRV=10.0.2.50
@@ -55,7 +63,7 @@ else
     --dhcp-leasefile="$OUT/leases" --log-dhcp --log-facility="$OUT/dnsmasq.log" &
   PROXY=--proxyDHCPEnabled=false
 fi
-tcpdump -i $IF -n -U -w "$OUT/host.pcap" 'udp or tcp port 8080 or arp' 2>/dev/null &
+tcpdump -i $IF -n -U --immediate-mode -w "$OUT/host.pcap" 'udp or tcp port 8080 or arp' 2>/dev/null &
 TPID=$!
 "$BOOTY" --dataDir="$OUT/data" --serverIP=$SRV --httpPort=8080 $PROXY --debug=true >"$OUT/booty.log" 2>&1 &
 BPID=$!

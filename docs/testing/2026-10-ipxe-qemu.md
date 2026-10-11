@@ -68,3 +68,27 @@ With no `255.255.255.255/32 dev br0` route, booty's proxyDHCP OFFER was logged (
 ## Cleanup check
 
 After all runs: `ip link show br0` / `tap0`: "Device does not exist"; `ip netns list`: empty.
+
+## 2026-10-11: proxyDHCP fix and HTTP boot script
+
+Booty commit: `843af11` (`fix(proxydhcp): boot UEFI firmware beside a site DHCP server (boot item type 0x8000, ACK to source port)`). Built with `go build -o bin/booty ./cmd`; `test/qemu/pxe-check.sh` now also saves, clears and restores `net.bridge.bridge-nf-call-iptables` and runs `tcpdump --immediate-mode`. Both runs used `QEMU_TIMEOUT=300`.
+
+Result lines:
+
+```
+result=HTTP_BOOT_SCRIPT topo=proxy out=/tmp/pxe-p6-proxy
+result=HTTP_BOOT_SCRIPT topo=dhcp out=/tmp/pxe-p6-dhcp
+```
+
+`boot script` log lines (`booty.log` of each run):
+
+```
+# proxy
+time=2026-10-11T15:41:55.746Z level=INFO msg="boot script" kind=holding mac=52:54:00:12:34:58
+# dhcp
+time=2026-10-11T15:41:35.036Z level=INFO msg="boot script" kind=holding mac=52:54:00:12:34:58
+```
+
+Summary of F1: with a site DHCP server beside booty's proxyDHCP, OVMF aborted with `PXE-E21: Remote boot cancelled`. Booty advertised boot-server and menu type 0, which EDK2 treats as local boot (`NetworkPkg/UefiPxeBcDxe/PxeBcBoot.c:937-941`). Once the type is non-zero, EDK2 sends its boot-server REQUEST from port 4011 and listens only there (`PxeBcDhcp4.c:1402,1496`), while booty answered to ciaddr:68, which gave `PXE-E18: Server response timeout`. The fix uses vendor type 0x8000 (as dnsmasq does), answers on the client's source port when it equals ciaddr, and echoes the requested PXE_BOOT_ITEM. Evidence: `.superpowers/sdd/README/f1-investigation.md`; decision: design section 8, item 12.
+
+The earlier proxy failure recorded above (`PXE-E21` in the proxy topology) is superseded by this section.
