@@ -440,7 +440,9 @@ type preseedView struct {
 
 // buildPreseedView validates spec coherence and derives the emission view.
 // Validation errors surface as 422 through validateConfigSource's default arm.
-func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
+//
+//nolint:gocognit,funlen // existing function; only the opts parameter and two appends are new
+func buildPreseedView(spec debianConfigSpec, opts preseedOptions) (preseedView, error) {
 	v := preseedView{
 		Locale:   spec.Locale,
 		Keyboard: spec.Keyboard,
@@ -507,9 +509,9 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 		}
 		v.Disk = dv
 	}
-	// Compose ONE late_command from ordered sources (design §4, M3): the ssh
-	// fragment FIRST, then the ESP-sync (UEFI mirror), then the operator's own
-	// commands — all run, ordering/ownership deterministic.
+	// Compose ONE late_command from ordered sources (design §4, M3), all run,
+	// ordering/ownership deterministic: ssh -> sudo -> ESP sync -> booty
+	// health -> the operator's own commands.
 	var lateParts []string
 	if sshCmd != "" {
 		lateParts = append(lateParts, sshCmd)
@@ -519,6 +521,9 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 	}
 	if v.Disk != nil && v.Disk.ESPSyncCmd != "" {
 		lateParts = append(lateParts, v.Disk.ESPSyncCmd)
+	}
+	if opts.ExtraLateCommand != "" {
+		lateParts = append(lateParts, opts.ExtraLateCommand)
 	}
 	if op := flattenLateCommand(string(spec.LateCommand)); op != "" {
 		lateParts = append(lateParts, op)
@@ -530,6 +535,9 @@ func buildPreseedView(spec debianConfigSpec) (preseedView, error) {
 	pkgs := slices.Clone(spec.Packages)
 	pkgs = appendIfAbsent(pkgs, "openssh-server", needOpenSSH) // F1: openssh-server first
 	pkgs = appendIfAbsent(pkgs, "sudo", needSudo)              // then sudo
+	for _, p := range opts.ExtraPackages {
+		pkgs = appendIfAbsent(pkgs, p, true)
+	}
 	v.Packages = strings.Join(pkgs, " ")
 	return v, nil
 }
@@ -600,11 +608,26 @@ d-i grub-installer/bootdev string {{ .Disk.Devices }}
 
 var preseedTmpl = template.Must(template.New("debianpreseed").Parse(preseedTemplateText))
 
+// preseedOptions are server-side additions to a translated preseed that the
+// operator's debianconfig does not carry (the node health report unit).
+type preseedOptions struct {
+	// ExtraLateCommand is composed after the ESP sync and before the
+	// operator's late_command.
+	ExtraLateCommand string
+	// ExtraPackages are added to pkgsel/include when absent.
+	ExtraPackages []string
+}
+
 // translateDebianConfig translates a rendered (post-template) debianconfig
 // YAML source into a flat d-i preseed (design §5). booty owns this generation:
 // no vendorable structured→preseed library exists. Coherence violations return
 // errors the API surfaces as 422 via validateConfigSource's default arm.
 func translateDebianConfig(rendered []byte) ([]byte, error) {
+	return translateDebianConfigWith(rendered, preseedOptions{})
+}
+
+// translateDebianConfigWith is translateDebianConfig plus server-side additions.
+func translateDebianConfigWith(rendered []byte, opts preseedOptions) ([]byte, error) {
 	var spec debianConfigSpec
 	if err := yaml.Unmarshal(rendered, &spec); err != nil {
 		return nil, fmt.Errorf("http: parse debianconfig: %w", err)
@@ -614,7 +637,7 @@ func translateDebianConfig(rendered []byte) ([]byte, error) {
 			return nil, fmt.Errorf("http: debianconfig: %s contains a control character", field)
 		}
 	}
-	view, err := buildPreseedView(spec)
+	view, err := buildPreseedView(spec, opts)
 	if err != nil {
 		return nil, err
 	}
