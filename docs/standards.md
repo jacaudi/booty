@@ -10,9 +10,9 @@ This document describes the coding standards, conventions, and toolchain for bot
 
 ### 1.1 Toolchain
 
-- Go version: _TBD_
+- Go version: go1.26.9 toolchain (go.mod)
 - Module path: _TBD_
-- Build flags: `CGO_ENABLED=0` (pure-Go static binary for distroless) + `-trimpath` (reproducible builds) + `-ldflags "-X main.version=… -X main.timestamp=…"` (build stamping). Multi-arch via buildx `TARGETOS`/`TARGETARCH` (`linux/amd64`, `linux/arm64`); runtime base `gcr.io/distroless/base-debian12`. See `Dockerfile` and `make docker-buildx`.
+- Build flags: `CGO_ENABLED=0` (pure-Go static binary for distroless) + `-trimpath` (reproducible builds) + `-ldflags "-X main.version=… -X main.timestamp=…"` (build stamping). Multi-arch via buildx `TARGETOS`/`TARGETARCH` (`linux/amd64`, `linux/arm64`); runtime base `gcr.io/distroless/static-debian13`. See `Dockerfile` and `task image:buildx`.
 
 ### 1.2 Project layout
 
@@ -251,6 +251,7 @@ Reserve space for noting *why* a particular standard was picked when the choice 
   `slog.Error(...)` + `os.Exit(1)`, preserving termination semantics.
 - **2026-06-22 — Build flags & multi-arch.** Standardized on `CGO_ENABLED=0 -trimpath`
   with buildx-driven `TARGETOS`/`TARGETARCH` cross-compilation (`linux/amd64` +
-  `linux/arm64`) and a `gcr.io/distroless/base-debian12` runtime. `CGO_ENABLED=0`
+  `linux/arm64`) and a `gcr.io/distroless/static-debian13` runtime. `CGO_ENABLED=0`
   keeps the binary static and distroless-friendly and makes cross-compile pure-Go;
   `-trimpath` strips local paths for reproducibility. (§1.1)
+  2026-10-11: moved to gcr.io/distroless/static-debian13 (debian12 images are no longer rebuilt upstream).
