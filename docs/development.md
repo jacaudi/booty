@@ -46,7 +46,7 @@ govulncheck: `GOBIN=$HOME/go/bin go install golang.org/x/vuln/cmd/govulncheck@v1
 
 ### Known findings
 
-golangci-lint (golden config, `.golangci.yml`) reports 1,176 issues on the whole tree (`task lint` prints at most 50 per linter, so it shows 547; run with `--max-issues-per-linter=0 --max-same-issues=0` for the full count; largest groups: govet, revive, sloglint, goimports, goconst, golines, noctx); new and changed code must be clean (`task lint:new`). govulncheck reports none called after the go1.26.9 bump.
+golangci-lint (golden config, `.golangci.yml`) reports 1,172 issues on the whole tree at `ed6198d` (tracked in #96) (`task lint` prints at most 50 per linter, so it shows 547; run with `--max-issues-per-linter=0 --max-same-issues=0` for the full count; largest groups: govet, revive, sloglint, goimports, goconst, golines, noctx); new and changed code must be clean (`task lint:new`). govulncheck reports none called after the go1.26.9 bump.
 
 ## Web UI (`web/`)
 
