@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/j-keck/arping"
+	"github.com/pin/tftp/v3"
+	"github.com/spf13/viper"
+
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/jeefy/booty/pkg/ostype"
-	"github.com/pin/tftp"
-	"github.com/spf13/viper"
 )
 
 // absDataDir is the absolute, cleaned form of viper's DataDir, resolved once
