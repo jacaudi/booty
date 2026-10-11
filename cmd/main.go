@@ -52,6 +52,7 @@ var args struct {
 	proxyDHCPBootfileBIOS  string
 	proxyDHCPBootfileUEFI  string
 	proxyDHCPBootfileARM64 string
+	proxyDHCPRelay         bool
 
 	talosArchitecture string
 	talosSchematic    string
@@ -221,6 +222,12 @@ func init() {
 		"proxyDHCPBootfileARM64",
 		"ipxe-arm64.efi",
 		"proxyDHCP pass-1 ARM64 iPXE binary (staged in dataDir)",
+	)
+	flags.BoolVar(
+		&args.proxyDHCPRelay,
+		"proxyDHCPRelay",
+		false,
+		"Answer relayed PXE requests (giaddr set) by replying to the relay agent. Talos cluster members booted through a relay are refused their config until authenticated config fetch exists",
 	)
 
 	flags.StringVar(
@@ -540,10 +547,11 @@ func startProxyDHCP() *proxydhcp.Server {
 		return nil
 	}
 	srv, err := proxydhcp.NewServer(proxydhcp.Config{
-		ServerIP:      ip,
-		BootfileBIOS:  viper.GetString(config.ProxyDHCPBootfileBIOS),
-		BootfileUEFI:  viper.GetString(config.ProxyDHCPBootfileUEFI),
-		BootfileARM64: viper.GetString(config.ProxyDHCPBootfileARM64),
+		ServerIP:  ip,
+		Relay:     viper.GetBool(config.ProxyDHCPRelay),
+		BIOSFile:  viper.GetString(config.ProxyDHCPBootfileBIOS),
+		EFIFile:   viper.GetString(config.ProxyDHCPBootfileUEFI),
+		ARM64File: viper.GetString(config.ProxyDHCPBootfileARM64),
 	})
 	if err != nil {
 		slog.Error("proxyDHCP construct failed; not starting", "err", err)

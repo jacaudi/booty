@@ -2,37 +2,21 @@
 //
 // It answers PXEClient boot requests with next-server + bootfile only and
 // never assigns an IP lease, so it coexists with the site's real DHCP server.
-// Bare-metal firmware speaks plain PXE, so it answers in two passes: pass 1
-// hands an architecture-appropriate iPXE binary; pass 2 (the loaded iPXE,
-// identified by the "iPXE" DHCP user-class) is handed booty.ipxe, which
-// booty's TFTP server already serves.
+// Bare-metal firmware speaks plain PXE, so it answers in two steps: the
+// firmware DISCOVER on UDP 67 gets an OFFER pointing at booty, and the REQUEST
+// that follows on UDP 4011 gets the architecture-appropriate iPXE binary.
+// iPXE clients (user class "iPXE") never send the 4011 REQUEST, so their OFFER
+// itself carries booty.ipxe, which booty's TFTP server already serves.
 package proxydhcp
 
 import (
 	"fmt"
 	"log/slog"
 	"net"
-	"strings"
 	"sync"
 
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/insomniacslk/dhcp/iana"
 )
-
-// bootfileIPXEScript is the pass-2 bootfile. It MUST match the filename the
-// TFTP readHandler special-cases (pkg/tftp/tftp.go: `filename == "booty.ipxe"`).
-const bootfileIPXEScript = "booty.ipxe"
-
-// Config holds the proxyDHCP responder settings. ServerIP is booty's
-// LAN-reachable address (also used as TFTP next-server); the Bootfile*
-// fields are the per-architecture pass-1 iPXE binaries the operator stages
-// into dataDir.
-type Config struct {
-	ServerIP      net.IP
-	BootfileBIOS  string
-	BootfileUEFI  string
-	BootfileARM64 string
-}
 
 // Server is the running proxyDHCP responder (two UDP listeners).
 type Server struct {
@@ -44,102 +28,11 @@ type Server struct {
 	closeOnce sync.Once
 }
 
-// selectBootfile picks the bootfile for a request. The iPXE user-class
-// (pass 2) takes priority over architecture (pass 1) so the chain-load loop
-// terminates at booty.ipxe.
-func selectBootfile(req *dhcpv4.DHCPv4, cfg Config) string {
-	if isIPXE(req) {
-		return bootfileIPXEScript
-	}
-	switch clientArch(req) {
-	case iana.EFI_IA32, iana.EFI_X86_64, iana.EFI_BC:
-		return cfg.BootfileUEFI
-	case iana.EFI_ARM64:
-		return cfg.BootfileARM64
-	default:
-		return cfg.BootfileBIOS
-	}
-}
-
-// buildReply constructs the proxyDHCP reply for a request, or returns ok=false
-// when the request must be ignored (not a PXEClient, or an unhandled message
-// type). It never assigns an IP lease: YourIPAddr stays 0.0.0.0. This function
-// is pure (no I/O) — it is the unit-tested core.
-func buildReply(req *dhcpv4.DHCPv4, cfg Config) (*dhcpv4.DHCPv4, bool) {
-	if !strings.HasPrefix(req.ClassIdentifier(), "PXEClient") {
-		return nil, false
-	}
-
-	var respType dhcpv4.MessageType
-	switch req.MessageType() {
-	case dhcpv4.MessageTypeDiscover:
-		respType = dhcpv4.MessageTypeOffer
-	case dhcpv4.MessageTypeRequest, dhcpv4.MessageTypeInform:
-		respType = dhcpv4.MessageTypeAck
-	default:
-		return nil, false
-	}
-
-	bootfile := selectBootfile(req, cfg)
-	resp, err := dhcpv4.NewReplyFromRequest(req,
-		dhcpv4.WithMessageType(respType),
-		dhcpv4.WithServerIP(cfg.ServerIP),
-		dhcpv4.WithOption(dhcpv4.OptServerIdentifier(cfg.ServerIP)),
-		dhcpv4.WithOption(dhcpv4.OptClassIdentifier("PXEClient")),
-		dhcpv4.WithOption(dhcpv4.OptTFTPServerName(cfg.ServerIP.String())),
-		dhcpv4.WithOption(dhcpv4.OptBootFileName(bootfile)),
-		dhcpv4.WithOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, pxeVendorOptions())),
-	)
-	if err != nil {
-		return nil, false
-	}
-
-	// No lease: this is proxyDHCP, the real DHCP server assigns the address.
-	resp.YourIPAddr = net.IPv4zero
-	// BOOTP fields some PXE firmwares read directly.
-	resp.ServerHostName = cfg.ServerIP.String()
-	resp.BootFileName = bootfile
-	// Echo the client machine GUID when present so firmware can correlate.
-	if guid := req.Options.Get(dhcpv4.OptionClientMachineIdentifier); guid != nil {
-		resp.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionClientMachineIdentifier, guid))
-	}
-	return resp, true
-}
-
-// pxeVendorOptions returns the PXE vendor-specific information (option 43):
-// PXE discovery control = 0x08 (boot from the supplied bootfile, skip the
-// boot-server menu/prompt), terminated by 0xff. Copied verbatim from standard
-// proxyDHCP practice.
-func pxeVendorOptions() []byte {
-	return []byte{0x06, 0x01, 0x08, 0xff}
-}
-
-// isIPXE reports whether the request came from iPXE itself. iPXE sets the
-// User Class option (77) to "iPXE"; check for the substring to tolerate both
-// the raw and RFC-3004 length-prefixed encodings.
-func isIPXE(req *dhcpv4.DHCPv4) bool {
-	raw := req.Options.Get(dhcpv4.OptionUserClassInformation)
-	return strings.Contains(string(raw), "iPXE")
-}
-
-// clientArch returns the first client architecture (DHCP option 93), or
-// INTEL_X86PC (legacy BIOS) when the option is absent. Multi-arch option-93
-// lists are deliberately collapsed to the first entry.
-func clientArch(req *dhcpv4.DHCPv4) iana.Arch {
-	archs := req.ClientArch()
-	if len(archs) == 0 {
-		return iana.INTEL_X86PC
-	}
-	return archs[0]
-}
-
 // NewServer validates cfg and returns a non-started Server.
 func NewServer(cfg Config) (*Server, error) {
-	if cfg.ServerIP == nil {
-		return nil, fmt.Errorf("proxydhcp: ServerIP is required")
-	}
-	if cfg.BootfileBIOS == "" || cfg.BootfileUEFI == "" || cfg.BootfileARM64 == "" {
-		return nil, fmt.Errorf("proxydhcp: bootfile names must all be set")
+	cfg = cfg.withDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 	return &Server{cfg: cfg, done: make(chan struct{})}, nil
 }
@@ -147,29 +40,35 @@ func NewServer(cfg Config) (*Server, error) {
 // Start opens the UDP/67 and UDP/4011 listeners and serves in the background.
 // UDP/67 requires CAP_NET_BIND_SERVICE (or root); the error says so.
 func (s *Server) Start() error {
-	conn67, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 67})
+	conn67, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: s.cfg.Port67})
 	if err != nil {
-		return fmt.Errorf("proxydhcp: listen UDP/67: %w (needs root or CAP_NET_BIND_SERVICE)", err)
+		return fmt.Errorf("proxydhcp: listen UDP/%d: %w (needs root or CAP_NET_BIND_SERVICE)", s.cfg.Port67, err)
 	}
 	if err := enableBroadcast(conn67); err != nil {
 		conn67.Close()
-		return fmt.Errorf("proxydhcp: enable broadcast on UDP/67: %w", err)
+		return fmt.Errorf("proxydhcp: enable broadcast on UDP/%d: %w", s.cfg.Port67, err)
 	}
 	s.conn67 = conn67
 
-	conn4011, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 4011})
+	conn4011, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: s.cfg.Port4011})
 	if err != nil {
 		conn67.Close()
-		return fmt.Errorf("proxydhcp: listen UDP/4011: %w", err)
+		return fmt.Errorf("proxydhcp: listen UDP/%d: %w", s.cfg.Port4011, err)
+	}
+	if err = enableBroadcast(conn4011); err != nil {
+		_ = conn67.Close()
+		_ = conn4011.Close()
+		return fmt.Errorf("proxydhcp: enable broadcast on UDP/%d: %w", s.cfg.Port4011, err)
 	}
 	s.conn4011 = conn4011
 
 	slog.Info("proxyDHCP listening",
-		"ports", "67+4011", "next-server", s.cfg.ServerIP.String(),
-		"bios", s.cfg.BootfileBIOS, "uefi", s.cfg.BootfileUEFI, "arm64", s.cfg.BootfileARM64)
+		"ports", fmt.Sprintf("%d+%d", s.cfg.Port67, s.cfg.Port4011), "next-server", s.cfg.ServerIP.String(),
+		"relay", s.cfg.Relay,
+		"bios", s.cfg.BIOSFile, "efi", s.cfg.EFIFile, "arm64", s.cfg.ARM64File, "ipxe", s.cfg.IPXEScript)
 
-	s.wg.Go(func() { s.loop(conn67, true) })
-	s.wg.Go(func() { s.loop(conn4011, false) })
+	s.wg.Go(func() { s.loop(conn67, s.cfg.Port67) })
+	s.wg.Go(func() { s.loop(conn4011, s.cfg.Port4011) })
 	return nil
 }
 
@@ -190,13 +89,12 @@ func (s *Server) Shutdown() {
 	s.wg.Wait()
 }
 
-// loop reads and answers requests until Shutdown. broadcast picks the reply
-// destination: true (UDP/67) broadcasts to :68, false (UDP/4011) unicasts to
-// the request source.
+// loop reads and answers requests until Shutdown. port is the configured port
+// the conn listens on, which handle uses to gate DISCOVER (67) and REQUEST (4011).
 // maxPacketSize bounds a single DHCP datagram read; 1500 is the Ethernet MTU.
 const maxPacketSize = 1500
 
-func (s *Server) loop(conn *net.UDPConn, broadcast bool) {
+func (s *Server) loop(conn *net.UDPConn, port int) {
 	buf := make([]byte, maxPacketSize)
 	for {
 		select {
@@ -219,24 +117,23 @@ func (s *Server) loop(conn *net.UDPConn, broadcast bool) {
 			slog.Warn("proxyDHCP parse error", "err", err)
 			continue
 		}
-		s.handle(conn, src, req, broadcast)
+		s.respond(conn, src, req, port)
 	}
 }
 
-func (s *Server) handle(conn *net.UDPConn, src *net.UDPAddr, req *dhcpv4.DHCPv4, broadcast bool) {
-	resp, ok := buildReply(req, s.cfg)
+// respond runs the protocol core for one request and writes any reply to the
+// destination RFC 2131 section 4.1 picks.
+func (s *Server) respond(conn *net.UDPConn, src *net.UDPAddr, req *dhcpv4.DHCPv4, port int) {
+	resp, ok := handle(req, s.cfg, port)
 	if !ok {
 		return
 	}
-	dst := &net.UDPAddr{IP: net.IPv4bcast, Port: 68}
-	if !broadcast {
-		dst = src
-	}
+	dst := replyDestination(req, src)
 	if _, err := conn.WriteToUDP(resp.ToBytes(), dst); err != nil {
 		slog.Warn("proxyDHCP send error", "err", err)
 		return
 	}
-	slog.Info("proxyDHCP offer",
-		"client", req.ClientHWAddr.String(), "type", req.MessageType().String(),
-		"bootfile", resp.BootFileName)
+	slog.Info("proxyDHCP reply", //nolint:sloglint // default logger: no injected logger in this package yet
+		"client", req.ClientHWAddr.String(), "type", resp.MessageType().String(),
+		"to", dst.String(), "file", resp.BootFileName)
 }
