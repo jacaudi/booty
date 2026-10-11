@@ -66,6 +66,29 @@ describe('HostsView', () => {
     expect(client.revokeHost).toHaveBeenCalledWith('a1')
   })
 
+  it('wake asks for confirmation then calls wakeHost', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([host({ mac: 'w1', approved: true })])
+    vi.mocked(client.wakeHost).mockResolvedValue({ sentTo: ['10.0.0.255:9'] })
+    render(<HostsView />)
+    await userEvent.click(screen.getByRole('tab', { name: /Approved/ }))
+    await waitFor(() => screen.getByText('w1'))
+    await userEvent.click(screen.getByRole('button', { name: 'Wake' }))
+    expect(client.wakeHost).not.toHaveBeenCalled()
+    await userEvent.click(await screen.findByRole('button', { name: 'Wake now' }))
+    expect(client.wakeHost).toHaveBeenCalledWith('w1')
+  })
+
+  it('wake asks for confirmation then calls wakeHost on a pending host', async () => {
+    vi.mocked(client.listHosts).mockResolvedValue([host({ mac: 'w2', approved: false })])
+    vi.mocked(client.wakeHost).mockResolvedValue({ sentTo: ['10.0.0.255:9'] })
+    render(<HostsView />)
+    await waitFor(() => screen.getByText('w2'))
+    await userEvent.click(screen.getByRole('button', { name: 'Wake' }))
+    expect(client.wakeHost).not.toHaveBeenCalled()
+    await userEvent.click(await screen.findByRole('button', { name: 'Wake now' }))
+    expect(client.wakeHost).toHaveBeenCalledWith('w2')
+  })
+
   it('shows an error alert when loading fails', async () => {
     vi.mocked(client.listHosts).mockRejectedValue(new Error('boom'))
     render(<HostsView />)
