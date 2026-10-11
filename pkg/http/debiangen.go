@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"text/template"
+	"unicode"
 
 	yaml "go.yaml.in/yaml/v4"
 )
@@ -607,6 +608,11 @@ func translateDebianConfig(rendered []byte) ([]byte, error) {
 	var spec debianConfigSpec
 	if err := yaml.Unmarshal(rendered, &spec); err != nil {
 		return nil, fmt.Errorf("http: parse debianconfig: %w", err)
+	}
+	for field, v := range map[string]string{"hostname": spec.Hostname, "domain": spec.Domain} {
+		if strings.IndexFunc(v, unicode.IsControl) >= 0 {
+			return nil, fmt.Errorf("http: debianconfig: %s contains a control character", field)
+		}
 	}
 	view, err := buildPreseedView(spec)
 	if err != nil {
