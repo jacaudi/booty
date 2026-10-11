@@ -27,7 +27,7 @@ all under `--dataDir`. This documents their shape.
 | `Booted` | string | Last boot marker (informational). |
 | `IgnitionFile` | string | Optional per-host override of the Ignition template path. |
 | `OS` | string | `flatcar` \| `coreos` \| `talos` — selects the TFTP boot path. |
-| `DoInstall` | bool | One-shot install flag; flipped to `false` when the host first fetches `booty.ipxe`. |
+| `DoInstall` | bool | Reserved; not acted on. |
 | `Schematic` | string | Talos only — per-host Image Factory schematic ID. |
 
 A host record is created/updated via `POST /api/v1/hosts` (an upsert: `201` on create, `200` on
@@ -142,7 +142,7 @@ P1c; remaining columns keep their defaults):
 | `booted` | TEXT | Last boot marker. |
 | `ignition_file` | TEXT | Optional per-host Ignition template override. |
 | `os` | TEXT | `flatcar` \| `coreos` \| `talos`. For config-kind family matching (P4), `coreos` maps to the ostype canonical family `fedora-coreos`; `flatcar`/`talos` are identity — see `cache.CacheNameToCanonical`. |
-| `do_install` | INTEGER | One-shot install flag. |
+| `do_install` | INTEGER | Reserved; not acted on. |
 | `schematic` | TEXT | Talos per-host schematic ID. |
 | `approved` | INTEGER | **Active (P1c).** `1` = approved to boot; `0` = holding pattern. |
 | `boot_mode` | TEXT | **Active (P1c).** `assigned` = boot the assigned target; `menu` = serve the interactive boot menu instead. Persists until explicitly changed — `POST /hosts/{mac}/approve` sets it back to `assigned`, `POST /hosts/{mac}/menu` sets it to `menu` again. |
