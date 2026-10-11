@@ -1,0 +1,116 @@
+{
+  "ignition": {
+    "version": "3.4.0"
+  },
+  "passwd": {
+    "users": [
+      {
+        "name": "core"
+      }
+    ]
+  },
+  "storage": {
+    "files": [
+      {
+        "path": "/etc/hostname",
+        "contents": {
+          "compression": "",
+          "source": "data:,node1"
+        },
+        "mode": 420
+      },
+      {
+        "path": "/opt/cni.sh",
+        "contents": {
+          "source": "http://10.0.0.1:8080/data/public/cni.sh"
+        },
+        "mode": 509
+      },
+      {
+        "path": "/opt/systemd.sh",
+        "contents": {
+          "source": "http://10.0.0.1:8080/data/public/systemd.sh"
+        },
+        "mode": 509
+      },
+      {
+        "path": "/opt/kube-tools.sh",
+        "contents": {
+          "source": "http://10.0.0.1:8080/data/public/kube-tools.sh"
+        },
+        "mode": 509
+      },
+      {
+        "path": "/opt/join.sh",
+        "contents": {
+          "source": "http://10.0.0.1:8080/data/public/join.sh"
+        },
+        "mode": 509
+      },
+      {
+        "path": "/opt/version-check.sh",
+        "contents": {
+          "source": "http://10.0.0.1:8080/data/public/version-check.sh"
+        },
+        "mode": 509
+      }
+    ],
+    "filesystems": [
+      {
+        "device": "/dev/sda",
+        "format": "ext4",
+        "label": "ssd",
+        "path": "/var/lib/containerd",
+        "wipeFilesystem": true
+      }
+    ]
+  },
+  "systemd": {
+    "units": [
+      {
+        "contents": "[Unit]\nDescription=Mount ephemeral to /var/lib/containerd\nBefore=local-fs.target\n[Mount]\nWhat=/dev/disk/by-label/ssd\nWhere=/var/lib/containerd\nType=ext4\n[Install]\nWantedBy=local-fs.target        \n",
+        "enabled": true,
+        "name": "var-lib-containerd.mount"
+      },
+      {
+        "dropins": [
+          {
+            "contents": "[Unit]\nAfter=var-lib-containerd.mount\nRequires=var-lib-containerd.mount \n",
+            "name": "10-wait-containerd.conf"
+          }
+        ],
+        "enabled": true,
+        "name": "containerd.service"
+      },
+      {
+        "contents": "[Unit]\nDescription=Compares current version to remote version\n\n[Service]\nEnvironment=\"BOOTY_IP=10.0.0.1:8080\"\nType=oneshot\nExecStart=/opt/version-check.sh\n",
+        "name": "update.service"
+      },
+      {
+        "contents": "[Unit]\nDescription=Run update-check every 10 minutes\n\n[Timer]\nOnCalendar=*:0/10\n\n[Install]\nWantedBy=multi-user.target\n",
+        "enabled": true,
+        "name": "update.timer"
+      },
+      {
+        "contents": "[Install]\nWantedBy=multi-user.target\n\n[Unit]\nDescription=k8s installation script\nWants=network-online.target\nAfter=network.target network-online.target\n\n[Service]\nType=oneshot\nExecStart=/opt/cni.sh\n",
+        "enabled": true,
+        "name": "cni-install.service"
+      },
+      {
+        "contents": "[Install]\nWantedBy=multi-user.target\n\n[Unit]\nDescription=k8s installation script\nRequires=cni-install.service\nAfter=cni-install.service\n\n[Service]\nType=oneshot\nExecStart=/opt/kube-tools.sh\n",
+        "enabled": true,
+        "name": "kube-tools-install.service"
+      },
+      {
+        "contents": "[Install]\nWantedBy=multi-user.target\n\n[Unit]\nDescription=k8s installation script\nRequires=kube-tools-install.service\nAfter=kube-tools-install.service\n\n[Service]\nType=oneshot\nExecStart=/opt/systemd.sh\n",
+        "enabled": true,
+        "name": "systemd-k8s-setup.service"
+      },
+      {
+        "contents": "[Install]\nWantedBy=multi-user.target\n\n[Unit]\nDescription=k8s join script\nRequires=systemd-k8s-setup.service\nAfter=systemd-k8s-setup.service\n\n[Service]\nEnvironment=\"JOIN_STRING=kubeadm join x\"\nType=oneshot\nExecStart=/bin/bash -c 'PATH=/opt/bin:$PATH exec /opt/join.sh'",
+        "enabled": true,
+        "name": "k8s-join.service"
+      }
+    ]
+  }
+}
