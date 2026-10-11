@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 // MaxHostnameLen is the RFC 1123 limit for a fully qualified name.
@@ -41,4 +44,33 @@ func ValidateHostname(name string) error {
 		return fmt.Errorf("%w: %q must be an RFC 1123 label or dotted name", ErrInvalidHostname, name)
 	}
 	return nil
+}
+
+// StripControl returns s with every control character removed. It is applied
+// to stored hostnames at render time so a legacy value cannot inject a line
+// into a rendered config.
+func StripControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// InvalidHostnames lists every stored host whose non-empty hostname fails
+// ValidateHostname, as mac=quoted-hostname, sorted.
+func InvalidHostnames() ([]string, error) {
+	hosts, err := ListHosts()
+	if err != nil {
+		return nil, err
+	}
+	var bad []string
+	for _, h := range hosts {
+		if h.Hostname != "" && ValidateHostname(h.Hostname) != nil {
+			bad = append(bad, h.MAC+"="+strconv.Quote(h.Hostname))
+		}
+	}
+	slices.Sort(bad)
+	return bad, nil
 }

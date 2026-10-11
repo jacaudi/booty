@@ -121,7 +121,7 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 		// at first boot), so render a host-less config rather than forcing a reboot.
 		if host != nil {
 			if host.Hostname != "" {
-				templateData.Hostname = host.Hostname
+				templateData.Hostname = hardware.StripControl(host.Hostname)
 			}
 			templateData.MAC = host.MAC
 			templateData.IP = host.IP
@@ -193,7 +193,7 @@ func machineConfigVarsCore(store *db.Store, host *hardware.Host, hostname, uuid,
 	}
 	if host != nil {
 		if host.Hostname != "" {
-			vars.Hostname = host.Hostname
+			vars.Hostname = hardware.StripControl(host.Hostname)
 		}
 		vars.MAC = host.MAC
 		vars.IP = host.IP
