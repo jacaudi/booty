@@ -1,7 +1,9 @@
 package http
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -108,5 +110,30 @@ func TestBootScriptDoesNotChangeDoInstall(t *testing.T) {
 	}
 	if !host.DoInstall {
 		t.Fatal("DoInstall was cleared by fetching /booty.ipxe")
+	}
+}
+
+// TestBootScriptLogsNormalisedMAC: the "boot script" log line carries the
+// normalised MAC, or "" when ?mac= does not parse, never the raw query value.
+func TestBootScriptLogsNormalisedMAC(t *testing.T) {
+	servingStore(t)
+	var logBuf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	noARP := func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp") }
+
+	for _, tc := range []struct{ query, want, absent string }{
+		{"AA-BB-CC-DD-EE-B0", "mac=aa:bb:cc:dd:ee:b0", "AA-BB"},
+		{"evil%0Afake=1", `mac=""`, "evil"},
+	} {
+		logBuf.Reset()
+		req := httptest.NewRequest(http.MethodGet, "/booty.ipxe?mac="+tc.query, nil)
+		bootScriptHandler(noARP)(httptest.NewRecorder(), req)
+		got := logBuf.String()
+		if !strings.Contains(got, `msg="boot script"`) || !strings.Contains(got, "kind=") ||
+			!strings.Contains(got, tc.want) || strings.Contains(got, tc.absent) {
+			t.Errorf("?mac=%s: log %q, want %q and no %q", tc.query, got, tc.want, tc.absent)
+		}
 	}
 }

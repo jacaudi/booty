@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/jeefy/booty/pkg/tftp"
 )
 
@@ -14,8 +15,11 @@ import (
 func bootScriptHandler(arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		script, kind := tftp.RenderBootScript(identifyHostWith(r, arp), tftp.URLHost())
+		// Log the normalised MAC ("" when ?mac= does not parse), never the
+		// raw, attacker-controlled query value.
+		mac, _ := hardware.NormalizeMAC(r.URL.Query().Get("mac"))
 		//nolint:sloglint // default logger: no injected logger in this package yet
-		slog.Info("boot script", "kind", kind, "mac", r.URL.Query().Get("mac"))
+		slog.Info("boot script", "kind", kind, "mac", mac)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, script)
 	}
