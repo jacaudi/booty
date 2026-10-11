@@ -8,3 +8,6 @@
 - TFTP refuses write requests with an error instead of an invalid reply.
 - TFTP no longer follows absolute symlinks, or symlinks leading out of --dataDir. booty itself creates none.
 - New flag --tftpPort (default 69).
+- proxyDHCP no longer answers the client's port-67 REQUEST for its real lease (UEFI firmware declined the lease and the boot failed).
+- proxyDHCP ignores PXE packets without client architecture (option 93) and INFORM; very old BIOS boot ROMs that omit option 93 need the site DHCP server pointed at booty.
+- New --proxyDHCPRelay.
