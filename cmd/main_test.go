@@ -202,3 +202,18 @@ func TestWatchSIGHUPStopsWithItsContext(t *testing.T) {
 		t.Fatal("watchSIGHUP's goroutine did not exit within 2s of ctx being cancelled")
 	}
 }
+
+// TestNodeReportsFlagRegistered pins the flag name, default and help text.
+func TestNodeReportsFlagRegistered(t *testing.T) {
+	f := Cmd.Flags().Lookup(config.NodeReports)
+	if f == nil {
+		t.Fatal("--nodeReports is not registered")
+	}
+	if f.DefValue != "false" {
+		t.Errorf("--nodeReports default = %q, want false", f.DefValue)
+	}
+	const wantUsage = "Inject a boot-time health/running-version report into Flatcar, CoreOS and debianconfig Debian hosts and accept reports at POST /node/report"
+	if f.Usage != wantUsage {
+		t.Errorf("--nodeReports usage = %q", f.Usage)
+	}
+}

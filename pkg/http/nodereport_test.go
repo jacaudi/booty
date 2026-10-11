@@ -352,9 +352,9 @@ func TestGenCache(t *testing.T) {
 	if g, _ := c.Lookup(mac); g != 0 {
 		t.Fatalf("cached gen = %d, want 0 within TTL", g)
 	}
-	c.Invalidate(mac)
+	c.Set(mac, 1)
 	if g, _ := c.Lookup(mac); g != 1 {
-		t.Fatalf("gen after Invalidate = %d, want 1", g)
+		t.Fatalf("gen after Set = %d, want 1", g)
 	}
 	if _, err := s.BumpHostReportTokenGen(mac); err != nil {
 		t.Fatal(err)
@@ -373,5 +373,98 @@ func TestGenCacheCapacity(t *testing.T) {
 	}
 	if len(c.m) > 4096 {
 		t.Fatalf("genCache holds %d entries, want <= 4096", len(c.m))
+	}
+}
+
+// TestGenCacheLateLookupCannotResurrectOldGeneration replays the rotation
+// race: a lookup read generation 0, the token was then rotated (DB bumped,
+// cache Set to 1), and only afterwards did the lookup's put(0) arrive.
+func TestGenCacheLateLookupCannotResurrectOldGeneration(t *testing.T) {
+	s := servingStore(t)
+	key := nodeReportKey()
+	now := nodeReportClock()
+	rr := newReportReceiver(s, key, now)
+	mac := nodeReportMAC(1)
+	seedReportHost(t, s, mac)
+
+	oldGen, err := rr.gens.Lookup(mac) // the in-flight lookup read generation N
+	if err != nil || oldGen != 0 {
+		t.Fatalf("Lookup = %d, %v", oldGen, err)
+	}
+	newGen, err := s.BumpHostReportTokenGen(mac) // rotate
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr.gens.Set(mac, newGen)
+	rr.gens.put(mac, oldGen, now().Add(genCacheTTL)) // the late put(N)
+
+	if got, lerr := rr.gens.Lookup(mac); lerr != nil || got != newGen {
+		t.Fatalf("cached gen = %d, %v, want %d", got, lerr, newGen)
+	}
+	oldTok, newTok := nodereport.Token(key, mac, oldGen), nodereport.Token(key, mac, newGen)
+	if w := postReport(rr, "10.3.0.1:1", "?mac="+mac, oldTok, reportBody); w.Code != http.StatusUnauthorized {
+		t.Fatalf("old token = %d, want 401", w.Code)
+	}
+	if w := postReport(rr, "10.3.0.2:1", "?mac="+mac, newTok, reportBody); w.Code != http.StatusNoContent {
+		t.Fatalf("new token = %d, want 204", w.Code)
+	}
+}
+
+// TestGenCachePutReplacesExpiredHigherGeneration: the never-lower rule covers
+// only live entries, so a host deleted and re-added (generation back to 0)
+// recovers once the old entry has expired.
+func TestGenCachePutReplacesExpiredHigherGeneration(t *testing.T) {
+	at := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	c := newGenCache(servingStore(t), func() time.Time { return at })
+	c.Set("m", 5)
+	at = at.Add(genCacheTTL + time.Second)
+	c.put("m", 0, at.Add(genCacheTTL))
+	c.mu.Lock()
+	got := c.m["m"].gen
+	c.mu.Unlock()
+	if got != 0 {
+		t.Fatalf("gen = %d, want 0 after the higher entry expired", got)
+	}
+}
+
+func TestGenCacheSetRespectsCapacity(t *testing.T) {
+	c := newGenCache(servingStore(t), nodeReportClock())
+	for i := range genCacheCapacity + 10 {
+		c.Set(fmt.Sprintf("m%d", i), 1)
+	}
+	c.mu.Lock()
+	n := len(c.m)
+	c.mu.Unlock()
+	if n > genCacheCapacity {
+		t.Fatalf("cache holds %d entries, cap %d", n, genCacheCapacity)
+	}
+}
+
+// TestNodeReportRouteMethods drives the real baseMux: with the feature on a
+// non-POST is 405 (not the catch-all's 302); with it off every method is 404.
+func TestNodeReportRouteMethods(t *testing.T) {
+	s := servingStore(t)
+	on := baseMux(APIDeps{Store: s, NodeReports: &NodeReports{Key: nodeReportKey()}})
+	off := baseMux(APIDeps{Store: s})
+	tests := []struct {
+		name   string
+		mux    *http.ServeMux
+		method string
+		want   int
+	}{
+		{"on GET", on, http.MethodGet, http.StatusMethodNotAllowed},
+		{"on PUT", on, http.MethodPut, http.StatusMethodNotAllowed},
+		{"on POST", on, http.MethodPost, http.StatusBadRequest}, // no mac: reaches the receiver
+		{"off GET", off, http.MethodGet, http.StatusNotFound},
+		{"off POST", off, http.MethodPost, http.StatusNotFound},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			tc.mux.ServeHTTP(w, httptest.NewRequest(tc.method, "/node/report", nil))
+			if w.Code != tc.want {
+				t.Fatalf("%s /node/report = %d, want %d", tc.method, w.Code, tc.want)
+			}
+		})
 	}
 }

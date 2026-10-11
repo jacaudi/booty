@@ -44,6 +44,7 @@ const (
 	ProxyDHCPBootfileUEFI  = "proxyDHCPBootfileUEFI"
 	ProxyDHCPBootfileARM64 = "proxyDHCPBootfileARM64"
 	ProxyDHCPRelay         = "proxyDHCPRelay"
+	NodeReports            = "nodeReports"
 	TalosArchitecture      = "talosArchitecture"
 	TalosSchematic         = "talosSchematic"
 	TalosRetainMinors      = "talosRetainMinors"
@@ -85,6 +86,7 @@ func LoadConfig(cmd *cobra.Command) {
 	viper.SetDefault(ProxyDHCPBootfileUEFI, "ipxe.efi")
 	viper.SetDefault(ProxyDHCPBootfileARM64, "ipxe-arm64.efi")
 	viper.SetDefault(ProxyDHCPRelay, false)
+	viper.SetDefault(NodeReports, false)
 	viper.SetDefault(TalosArchitecture, "amd64")
 	viper.SetDefault(TalosSchematic, DefaultTalosSchematic)
 	viper.SetDefault(TalosRetainMinors, 3)
