@@ -27,6 +27,7 @@ keep cache and registration across restarts.
 > below them — never `<dataDir>` itself, the database, `catalog.yaml`, `config/`, a subtree root, or
 > any directory listing. Everything else returns `404`. Put anything a booted node must fetch in
 > `public/`; anything booty renders server-side stays in `config/`.
+> TFTP applies the same allowlist (plus the top-level iPXE bootfile names).
 
 > **As of P1b:** `version.txt` / `<channel>.json` are no longer read for version state — the newest
 > cached version is derived from the `cache/` directory for every OS (not just Talos).
