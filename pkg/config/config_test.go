@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,16 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
+
+// TestDetectServerIPReturnsAnIPOrError asserts only the contract DetectServerIP
+// guarantees: a nil error means a parseable IP. Loopback is not asserted here;
+// resolveServerIP in cmd enforces the LAN-address rule.
+func TestDetectServerIPReturnsAnIPOrError(t *testing.T) {
+	ip, err := DetectServerIP()
+	if err == nil && net.ParseIP(ip) == nil {
+		t.Fatalf("DetectServerIP() = %q with nil error; want a parseable IP", ip)
+	}
+}
 
 func TestLoadConfig_ProxyDHCPDefaults(t *testing.T) {
 	viper.Reset()

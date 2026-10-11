@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -167,6 +168,35 @@ func DownloadStaged(ctx context.Context, destDir, rawURL string) (string, string
 	}
 	slog.Info("staged download complete", "url", rawURL, "bytes", n)
 	return partialPath, hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// Ported from jeefy/booty pkg/config/config.go @ 4663d22 (MIT).
+
+// DetectServerIP returns the local address the kernel would use to reach a
+// public IP. UDP "dialing" only selects a route; no packet is sent.
+func DetectServerIP() (string, error) {
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "udp4", "192.0.2.1:9")
+	if err != nil {
+		return "", err
+	}
+	defer CloseQuietly(conn, "route probe")
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || addr.IP == nil || addr.IP.IsUnspecified() {
+		return "", fmt.Errorf("no usable local address on the default route")
+	}
+	return addr.IP.String(), nil
+}
+
+// Ported from jeefy/booty pkg/config/config.go @ 4663d22 (MIT).
+
+// CloseQuietly closes c and logs (at debug level) any error. Use it for
+// read-only handles where a close failure carries no information for the
+// caller.
+func CloseQuietly(c io.Closer, what string) {
+	if err := c.Close(); err != nil {
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Debug("Close failed", "what", what, "error", err)
+	}
 }
 
 // DatabasePathValue resolves the SQLite database path: the explicit

@@ -20,7 +20,7 @@ config file.
 | `--cacheConcurrency` | `4` | Max concurrent artifact downloads during a reconcile pass. |
 | `--signaturePolicy` | `warn` | Artifact verification policy: `strict` \| `warn` \| `off` (see [below](#signature-verification---signaturepolicy)). An unknown value fails startup. |
 | `--dataDir` | `/data` | Directory for all stateful data (cache, templates, host DB). |
-| `--serverIP` | `127.0.0.1` | LAN-reachable IP that clients use to reach booty. **Set this.** |
+| `--serverIP` | `detected` | LAN IP clients use to reach booty; detected from the default route when empty (set it on multi-homed hosts) |
 | `--serverHttpPort` | `0` (falls back to `--httpPort`) | Client-facing HTTP port advertised in boot-config URLs. Unset (`0`) advertises whatever `--httpPort` listens on — the correct default for a single-process, no-proxy deploy. Set explicitly only when a proxy/LB fronts booty and the client-facing port differs from the listen port (e.g. `--serverHttpPort=80` with `--httpPort=8080`). |
 | `--joinString` | `""` | Optional `kubeadm join` string injected into rendered Ignition. |
 | `--flatcarArchitecture` | `amd64` | Architecture for Flatcar downloads — **feeds the default catalog only** (see below). |
