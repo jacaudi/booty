@@ -85,6 +85,34 @@ func TestIgnitionGetsHealthWhenOn(t *testing.T) {
 	}
 }
 
+func TestIgnitionNoInjectionForUnknownMAC(t *testing.T) {
+	s, _, _ := injectIgnitionHosts(t)
+	body := getBody(t, ignitionHandler(s, &NodeReports{Key: nodeReportKey()}), "/ignition.json?mac=aa:bb:cc:dd:ee:8f")
+	if !strings.Contains(body, "ExecStart=reboot") {
+		t.Fatalf("unknown MAC did not get the reboot config:\n%s", body)
+	}
+	if strings.Contains(body, "booty-health") {
+		t.Fatalf("unknown MAC got the health unit:\n%s", body)
+	}
+}
+
+// TestWithNodeReportMergeErrorServesOriginal: when the merge fails (here the
+// config is not JSON) the config is served unchanged.
+func TestWithNodeReportMergeErrorServesOriginal(t *testing.T) {
+	s := servingStore(t)
+	const mac = "aa:bb:cc:dd:ee:8e"
+	seedReportHost(t, s, mac)
+	n := &NodeReports{Key: nodeReportKey()}
+	host := &hardware.Host{MAC: mac}
+	if _, _, ok := n.script(s, host); !ok {
+		t.Fatal("precondition: script not available for a known host")
+	}
+	in := []byte("not an ignition config")
+	if got := withNodeReport(n, s, host, in); string(got) != string(in) {
+		t.Fatalf("withNodeReport = %q, want the original %q", got, in)
+	}
+}
+
 func injectDebianHost(t *testing.T, src string) (*db.Store, string) {
 	t.Helper()
 	s := servingStore(t)

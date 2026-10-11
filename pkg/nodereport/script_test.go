@@ -350,7 +350,7 @@ func TestScriptUsesEmbeddedMAC(t *testing.T) {
 	cmd.Env = append(os.Environ(), "PATH="+stubs+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"BOOTY_OS_RELEASE="+filepath.Join(dir, "os-release"), "BOOTY_SYS="+filepath.Join(dir, "nosys"),
 		"BOOTY_PROC="+filepath.Join(dir, "noproc"), "BOOTY_MAC=")
-	cmd.Env = slices.DeleteFunc(cmd.Env, func(e string) bool { return e == "BOOTY_MAC=" })
+	cmd.Env = slices.DeleteFunc(cmd.Env, func(e string) bool { return strings.HasPrefix(e, "BOOTY_MAC=") })
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
