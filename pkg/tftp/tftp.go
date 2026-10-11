@@ -1,6 +1,7 @@
 package tftp
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
 	"fmt"
@@ -177,6 +178,9 @@ func (s *server) readHandler(filename string, rf io.ReaderFrom) error {
 		slog.Info("bytes sent", "bytes", n, "file", filename)
 		return nil
 	}
+	if served, err := s.serveEmbedded(filename, rf); served {
+		return err
+	}
 	file, err := openDataFile(s.root, filename, s.topLevel)
 	if err != nil {
 		//nolint:sloglint // default logger: no injected logger in this package yet
@@ -190,6 +194,25 @@ func (s *server) readHandler(filename string, rf io.ReaderFrom) error {
 	}
 	slog.Info("bytes sent", "bytes", n, "file", filename)
 	return nil
+}
+
+// serveEmbedded sends filename from the embedded boot files. served is false
+// when there is no such embedded file, so the caller falls through to dataDir.
+func (s *server) serveEmbedded(filename string, rf io.ReaderFrom) (bool, error) {
+	if s.bootFiles == nil {
+		return false, nil
+	}
+	b, readErr := fs.ReadFile(s.bootFiles, filename)
+	if readErr != nil {
+		return false, nil //nolint:nilerr // any read error means "not embedded": fall through to dataDir
+	}
+	n, sendErr := rf.ReadFrom(bytes.NewReader(b))
+	if sendErr != nil {
+		return true, sendErr
+	}
+	//nolint:sloglint // default logger: no injected logger in this package yet
+	slog.Info("bytes sent", "bytes", n, "file", filename, "source", "embedded")
+	return true, nil
 }
 
 // applyTokens replaces every [[token]] in s with its value. Tokens are distinct
@@ -415,15 +438,16 @@ type Config struct {
 	Port              int
 	DataDir           string
 	TopLevelBootFiles []string
-	BootFiles         fs.FS                                  // embedded iPXE files served first; nil = none (used from phase 5)
+	BootFiles         fs.FS                                  // embedded iPXE files served first; nil = none
 	ARP               func(net.IP) (net.HardwareAddr, error) // nil means arping.Ping
 }
 
 // server owns the state readHandler needs for one running TFTP server.
 type server struct {
-	root     *os.Root
-	topLevel []string
-	arp      func(net.IP) (net.HardwareAddr, error)
+	root      *os.Root
+	topLevel  []string
+	bootFiles fs.FS
+	arp       func(net.IP) (net.HardwareAddr, error)
 }
 
 // Server is a running TFTP server.
@@ -449,7 +473,7 @@ func Start(cfg Config, errCh chan<- error) (*Server, error) {
 			return hw, pingErr
 		}
 	}
-	h := &server{root: root, topLevel: cfg.TopLevelBootFiles, arp: arp}
+	h := &server{root: root, topLevel: cfg.TopLevelBootFiles, bootFiles: cfg.BootFiles, arp: arp}
 
 	// A nil write handler makes the library answer WRQ with an error.
 	srv := tftp.NewServer(h.readHandler, nil)
