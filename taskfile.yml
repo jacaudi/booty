@@ -108,7 +108,7 @@ tasks:
       - docker buildx build --platform {{.PLATFORMS}} --build-arg BOOTY_VERSION={{.VERSION}} --build-arg BOOTY_TIMESTAMP={{.TIMESTAMP}} -t {{.IMAGE}} .
 
   image:run:
-    desc: Run the image with the least privileges booty needs (TFTP/proxyDHCP ports, ARP fallback)
+    desc: Run the image with the least privileges booty needs (host networking for TFTP/proxyDHCP/ARP, NET_BIND_SERVICE and NET_RAW only)
     deps: [image]
     cmds:
-      - docker run -ti --rm --cap-drop ALL --cap-add NET_BIND_SERVICE --cap-add NET_RAW -v {{.ROOT_DIR}}/data:/data -p 8080:8080 -p 69:69/udp {{.IMAGE}} --debug=true --dataDir=/data
+      - docker run -ti --rm --cap-drop ALL --cap-add NET_BIND_SERVICE --cap-add NET_RAW -v {{.ROOT_DIR}}/data:/data --network host {{.IMAGE}} --debug=true --dataDir=/data

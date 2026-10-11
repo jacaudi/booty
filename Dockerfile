@@ -1,5 +1,6 @@
 ### Stage One: build the web UI (feeds the Go embed below)
-FROM node:lts-alpine AS build-web
+# The UI assets are architecture-neutral; build them natively so arm64 images build without emulation.
+FROM --platform=$BUILDPLATFORM node:lts-alpine AS build-web
 WORKDIR /app
 COPY web/package*.json ./
 RUN npm ci
