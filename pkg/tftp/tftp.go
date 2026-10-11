@@ -5,9 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
+	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -23,12 +24,8 @@ import (
 	"github.com/jeefy/booty/pkg/ostype"
 )
 
-// absDataDir is the absolute, cleaned form of viper's DataDir, resolved once
-// in StartTFTP. safeJoin reads it; do not mutate after StartTFTP returns.
-var absDataDir string
-
-// errPathEscapes is returned by safeJoin when the requested path resolves
-// outside absDataDir (e.g. via "..", absolute paths, or sneaky combinations).
+// errPathEscapes is returned by renderMenuSelection when a menu selection
+// path would resolve outside its cache subtree.
 var errPathEscapes = errors.New("tftp: path escapes dataDir")
 
 // storeMu guards the package-level store handle. Mirrors hardware.SetStore/
@@ -54,34 +51,6 @@ func currentStore() *db.Store {
 	return tftpDB
 }
 
-// safeJoin resolves requested against absDataDir and returns an absolute,
-// cleaned path under absDataDir, or errPathEscapes if the result would lie
-// outside the root.
-//
-// Note: this does not call filepath.EvalSymlinks. If absDataDir contains a
-// symlink whose target is outside the directory, safeJoin will not detect it.
-// TFTP is read-only and the operator controls dataDir contents; this is an
-// acceptable limitation.
-func safeJoin(requested string) (string, error) {
-	if absDataDir == "" {
-		return "", errors.New("tftp: absDataDir not initialized")
-	}
-	// Reject absolute-path requests as a security policy: TFTP clients must
-	// not be able to address files by absolute path, even though
-	// filepath.Join would in practice keep the result under absDataDir
-	// (Join("/dataDir", "/etc/passwd") returns "/dataDir/etc/passwd").
-	if filepath.IsAbs(requested) {
-		return "", errPathEscapes
-	}
-	joined := filepath.Join(absDataDir, requested)
-	cleaned := filepath.Clean(joined)
-	if cleaned != absDataDir &&
-		!strings.HasPrefix(cleaned, absDataDir+string(filepath.Separator)) {
-		return "", errPathEscapes
-	}
-	return cleaned, nil
-}
-
 // bootDispatch is the pure host-state -> boot-decision function (design §2.5).
 // It returns the kind of boot to serve and, for "assigned", the OS to load.
 //   - no host / unapproved        -> "holding"
@@ -105,35 +74,63 @@ func bootDispatch(host *hardware.Host) (kind, osToLoad string) {
 	return "holding", ""
 }
 
+// bootScript renders the booty.ipxe script for host and reports which kind of
+// boot (holding, assigned, menu) it chose.
+func bootScript(host *hardware.Host, urlHost string) (string, string) {
+	kind, _ := bootDispatch(host)
+	switch kind {
+	case "assigned":
+		return kind, assignedScript(host, urlHost)
+	case "menu":
+		var inWindow, archEntries []cache.CacheEntry
+		if s := currentStore(); s != nil {
+			inWindow, archEntries = cache.PartitionCached(s)
+		} else {
+			inWindow = cache.ListCached() // no store: everything in-window (safe default)
+		}
+		return kind, renderMenu(inWindow, archEntries, viper.GetString(config.ServerIP))
+	default: // holding
+		return kind, holdingScript(urlHost)
+	}
+}
+
+// lookupHost identifies the requesting host by ARP and loads its record. It
+// returns nil when the MAC cannot be resolved or is unknown. A request for
+// booty.ipxe from a host flagged DoInstall clears the flag (best effort).
+func (s *server) lookupHost(ip net.IP, filename string) *hardware.Host {
+	hwAddr, err := s.arp(ip)
+	if err != nil {
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Warn("error with ARP request", "err", err)
+		return nil
+	}
+	macAddress := hwAddr.String()
+	host, lookupErr := hardware.GetMacAddress(macAddress)
+	if lookupErr != nil && !errors.Is(lookupErr, hardware.ErrNotFound) {
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Warn("TFTP: error looking up host", "mac", macAddress, "err", lookupErr)
+	}
+	if host != nil && host.DoInstall && filename == "booty.ipxe" {
+		modified := *host
+		modified.DoInstall = false
+		if writeErr := hardware.WriteMacAddress(macAddress, modified); writeErr != nil {
+			//nolint:sloglint // default logger: no injected logger in this package yet
+			slog.Warn("TFTP: error persisting DoInstall flip", "mac", macAddress, "err", writeErr)
+			// Best-effort: continue serving the iPXE script even if
+			// the persist failed; the next boot will retry.
+		}
+	}
+	return host
+}
+
 // readHandler is called when client starts file download from server
-func readHandler(filename string, rf io.ReaderFrom) error {
+func (s *server) readHandler(filename string, rf io.ReaderFrom) error {
 	slog.Info("TFTP get", "file", filename)
 	raddr := rf.(tftp.OutgoingTransfer).RemoteAddr()
 	laddr := rf.(tftp.RequestPacketInfo).LocalIP()
 	slog.Debug("RRQ", "from", raddr.String(), "to", laddr.String())
 
-	var host *hardware.Host
-	if hwAddr, _, err := arping.Ping(raddr.IP); err != nil {
-		slog.Warn("error with ARP request", "err", err)
-	} else {
-		macAddress := hwAddr.String()
-		var lookupErr error
-		host, lookupErr = hardware.GetMacAddress(macAddress)
-		if lookupErr != nil && !errors.Is(lookupErr, hardware.ErrNotFound) {
-			slog.Warn("TFTP: error looking up host", "mac", macAddress, "err", lookupErr)
-		}
-		if host != nil {
-			if host.DoInstall && filename == "booty.ipxe" {
-				modified := *host
-				modified.DoInstall = false
-				if err := hardware.WriteMacAddress(macAddress, modified); err != nil {
-					slog.Warn("TFTP: error persisting DoInstall flip", "mac", macAddress, "err", err)
-					// Best-effort: continue serving the iPXE script even if
-					// the persist failed; the next boot will retry.
-				}
-			}
-		}
-	}
+	host := s.lookupHost(raddr.IP, filename)
 
 	urlHost := viper.GetString(config.ServerIP)
 	hostPort := viper.GetInt(config.ServerHttpPort)
@@ -154,22 +151,7 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 	}
 
 	if filename == "booty.ipxe" {
-		kind, _ := bootDispatch(host)
-		var toServe string
-		switch kind {
-		case "assigned":
-			toServe = assignedScript(host, urlHost)
-		case "menu":
-			var inWindow, archEntries []cache.CacheEntry
-			if s := currentStore(); s != nil {
-				inWindow, archEntries = cache.PartitionCached(s)
-			} else {
-				inWindow = cache.ListCached() // no store: everything in-window (safe default)
-			}
-			toServe = renderMenu(inWindow, archEntries, viper.GetString(config.ServerIP))
-		default: // holding
-			toServe = holdingScript(urlHost)
-		}
+		kind, toServe := bootScript(host, urlHost)
 		r := strings.NewReader(toServe)
 		n, err := rf.ReadFrom(r)
 		if err != nil {
@@ -195,21 +177,11 @@ func readHandler(filename string, rf io.ReaderFrom) error {
 		slog.Info("bytes sent", "bytes", n, "file", filename)
 		return nil
 	}
-	if !allowedDataFile(filename, topLevelBootFiles()) {
-		//nolint:sloglint // readHandler uses the default logger throughout; no injected logger exists yet
-		slog.Warn("TFTP rejected: not an allowlisted path", "client", raddr.String(), "requested", filename)
-		return os.ErrNotExist
-	}
-	path, err := safeJoin(filename)
+	file, err := openDataFile(s.root, filename, s.topLevel)
 	if err != nil {
-		if errors.Is(err, errPathEscapes) {
-			slog.Warn("TFTP rejected: path escapes dataDir", "client", raddr.String(), "requested", filename)
-		}
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Warn("TFTP rejected", "client", raddr.String(), "requested", filename, "err", err)
 		return os.ErrNotExist
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return err
 	}
 	defer file.Close()
 	n, err := rf.ReadFrom(file)
@@ -432,35 +404,84 @@ func assignedScript(host *hardware.Host, urlHost string) string {
 	return applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
 }
 
-// writeHandler is called when client starts file upload to server
-func writeHandler(filename string, wt io.WriterTo) error {
-	slog.Info("TFTP writes are not supported", "file", filename)
-	return nil
+const (
+	blockSize       = 512
+	transferTimeout = 60 * time.Second // v3 defaults to 5 s; slow PXE clients need longer
+)
+
+// Config is everything Start needs. Port is used as given; 0 binds an
+// ephemeral port (tests). cmd always passes --tftpPort (default 69).
+type Config struct {
+	Port              int
+	DataDir           string
+	TopLevelBootFiles []string
+	BootFiles         fs.FS                                  // embedded iPXE files served first; nil = none (used from phase 5)
+	ARP               func(net.IP) (net.HardwareAddr, error) // nil means arping.Ping
 }
 
-// StartTFTP starts the TFTP server in a background goroutine and returns it so
-// the caller can Shutdown() it during graceful shutdown. The returned server's
-// Shutdown drains outstanding transfers before stopping the listener.
-func StartTFTP() *tftp.Server {
-	resolved, err := filepath.Abs(viper.GetString(config.DataDir))
-	if err != nil {
-		slog.Error("TFTP: failed to resolve dataDir", "err", err)
-		os.Exit(1)
-	}
-	absDataDir = resolved
+// server owns the state readHandler needs for one running TFTP server.
+type server struct {
+	root     *os.Root
+	topLevel []string
+	arp      func(net.IP) (net.HardwareAddr, error)
+}
 
-	// use nil in place of handler to disable read or write operations
-	s := tftp.NewServer(readHandler, writeHandler)
-	s.SetBlockSize(512)
-	s.EnableSinglePort()
-	s.SetTimeout(60 * time.Second) // optional
+// Server is a running TFTP server.
+type Server struct {
+	srv  *tftp.Server
+	conn net.PacketConn
+	root *os.Root
+	once sync.Once
+}
+
+// Start opens dataDir, binds the UDP port and serves TFTP in a background
+// goroutine. Bind errors are returned; serve errors are sent on errCh. The
+// server is read-only: it has no write handler.
+func Start(cfg Config, errCh chan<- error) (*Server, error) {
+	root, err := os.OpenRoot(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("tftp: open dataDir: %w", err)
+	}
+	arp := cfg.ARP
+	if arp == nil {
+		arp = func(ip net.IP) (net.HardwareAddr, error) {
+			hw, _, pingErr := arping.Ping(ip)
+			return hw, pingErr
+		}
+	}
+	h := &server{root: root, topLevel: cfg.TopLevelBootFiles, arp: arp}
+
+	// A nil write handler makes the library answer WRQ with an error.
+	srv := tftp.NewServer(h.readHandler, nil)
+	srv.SetBlockSize(blockSize)
+	srv.EnableSinglePort()
+	srv.SetTimeout(transferTimeout)
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: cfg.Port})
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("tftp: listen on UDP/%d: %w", cfg.Port, err)
+	}
 	go func() {
-		err := s.ListenAndServe(":69") // blocks until s.Shutdown() is called
-		if err != nil {
-			slog.Error("TFTP server error", "err", err)
-			os.Exit(1)
+		if serveErr := srv.Serve(conn); serveErr != nil {
+			errCh <- fmt.Errorf("tftp: %w", serveErr)
 		}
 	}()
-	slog.Info("TFTP server started")
-	return s
+	//nolint:sloglint // default logger: no injected logger in this package yet
+	slog.Info("TFTP server started", "addr", conn.LocalAddr().String())
+	return &Server{srv: srv, conn: conn, root: root}, nil
+}
+
+// Addr returns the bound local address.
+func (s *Server) Addr() net.Addr { return s.conn.LocalAddr() }
+
+// Shutdown stops serving, closes the socket and the root. It is idempotent.
+// In single-port mode the library's Shutdown only cancels and sets a read
+// deadline, so the socket is closed here.
+func (s *Server) Shutdown() {
+	s.once.Do(func() {
+		s.srv.Shutdown()
+		_ = s.conn.Close()
+		_ = s.root.Close()
+	})
 }

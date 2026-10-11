@@ -52,9 +52,9 @@ func TestTopLevelBootFilesIncludesFlagValues(t *testing.T) {
 	viper.Set(config.ProxyDHCPBootfileBIOS, "my-bios.kpxe")
 	viper.Set(config.ProxyDHCPBootfileUEFI, "ipxe.efi")
 	viper.Set(config.ProxyDHCPBootfileARM64, "")
-	got := topLevelBootFiles()
+	got := TopLevelBootFiles()
 	want := []string{"ipxe-arm64.efi", "ipxe.efi", "my-bios.kpxe", "snponly.efi", "undionly.kpxe"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("topLevelBootFiles() = %v, want %v", got, want)
+		t.Fatalf("TopLevelBootFiles() = %v, want %v", got, want)
 	}
 }
