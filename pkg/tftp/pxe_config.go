@@ -26,14 +26,14 @@ func init() {
 	PXEConfig["flatcar.ipxe"] = `#!ipxe
 	echo Hello from Booty!
 	set BASEURL [[flatcar-baseurl]]
-	kernel ${BASEURL}/flatcar_production_pxe.vmlinuz flatcar.first_boot=1 ignition.config.url=http://[[server]]/ignition.json
+	kernel ${BASEURL}/flatcar_production_pxe.vmlinuz flatcar.first_boot=1 ignition.config.url=http://[[server]]/ignition.json?mac=${mac}
 	initrd ${BASEURL}/flatcar_production_pxe_image.cpio.gz
 	boot`
 
 	PXEConfig["coreos.ipxe"] = `#!ipxe
 	echo Hello from Booty!
 	set BASEURL [[coreos-baseurl]]
-	set CONFIGURL http://[[server]]/ignition.json
+	set CONFIGURL http://[[server]]/ignition.json?mac=${mac}
 	set VERSION [[coreos-version]]
 	set ARCH [[coreos-arch]]
 
@@ -53,7 +53,7 @@ func init() {
 	// simpler with no runtime-only variable for iPXE to expand.
 	PXEConfig["debian.ipxe"] = `#!ipxe
 	echo Booting Debian installer from Booty
-	kernel [[debian-baseurl]]/linux auto=true priority=critical preseed/url=http://[[server]]/preseed vga=788 --- quiet
+	kernel [[debian-baseurl]]/linux auto=true priority=critical preseed/url=http://[[server]]/preseed?mac=${mac} vga=788 --- quiet
 	initrd [[debian-baseurl]]/initrd.gz
 	boot`
 }
