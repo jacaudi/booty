@@ -28,6 +28,15 @@ const (
 	// pixiecore does).
 	pxeBootServerListOnly byte = 0x07
 
+	// pxeBootServerType is the boot server type of Booty's single menu item
+	// and boot-server list entry: the first vendor type (32768-65279,
+	// EDK2 MdePkg/Include/Protocol/PxeBaseCode.h). Type 0 means "local boot":
+	// EDK2 aborts with PXE-E21 instead of sending the 4011 REQUEST
+	// (NetworkPkg/UefiPxeBcDxe/PxeBcBoot.c PxeBcDiscoverBootFile), and iPXE's
+	// PXE menu returns without booting (src/usr/pxemenu.c). dnsmasq numbers
+	// its pxe-service boot items from 32768 the same way (src/option.c).
+	pxeBootServerType uint16 = 0x8000
+
 	pxeClientPrefix = "PXEClient"
 	pxeMenuText     = "Booty"
 	ipxeUserClass   = "iPXE"
@@ -189,7 +198,7 @@ func buildAck(pkt *dhcpv4.DHCPv4, c Config, arch iana.Arch, log *slog.Logger) (*
 	reply.BootFileName = file
 	reply.UpdateOption(dhcpv4.OptBootFileName(file))
 	reply.UpdateOption(dhcpv4.OptTFTPServerName(c.ServerIP.String()))
-	reply.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, ackVendorOptions()))
+	reply.UpdateOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, ackVendorOptions(pkt)))
 	log.Info("ProxyDHCP ACK", "arch", arch, "file", file, "siaddr", c.ServerIP)
 	return reply, true
 }
@@ -249,12 +258,12 @@ func isSet(ip net.IP) bool {
 // menu and a zero-timeout prompt so the client does not wait for a keypress.
 func offerVendorOptions(serverIP net.IP) []byte {
 	server := make([]byte, 0, 7) //nolint:mnd // ported from upstream verbatim
-	server = binary.BigEndian.AppendUint16(server, 0)
+	server = binary.BigEndian.AppendUint16(server, pxeBootServerType)
 	server = append(server, 1)
 	server = append(server, serverIP.To4()...)
 
 	menu := make([]byte, 0, 3+len(pxeMenuText)) //nolint:mnd // ported from upstream verbatim
-	menu = binary.BigEndian.AppendUint16(menu, 0)
+	menu = binary.BigEndian.AppendUint16(menu, pxeBootServerType)
 	menu = append(menu, byte(len(pxeMenuText)))
 	menu = append(menu, pxeMenuText...)
 
@@ -268,10 +277,20 @@ func offerVendorOptions(serverIP net.IP) []byte {
 	return append(b, pxeEnd)
 }
 
-// ackVendorOptions encodes PXE_BOOT_ITEM type 0 layer 0, telling the client
-// which menu entry it was given.
-func ackVendorOptions() []byte {
-	b := appendSubOption(nil, pxeBootItem, []byte{0, 0, 0, 0})
+// ackVendorOptions encodes the PXE_BOOT_ITEM the client asked for in its
+// 4011 REQUEST, echoed back as PXE 2.1 boot servers do (dnsmasq
+// src/rfc2131.c; iPXE's pxebs drops an ACK whose item type differs,
+// src/net/udp/dhcp.c dhcp_pxebs_rx). A REQUEST without one gets Booty's
+// item, layer 0.
+func ackVendorOptions(req *dhcpv4.DHCPv4) []byte {
+	item := binary.BigEndian.AppendUint16(nil, pxeBootServerType)
+	item = append(item, 0, 0)
+	if subs, err := parseSubOptions(req.Options.Get(dhcpv4.OptionVendorSpecificInformation)); err == nil {
+		if got := subs[pxeBootItem]; len(got) == len(item) {
+			item = got
+		}
+	}
+	b := appendSubOption(nil, pxeBootItem, item)
 	return append(b, pxeEnd)
 }
 
@@ -305,11 +324,18 @@ func parseSubOptions(b []byte) (map[uint8][]byte, error) {
 // replyDestination applies RFC 2131 section 4.1: relays get the reply on
 // port 67, clients with an address are unicast, and clients that have no
 // address yet (or asked for it) are answered on the limited broadcast.
+// A client whose source address matches its ciaddr is answered on its
+// source port: EDK2 sends the boot-server REQUEST from port 4011 and listens
+// only there (NetworkPkg/UefiPxeBcDxe/PxeBcDhcp4.c PxeBcDhcp4Discover), as
+// dnsmasq does (src/dhcp.c dhcp_packet).
 func replyDestination(pkt *dhcpv4.DHCPv4, src *net.UDPAddr) *net.UDPAddr {
 	if isSet(pkt.GatewayIPAddr) {
 		return &net.UDPAddr{IP: pkt.GatewayIPAddr, Port: dhcpv4.ServerPort}
 	}
 	if isSet(pkt.ClientIPAddr) {
+		if src != nil && src.IP.Equal(pkt.ClientIPAddr) && src.Port != 0 {
+			return &net.UDPAddr{IP: src.IP, Port: src.Port}
+		}
 		return &net.UDPAddr{IP: pkt.ClientIPAddr, Port: dhcpv4.ClientPort}
 	}
 	if pkt.IsBroadcast() || src == nil || !isSet(src.IP) {
