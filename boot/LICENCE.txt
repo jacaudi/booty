@@ -1,0 +1,56 @@
+== undionly.kpxe
+  [LICENCE] bin/undionly.kpxe.licence
+The following licences appear within this file:
+  Public Domain
+  BSD Licence (without advertising clause)
+  BSD Licence (without advertising or endorsement clauses)
+  GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence
+  BSD Licence (without advertising or endorsement clauses, with patent clause)
+  GPL version 2 (or, at your option, any later version)
+BSD Licence (without advertising clause) subsumes Public Domain
+BSD Licence (without advertising clause) subsumes BSD Licence (without advertising or endorsement clauses)
+GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence subsumes BSD Licence (without advertising clause)
+GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence subsumes BSD Licence (without advertising or endorsement clauses, with patent clause)
+GPL version 2 (or, at your option, any later version) subsumes GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence
+The overall licence for this file is:
+  GPL version 2 (or, at your option, any later version)
+== ipxe.efi
+  [LICENCE] bin-x86_64-efi/ipxe.efi.licence
+The following files are missing a FILE_LICENCE() declaration:
+drivers/infiniband/mlx_nodnic/include/../../mlx_utils/include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_nodnic/include/../../mlx_utils/include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_nodnic/src/../include/../../mlx_utils/include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_nodnic/src/../include/../../mlx_utils/include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils/mlx_lib/mlx_link_speed/../../mlx_lib/mlx_link_speed/../../mlx_lib/mlx_reg_access/../../include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_utils/mlx_lib/mlx_link_speed/../../mlx_lib/mlx_link_speed/../../mlx_lib/mlx_reg_access/../../include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils/mlx_lib/mlx_mtu/../../include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_utils/mlx_lib/mlx_mtu/../../include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils/mlx_lib/mlx_reg_access/../../mlx_lib/mlx_reg_access/../../include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_utils/mlx_lib/mlx_reg_access/../../mlx_lib/mlx_reg_access/../../include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils/mlx_lib/mlx_vmac/../../mlx_lib/mlx_vmac/../../include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_utils/mlx_lib/mlx_vmac/../../mlx_lib/mlx_vmac/../../include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils/src/public/../../include/private/../../../mlx_utils/include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_utils/src/public/../../include/private/../../../mlx_utils/include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils/src/public/../../include/private/../../include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_utils/src/public/../../include/private/../../include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils/src/public/../../include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_utils/src/public/../../include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils_flexboot/src/../../mlx_utils/include/private/../../../mlx_utils/include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_utils_flexboot/src/../../mlx_utils/include/private/../../../mlx_utils/include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils_flexboot/src/../../mlx_utils/include/private/../../include/public/../../../mlx_utils_flexboot/include/mlx_logging_priv.h drivers/infiniband/mlx_utils_flexboot/src/../../mlx_utils/include/private/../../include/public/../../../mlx_utils_flexboot/include/mlx_types_priv.h drivers/infiniband/mlx_utils_flexboot/src/mlx_memory_priv.c drivers/infiniband/mlx_utils_flexboot/src/mlx_pci_priv.c drivers/infiniband/mlx_utils_flexboot/src/mlx_utils_priv.c drivers/net/ath/ath5k/desc.h drivers/net/ath/ath5k/eeprom.h drivers/net/ath/ath5k/reg.h drivers/net/ath/ath5k/rfbuffer.h drivers/net/ath/ath5k/rfgain.h drivers/net/ath/ath9k/ar9003_2p2_initvals.h drivers/net/ath/ath9k/ar9003_mac.h drivers/net/ath/ath9k/ar9003_phy.h drivers/net/ath/ath9k/ar9340_initvals.h drivers/net/ath/ath9k/ar9485_initvals.h drivers/net/ath/ath9k/ath9k.c drivers/net/ath/ath9k/ath9k_ani.c drivers/net/ath/ath9k/ath9k_ar5008_phy.c drivers/net/ath/ath9k/ath9k_ar9002_calib.c drivers/net/ath/ath9k/ath9k_ar9002_mac.c drivers/net/ath/ath9k/ath9k_ar9002_phy.c drivers/net/ath/ath9k/ath9k_ar9003_calib.c drivers/net/ath/ath9k/ath9k_ar9003_eeprom.c drivers/net/ath/ath9k/ath9k_ar9003_hw.c drivers/net/ath/ath9k/ath9k_ar9003_mac.c drivers/net/ath/ath9k/ath9k_ar9003_phy.c drivers/net/ath/ath9k/ath9k_calib.c drivers/net/ath/ath9k/ath9k_common.c drivers/net/ath/ath9k/ath9k_eeprom.c drivers/net/ath/ath9k/ath9k_eeprom_4k.c drivers/net/ath/ath9k/ath9k_eeprom_9287.c drivers/net/ath/ath9k/ath9k_eeprom_def.c drivers/net/ath/ath9k/ath9k_hw.c drivers/net/ath/ath9k/ath9k_mac.c drivers/net/ath/ath9k/ath9k_main.c drivers/net/ath/ath9k/ath9k_recv.c drivers/net/ath/ath9k/ath9k_xmit.c drivers/net/ath/ath_hw.c drivers/net/ath/ath_key.c drivers/net/ath/ath_regd.c drivers/net/ath/regd_common.h drivers/net/bnx2_fw.h drivers/net/bnxt/bnxt.h drivers/net/bnxt/bnxt_dbg.h drivers/net/bnxt/bnxt_hsi.h drivers/net/tg3/tg3.h drivers/net/tg3/tg3_phy.c
+The following licences appear within this file:
+  BSD Licence (without advertising clause)
+  BSD Licence (without advertising or endorsement clauses)
+  GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence
+  Public Domain
+  GPL version 2 (or, at your option, any later version)
+  BSD Licence (without advertising or endorsement clauses, with patent clause)
+  GPL (any version)
+  GPL version 2 only
+  MIT/X11/Xorg Licence
+BSD Licence (without advertising clause) subsumes BSD Licence (without advertising or endorsement clauses)
+BSD Licence (without advertising clause) subsumes MIT/X11/Xorg Licence
+BSD Licence (without advertising clause) subsumes Public Domain
+GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence subsumes BSD Licence (without advertising or endorsement clauses, with patent clause)
+GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence subsumes BSD Licence (without advertising clause)
+GPL version 2 (or, at your option, any later version) subsumes GPL (any version)
+GPL version 2 (or, at your option, any later version) subsumes GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence
+GPL version 2 only subsumes GPL version 2 (or, at your option, any later version)
+The overall licence for this file is:
+  GPL version 2 only
+== snponly.efi
+  [LICENCE] bin-x86_64-efi/snponly.efi.licence
+The following licences appear within this file:
+  BSD Licence (without advertising or endorsement clauses, with patent clause)
+  GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence
+  BSD Licence (without advertising clause)
+  GPL version 2 (or, at your option, any later version)
+  Public Domain
+  BSD Licence (without advertising or endorsement clauses)
+BSD Licence (without advertising or endorsement clauses, with patent clause) subsumes Public Domain
+BSD Licence (without advertising or endorsement clauses, with patent clause) subsumes BSD Licence (without advertising or endorsement clauses)
+GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence subsumes BSD Licence (without advertising clause)
+GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence subsumes BSD Licence (without advertising or endorsement clauses, with patent clause)
+GPL version 2 (or, at your option, any later version) subsumes GPL version 2 (or, at your option, any later version) or Unmodified Binary Distribution Licence
+The overall licence for this file is:
+  GPL version 2 (or, at your option, any later version)
