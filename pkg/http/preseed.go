@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/j-keck/arping"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
@@ -145,12 +144,21 @@ func preseedVars(store *db.Store, host *hardware.Host) TemplateVars {
 // identifyHost resolves the requesting host by ?mac= or ARP (nil when
 // unidentified), mirroring the ignition/machineconfig identification block.
 func identifyHost(r *http.Request) *hardware.Host {
+	return identifyHostWith(r, arpLookup)
+}
+
+// identifyHostWith is identifyHost with an injectable ARP lookup. An empty
+// ?mac= counts as absent; a non-empty one goes straight to GetMacAddress
+// (which records unknown MACs and rejects malformed ones, giving nil).
+func identifyHostWith(r *http.Request, arp arpFunc) *hardware.Host {
 	mac := r.URL.Query().Get("mac")
 	if mac == "" {
 		ip, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err == nil {
-			if hw, _, aerr := arping.Ping(net.ParseIP(ip)); aerr == nil {
-				mac = hw.String()
+			if parsed := net.ParseIP(ip); parsed != nil {
+				if hw, aerr := arp(parsed); aerr == nil {
+					mac = hw.String()
+				}
 			}
 		}
 	}
