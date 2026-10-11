@@ -299,8 +299,8 @@ The container is a distroless image with the binary at `/booty` and the web UI b
   with host networking so it can answer TFTP (and, optionally, proxyDHCP) on the LAN.
 - **PXE vs. iPXE.** iPXE is recommended (faster, HTTP-capable). The bootfile you point firmware at
   differs: use an iPXE binary (e.g. `undionly.kpxe` / `ipxe.efi`) for the iPXE chain, or
-  `pxelinux.cfg/default` for legacy PXE. With `--proxyDHCPEnabled`, booty selects the right pass-1
-  binary by client architecture automatically.
+  `pxelinux.cfg/default` for legacy PXE. With `--proxyDHCPEnabled`, booty selects the right
+  iPXE binary by client architecture automatically.
 - **Networking.** booty must share a layer-2 segment with the machines it boots (it resolves a
   requester's MAC by ARP). Make sure UDP/69 (and UDP/67 + 4011 for proxyDHCP) are reachable.
   Machines on a different VLAN/subnet cannot be identified and will sit in the holding loop —
