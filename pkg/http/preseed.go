@@ -134,7 +134,7 @@ func preseedVars(store *db.Store, host *hardware.Host) TemplateVars {
 		ServerIP:   fmt.Sprintf("%s:%s", viper.GetString(config.ServerIP), viper.GetString(config.ServerHttpPort)),
 	}
 	if host != nil {
-		vars.Hostname = host.Hostname
+		vars.Hostname = hardware.StripControl(host.Hostname)
 		vars.MAC = host.MAC
 		vars.IP = host.IP
 		vars.Roles = roleNames(store, host.MAC)

@@ -404,6 +404,16 @@ func run(cmd *cobra.Command, argv []string) error {
 	if err := hardware.Load(); err != nil {
 		return fmt.Errorf("hardware: %w", err)
 	}
+	if bad, badErr := hardware.InvalidHostnames(); badErr != nil {
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Warn("hardware: hostname check failed", "err", badErr)
+	} else if len(bad) > 0 {
+		//nolint:sloglint // default logger: no injected logger in this package yet
+		slog.Warn(
+			"hosts with hostnames that are not valid RFC 1123 names; "+
+				"control characters are stripped when rendering, fix them in the UI",
+			"hosts", bad)
+	}
 	if n, err := hardware.PreserveBoot(); err != nil {
 		slog.Warn("hardware: preserve existing host boot failed", "err", err)
 	} else if n > 0 {
