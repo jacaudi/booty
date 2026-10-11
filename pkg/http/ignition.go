@@ -12,7 +12,7 @@ import (
 
 	butaneConfig "github.com/coreos/butane/config"
 	butaneCommon "github.com/coreos/butane/config/common"
-	coreOSType "github.com/coreos/ignition/v2/config/v3_5_experimental/types"
+	coreOSType "github.com/coreos/ignition/v2/config/v3_4/types"
 	"github.com/j-keck/arping"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
