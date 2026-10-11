@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"text/template"
 
-	"github.com/j-keck/arping"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
@@ -24,6 +23,14 @@ import (
 // rungs 1–2) can be tried before falling through to the existing file-based
 // path (rungs 3–4, unchanged).
 func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
+	return machineConfigHandler(store, arpLookup)
+}
+
+// machineConfigHandler is handleMachineConfigRequest with the ARP lookup
+// injected.
+//
+//nolint:gocognit // pre-existing handler complexity; this change only injects the ARP lookup and gates members
+func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("machineconfig request", "uri", r.RequestURI)
 
@@ -33,8 +40,9 @@ func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 			if err != nil {
 				slog.Warn("error splitting user ip; not IP:port", "remote", r.RemoteAddr)
 			}
-			if hwAddr, _, err := arping.Ping(net.ParseIP(ip)); err != nil {
-				slog.Warn("error with ARP request", "err", err)
+			if hwAddr, arpErr := arp(net.ParseIP(ip)); arpErr != nil {
+				//nolint:sloglint // default logger: no injected logger in this package yet
+				slog.Warn("error with ARP request", "err", arpErr)
 			} else {
 				macAddress = hwAddr.String()
 			}
@@ -49,16 +57,23 @@ func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 			host = h
 		}
 
-		if host != nil {
-			// P6 top rung: a cluster member serves its ACTIVE frozen, encrypted
-			// node config VERBATIM (materialize-and-freeze, design §5). A member
-			// whose frozen bytes cannot be loaded/decrypted gets a LOUD 500 and
-			// NEVER falls through — feeding a member a non-member config (one
-			// without its cluster's secrets/identity) would be worse than an error.
-			if host.NodeConfigID != nil {
-				serveFrozenNodeConfig(w, store, host)
+		// P6 top rung: a cluster member serves its ACTIVE frozen, encrypted
+		// node config VERBATIM (materialize-and-freeze, design §5). A member
+		// whose frozen bytes cannot be loaded/decrypted gets a LOUD 500 and
+		// NEVER falls through, since feeding a member a non-member config would
+		// be worse than an error. This is the interim fix from design item 0b:
+		// the request's source IP must ARP-resolve to the member's MAC. L2
+		// spoofing is still possible, and members booted through a DHCP relay
+		// cannot be ARP-resolved and are refused until the authenticated-fetch
+		// design.
+		if host != nil && host.NodeConfigID != nil {
+			if !requestFromMAC(r, host.MAC, arp) {
+				writeError(w, http.StatusForbidden,
+					"cluster member config requires the request to come from the member", nil)
 				return
 			}
+			serveFrozenNodeConfig(w, store, host)
+			return
 		}
 
 		if host != nil {
