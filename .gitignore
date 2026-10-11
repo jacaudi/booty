@@ -5,9 +5,9 @@ data/
 .worktrees/
 .archive/
 
-# docs/ is self-documenting and TRACKED, EXCEPT the local-only working areas:
-# implementation plans, design docs, generated reports, and prompt scratch.
-docs/plans/
+# docs/ is self-documenting and TRACKED (designs and implementation plans
+# included), EXCEPT the local-only working areas: generated reports and
+# prompt scratch.
 docs/reports/
 docs/prompts/# Runtime state written when booty runs with --dataDir=. (never commit)
 api-token
