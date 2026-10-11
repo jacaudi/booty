@@ -36,8 +36,8 @@ config file.
 | `--secretsKey` | `""` (unset) | Path to an age identity file (`age-keygen` output) encrypting Talos cluster secrets and frozen node configs at rest. **Fail-closed** when unset: cluster create/import/add-member/export refuse with `422`. **Fail-fast** when set but invalid: refuses startup (see [below](#talos-cluster-authoring-p6)). |
 | `--nodeReports` | `false` | Opt in to node health reports: inject a boot-time report unit into Flatcar, Fedora CoreOS and `debianconfig` Debian configs and accept reports at `POST /node/report`. See [Node reports](#node-reports). |
 | `--proxyDHCPEnabled` | `false` | Enable the proxyDHCP responder (UDP 67 + 4011). |
-| `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | BIOS iPXE binary named in the proxyDHCP ACK (embedded for `undionly.kpxe` and `ipxe.efi`; other names are served from `--dataDir`). |
-| `--proxyDHCPBootfileUEFI` | `ipxe.efi` | UEFI (x86-64) iPXE binary named in the proxyDHCP ACK (embedded for `undionly.kpxe` and `ipxe.efi`; other names are served from `--dataDir`). |
+| `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | BIOS iPXE binary named in the proxyDHCP ACK (embedded: `undionly.kpxe`, `ipxe.efi`, `snponly.efi`; other names are served from `--dataDir`). |
+| `--proxyDHCPBootfileUEFI` | `ipxe.efi` | UEFI (x86-64) iPXE binary named in the proxyDHCP ACK (embedded: `undionly.kpxe`, `ipxe.efi`, `snponly.efi`; other names are served from `--dataDir`). |
 | `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | ARM64 iPXE binary named in the proxyDHCP ACK (not embedded; stage it in `--dataDir`). |
 | `--proxyDHCPRelay` | `false` | Answer relayed PXE requests by replying to the relay agent (giaddr). Talos cluster members behind a relay are refused their config until authenticated fetch exists. |
 | `--preseedFile` | `config/preseed.cfg` | Debian preseed template, relative to `--dataDir` — the rung-4 server-default fallback for hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
