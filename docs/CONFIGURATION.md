@@ -38,6 +38,7 @@ config file.
 | `--proxyDHCPBootfileBIOS` | `undionly.kpxe` | Pass-1 BIOS iPXE binary name (staged in `--dataDir`). |
 | `--proxyDHCPBootfileUEFI` | `ipxe.efi` | Pass-1 UEFI (x86-64) iPXE binary name. |
 | `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | Pass-1 ARM64 iPXE binary name. |
+| `--proxyDHCPRelay` | `false` | Answer relayed PXE requests by replying to the relay agent (giaddr). Talos cluster members behind a relay are refused their config until authenticated fetch exists. |
 | `--preseedFile` | `config/preseed.cfg` | Debian preseed template, relative to `--dataDir` — the rung-4 server-default fallback for hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
 | `--configRevisionsKeep` | `10` | Number of newest config revisions to retain per config, applied after every `PUT /configs/{id}`. The currently-active revision is always kept, even if it falls outside the newest-N window. |
 | `--apiToken` | `""` (unset — auto-generated on first run) | Explicit API token (also settable via `BOOTY_API_TOKEN`, see [below](#environment-variables)); overrides `<dataDir>/api-token` and is **never persisted** to disk. Prefer the environment variable over the flag: a flag value is visible in `ps` and `docker inspect`. See [Authentication](#authentication). |

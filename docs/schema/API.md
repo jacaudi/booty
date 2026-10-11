@@ -78,11 +78,9 @@ Enabled with `--proxyDHCPEnabled`. It answers PXE boot requests **without assign
 (`YourIPAddr = 0.0.0.0`), so it coexists with an existing DHCP server. It only responds to requests
 whose vendor class identifier begins with `PXEClient`.
 
-- **Pass 1** (UDP `:67`, bare firmware): returns the architecture-appropriate iPXE binary —
-  `--proxyDHCPBootfileUEFI` (x86-64 UEFI), `--proxyDHCPBootfileARM64` (ARM64), or
-  `--proxyDHCPBootfileBIOS` (legacy BIOS). The named binary must be staged in `--dataDir`.
-- **Pass 2** (UDP `:4011`, iPXE re-request, detected via the `iPXE` user-class): returns
-  `booty.ipxe`, handing control to the TFTP chain above.
+- **Firmware** (PXE ROM): DISCOVER on UDP 67 → OFFER naming booty as the only boot server (no file); REQUEST on UDP 4011 → ACK with the architecture's iPXE binary (--proxyDHCPBootfileBIOS / UEFI / ARM64). A REQUEST on 67 belongs to the site DHCP server and is ignored.
+- **iPXE** (user class iPXE): the OFFER itself carries booty.ipxe, because iPXE does not send the 4011 REQUEST.
+- Ignored: packets without option 93, INFORM, packets naming another server (option 54), and relayed packets (giaddr set) unless --proxyDHCPRelay is set; relayed replies are sent to the relay on UDP 67.
 
 ---
 
