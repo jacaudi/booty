@@ -102,7 +102,7 @@ func handleIgnitionRequest(store *db.Store) http.HandlerFunc {
 			if host.IgnitionFile != "" {
 				ignitionFile = host.IgnitionFile
 			}
-			templateData.Hostname = host.Hostname
+			templateData.Hostname = hardware.StripControl(host.Hostname)
 		}
 		ignitionPath, err := resolveWithinDataDir(ignitionFile)
 		if err != nil {
@@ -187,7 +187,7 @@ func ignitionVars(store *db.Store, host *hardware.Host) TemplateVars {
 		ServerIP:   fmt.Sprintf("%s:%s", viper.GetString(config.ServerIP), viper.GetString(config.ServerHttpPort)),
 	}
 	if host != nil {
-		vars.Hostname = host.Hostname
+		vars.Hostname = hardware.StripControl(host.Hostname)
 		vars.MAC = host.MAC
 		vars.IP = host.IP
 		vars.Roles = roleNames(store, host.MAC)
