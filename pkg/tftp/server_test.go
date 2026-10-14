@@ -15,6 +15,7 @@ import (
 	"github.com/pin/tftp/v3"
 	"github.com/spf13/viper"
 
+	"github.com/jeefy/booty/pkg/bootscript"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
@@ -200,7 +201,7 @@ func TestTFTPStubDoesNotChangeDoInstall(t *testing.T) {
 	if _, err = wt.WriteTo(&buf); err != nil {
 		t.Fatal(err)
 	}
-	if buf.String() != StubScript("127.0.0.1:8080") {
+	if buf.String() != bootscript.StubScript("127.0.0.1:8080") {
 		t.Fatalf("got %q, want the stub", buf.String())
 	}
 	host, err := hardware.GetMacAddress(mac)

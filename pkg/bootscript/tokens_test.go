@@ -1,4 +1,4 @@
-package tftp
+package bootscript
 
 import (
 	"maps"

@@ -1,4 +1,4 @@
-package tftp
+package bootscript
 
 var PXEConfig map[string]string
 

@@ -145,7 +145,7 @@ go run . \
 user-mode-networking gateway address for "the host machine" as seen from
 inside the guest (§"Boot offline" below). Every URL booty embeds in boot
 scripts and preseeds (`urlHost`/`vars.ServerIP`,
-`pkg/tftp/tftp.go:136-140`, `pkg/http/preseed.go:123`) is built from
+`pkg/bootscript/render.go:25-31`, `pkg/http/preseed.go:123`) is built from
 `--serverIP`+`--serverHttpPort`, so this is what makes the guest able to
 resolve them at all.
 
@@ -220,7 +220,7 @@ mirror/http/*` directives point at booty's **local** extracted tree (not the
 real internet), and completes an unattended install using **only** packages
 resident on disc 1 — with no route to the real internet available to prove
 it. This is the same artifact set and the same `/preseed` endpoint
-`debian.ipxe` (`pkg/tftp/pxe_config.go:54-58`) would resolve a real PXE client
+`debian.ipxe` (`pkg/bootscript/pxe_config.go:42-47`) would resolve a real PXE client
 to; booting the installer kernel/initrd directly with the equivalent
 `-append` line validates the identical artifacts and identical preseed/mirror
 path without also standing up a full TFTP/iPXE/proxyDHCP chain (that chain's
@@ -286,7 +286,7 @@ Notes on the flags, from prior netboot-lab runs:
    construction. (For a real PXE-path run instead of the direct-kernel
    shortcut, confirm via TFTP server logs that `debian.ipxe` resolved
    `[[debian-baseurl]]` to a `.../install.amd64` URL — `debianBaseURL`,
-   `pkg/tftp/tftp.go:261-267`.)
+   `pkg/bootscript/tokens.go:142-148`.)
 2. **`/preseed` carries booty's local mirror.** Fetch what the installer
    fetched and confirm the three directives are present and point at the
    local tree, not a real Debian mirror hostname:

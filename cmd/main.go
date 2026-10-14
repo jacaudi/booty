@@ -14,6 +14,7 @@ import (
 
 	"github.com/jeefy/booty/boot"
 	"github.com/jeefy/booty/pkg/auth"
+	"github.com/jeefy/booty/pkg/bootscript"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
@@ -424,7 +425,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	}
 	defer store.Close()
 	hardware.SetStore(store)
-	tftp.SetStore(store)
+	bootscript.SetStore(store)
 
 	// A cluster's frozen machineconfigs can only be decrypted/served with the age
 	// key. Starting without --secretsKey when clusters already exist is allowed
