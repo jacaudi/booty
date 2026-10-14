@@ -1,13 +1,13 @@
 package http
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -18,6 +18,7 @@ import (
 
 	"github.com/spf13/viper"
 
+	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 )
 
@@ -76,18 +77,21 @@ func openRouteTable() map[string]openRoute {
 }
 
 // bootRouteLabel names withBootRoute's interception in the route key, because
-// it runs ahead of the mux and mux.Handler cannot see it.
+// it runs ahead of the mux, which therefore never records a pattern for it.
 const bootRouteLabel = " (withBootRoute)"
 
-// routeOf returns the key a request is filed under: the pattern the mux
-// matches for it, except for /boot/, which withBootRoute serves before the mux
-// is consulted.
-func routeOf(mux *http.ServeMux, r *http.Request) string {
+// routeOf returns the key a served request is filed under: the pattern the
+// mux matched, which ServeMux records in r.Pattern, except for /boot/, which
+// withBootRoute serves before the mux is consulted.
+func routeOf(r *http.Request) string {
 	if strings.HasPrefix(r.URL.Path, bootPathPrefix) {
 		return bootPathPrefix + bootRouteLabel
 	}
-	_, pattern := mux.Handler(r)
-	return pattern
+	if r.Pattern == "" {
+		// Answered by a wrapper outside the mux, not by any mux route.
+		return "outside the mux: " + r.Method + " " + r.URL.Path
+	}
+	return r.Pattern
 }
 
 // registeredPaths returns the path of every literal pattern this package's
@@ -165,23 +169,20 @@ func gateFired(rr *httptest.ResponseRecorder) bool {
 // reviewed it), and a missing one fails (the table is stale, or a route was
 // dropped). Exactly one allowlisted route may change state.
 //
-// The handler is assembled from baseMux, RegisterAPI and withBootRoute, the
-// same three calls StartHTTP makes; logRequest, the only other wrapper, only
-// logs.
+// The handler probed is the one StartHTTP serves (srv.Handler), so a wrapper
+// StartHTTP gains later is probed too, and the /api/v1 operations are read
+// from the OpenAPI document that handler serves.
 func TestOnlyAllowlistedRoutesAnswerWithoutACredential(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.HttpPort, 0)
 
 	store, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	dataRoot, err := os.OpenRoot(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenRoot: %v", err)
-	}
-	t.Cleanup(func() { _ = dataRoot.Close() })
 
 	// NodeReports is set so POST /node/report reaches its real receiver and
 	// not the feature-off 404.
@@ -191,9 +192,12 @@ func TestOnlyAllowlistedRoutesAnswerWithoutACredential(t *testing.T) {
 		BootFiles:   fstest.MapFS{"ipxe.efi": {Data: []byte("x")}},
 		NodeReports: &NodeReports{Key: nodeReportKey()},
 	}
-	mux := mustBaseMux(t, deps, dataRoot)
-	api := RegisterAPI(mux, deps)
-	handler := withBootRoute(deps.BootFiles, mux)
+	srv, err := StartHTTP(deps, make(chan error, 1))
+	if err != nil {
+		t.Fatalf("StartHTTP: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	handler := srv.Handler
 
 	table := openRouteTable()
 
@@ -208,7 +212,7 @@ func TestOnlyAllowlistedRoutesAnswerWithoutACredential(t *testing.T) {
 		candidates[r.probe] = true
 	}
 	param := regexp.MustCompile(`\{[^}]*\}`)
-	for p := range api.OpenAPI().Paths {
+	for p := range servedOpenAPIPaths(t, handler) {
 		candidates[param.ReplaceAllString(p, "1")] = true
 	}
 
@@ -225,7 +229,7 @@ func TestOnlyAllowlistedRoutesAnswerWithoutACredential(t *testing.T) {
 			if gateFired(rr) {
 				continue
 			}
-			pattern := routeOf(mux, req)
+			pattern := routeOf(req)
 			open[pattern] = true
 			if pattern == "/" && (rr.Code != http.StatusFound || rr.Header().Get("Location") != "/ui/") {
 				t.Errorf("%s %s fell to the catch-all and answered %d Location %q, want a 302 to /ui/",
@@ -256,4 +260,25 @@ func TestOnlyAllowlistedRoutesAnswerWithoutACredential(t *testing.T) {
 	if want := []string{"/node/report"}; !slices.Equal(mutating, want) {
 		t.Errorf("open routes that change state = %q, want %q: every other state-changing endpoint belongs under the gated /api/v1 group", mutating, want)
 	}
+}
+
+// servedOpenAPIPaths returns the path keys of the OpenAPI document h serves at
+// /api/v1/openapi.json (open, so no credential is needed).
+func servedOpenAPIPaths(t *testing.T, h http.Handler) map[string]json.RawMessage {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/openapi.json", http.NoBody))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/openapi.json = %d", rr.Code)
+	}
+	var doc struct {
+		Paths map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode OpenAPI document: %v", err)
+	}
+	if len(doc.Paths) == 0 {
+		t.Fatal("the served OpenAPI document lists no paths")
+	}
+	return doc.Paths
 }
