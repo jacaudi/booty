@@ -10,15 +10,20 @@ import (
 	"slices"
 )
 
+// Files holds the embedded iPXE binaries named by [Names].
+//
 //go:embed undionly.kpxe ipxe.efi snponly.efi
 var Files embed.FS
 
-//nolint:gochecknoglobals // read-only list exported by the package interface
-var Names = []string{"undionly.kpxe", "ipxe.efi", "snponly.efi"}
+// Names lists the files in [Files]. Each call returns a fresh slice, so a
+// caller cannot change what the package serves.
+func Names() []string {
+	return []string{"undionly.kpxe", "ipxe.efi", "snponly.efi"}
+}
 
 // Lookup returns the embedded bytes of name when it is exactly one of Names.
 func Lookup(name string) ([]byte, bool) {
-	if !slices.Contains(Names, name) {
+	if !slices.Contains(Names(), name) {
 		return nil, false
 	}
 	b, err := Files.ReadFile(name)

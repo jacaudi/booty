@@ -1,3 +1,6 @@
+// Package tftp serves boot files over TFTP: the embedded iPXE binaries, an
+// explicit allowlist of dataDir, and the iPXE stub and menu scripts from
+// package bootscript.
 package tftp
 
 import (
@@ -20,19 +23,25 @@ import (
 	"github.com/jeefy/booty/pkg/hardware"
 )
 
+// server owns the state readHandler needs for one running TFTP server.
+type server struct {
+	root      *os.Root
+	topLevel  []string
+	bootFiles fs.FS
+	arp       func(net.IP) (net.HardwareAddr, error)
+}
+
 // hostFromARP identifies the requesting host by ARP and loads its record. It
 // returns nil when the MAC cannot be resolved or is unknown.
 func (s *server) hostFromARP(ip net.IP) *hardware.Host {
 	hwAddr, err := s.arp(ip)
 	if err != nil {
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Warn("error with ARP request", "err", err)
 		return nil
 	}
 	macAddress := hwAddr.String()
 	host, lookupErr := hardware.GetMacAddress(macAddress)
 	if lookupErr != nil && !errors.Is(lookupErr, hardware.ErrNotFound) {
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Warn("TFTP: error looking up host", "mac", macAddress, "err", lookupErr)
 	}
 	return host
@@ -66,7 +75,6 @@ func (s *server) readHandler(filename string, rf io.ReaderFrom) error {
 			slog.Warn("error reading iPXE config", "err", err)
 			return err
 		}
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Info("bytes sent", "bytes", n, "file", filename, "kind", "stub")
 		return nil
 	}
@@ -76,7 +84,6 @@ func (s *server) readHandler(filename string, rf io.ReaderFrom) error {
 	}
 	file, err := openDataFile(s.root, filename, s.topLevel)
 	if err != nil {
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Warn("TFTP rejected", "client", raddr.String(), "requested", filename, "err", err)
 		return os.ErrNotExist
 	}
@@ -103,7 +110,6 @@ func (s *server) serveEmbedded(filename string, rf io.ReaderFrom) (bool, error) 
 	if sendErr != nil {
 		return true, sendErr
 	}
-	//nolint:sloglint // default logger: no injected logger in this package yet
 	slog.Info("bytes sent", "bytes", n, "file", filename, "source", "embedded")
 	return true, nil
 }
@@ -121,14 +127,6 @@ type Config struct {
 	TopLevelBootFiles []string
 	BootFiles         fs.FS                                  // embedded iPXE files served first; nil = none
 	ARP               func(net.IP) (net.HardwareAddr, error) // nil means arping.Ping
-}
-
-// server owns the state readHandler needs for one running TFTP server.
-type server struct {
-	root      *os.Root
-	topLevel  []string
-	bootFiles fs.FS
-	arp       func(net.IP) (net.HardwareAddr, error)
 }
 
 // Server is a running TFTP server.
@@ -164,15 +162,13 @@ func Start(cfg Config, errCh chan<- error) (*Server, error) {
 
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: cfg.Port})
 	if err != nil {
-		_ = root.Close()
-		return nil, fmt.Errorf("tftp: listen on UDP/%d: %w", cfg.Port, err)
+		return nil, errors.Join(fmt.Errorf("tftp: listen on UDP/%d: %w", cfg.Port, err), root.Close())
 	}
 	go func() {
 		if serveErr := srv.Serve(conn); serveErr != nil {
 			errCh <- fmt.Errorf("tftp: %w", serveErr)
 		}
 	}()
-	//nolint:sloglint // default logger: no injected logger in this package yet
 	slog.Info("TFTP server started", "addr", conn.LocalAddr().String())
 	return &Server{srv: srv, conn: conn, root: root}, nil
 }
@@ -180,13 +176,15 @@ func Start(cfg Config, errCh chan<- error) (*Server, error) {
 // Addr returns the bound local address.
 func (s *Server) Addr() net.Addr { return s.conn.LocalAddr() }
 
-// Shutdown stops serving, closes the socket and the root. It is idempotent.
+// Shutdown stops serving, closes the socket and the root, and returns the
+// errors from closing them. It is idempotent: only the first call closes.
 // In single-port mode the library's Shutdown only cancels and sets a read
 // deadline, so the socket is closed here.
-func (s *Server) Shutdown() {
+func (s *Server) Shutdown() error {
+	var err error
 	s.once.Do(func() {
 		s.srv.Shutdown()
-		_ = s.conn.Close()
-		_ = s.root.Close()
+		err = errors.Join(s.conn.Close(), s.root.Close())
 	})
+	return err
 }

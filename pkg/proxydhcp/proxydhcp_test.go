@@ -36,17 +36,17 @@ func TestNewServerRequiresServerIP(t *testing.T) {
 
 // respondFixture returns a Server and a connected loopback pair: srvConn is
 // what respond writes through, cliConn is where the reply is observed.
-func respondFixture(t *testing.T) (*Server, *net.UDPConn, *net.UDPConn) {
+func respondFixture(t *testing.T) (s *Server, srvConn, cliConn *net.UDPConn) {
 	t.Helper()
 	srvConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = srvConn.Close() })
 
-	cliConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	cliConn, err = net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = cliConn.Close() })
 
-	s := &Server{cfg: Config{ServerIP: net.IPv4(127, 0, 0, 1)}.withDefaults(), done: make(chan struct{})}
+	s = &Server{cfg: Config{ServerIP: net.IPv4(127, 0, 0, 1)}.withDefaults(), done: make(chan struct{})}
 	return s, srvConn, cliConn
 }
 
@@ -57,7 +57,7 @@ func TestRespondSendsRequestAckToSource(t *testing.T) {
 	s, srvConn, cliConn := respondFixture(t)
 
 	req := pxePacket(t, dhcpv4.MessageTypeRequest, iana.EFI_X86_64)
-	s.respond(srvConn, cliConn.LocalAddr().(*net.UDPAddr), req, s.cfg.Port4011)
+	s.respond(srvConn, udpAddr(t, cliConn.LocalAddr()), req, s.cfg.Port4011)
 
 	require.NoError(t, cliConn.SetReadDeadline(time.Now().Add(2*time.Second)))
 	buf := make([]byte, maxPacketSize)
@@ -76,7 +76,7 @@ func TestRespondIgnoresRequestOn67(t *testing.T) {
 	s, srvConn, cliConn := respondFixture(t)
 
 	req := pxePacket(t, dhcpv4.MessageTypeRequest, iana.EFI_X86_64)
-	s.respond(srvConn, cliConn.LocalAddr().(*net.UDPAddr), req, s.cfg.Port67)
+	s.respond(srvConn, udpAddr(t, cliConn.LocalAddr()), req, s.cfg.Port67)
 
 	require.NoError(t, cliConn.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
 	buf := make([]byte, maxPacketSize)
@@ -84,4 +84,12 @@ func TestRespondIgnoresRequestOn67(t *testing.T) {
 	var ne net.Error
 	require.ErrorAs(t, err, &ne)
 	require.True(t, ne.Timeout(), "expected a read timeout, got %v", err)
+}
+
+// udpAddr is a's *net.UDPAddr; a test that listens on UDP never sees another type.
+func udpAddr(t *testing.T, a net.Addr) *net.UDPAddr {
+	t.Helper()
+	u, ok := a.(*net.UDPAddr)
+	require.True(t, ok, "address %v is %T, want *net.UDPAddr", a, a)
+	return u
 }

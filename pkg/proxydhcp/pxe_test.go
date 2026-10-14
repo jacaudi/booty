@@ -13,7 +13,6 @@ import (
 	"github.com/insomniacslk/dhcp/iana"
 )
 
-//nolint:gochecknoglobals // ported from upstream verbatim
 var (
 	testMAC      = net.HardwareAddr{0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc}
 	testServerIP = net.IPv4(192, 168, 1, 10)
@@ -148,7 +147,7 @@ func TestDiscoverProducesPXEOffer(t *testing.T) {
 	}
 }
 
-func TestRequestAckBootFileByArch(t *testing.T) { //nolint:gocognit // ported from upstream verbatim
+func TestRequestAckBootFileByArch(t *testing.T) {
 	cases := []struct {
 		arch iana.Arch
 		want string
@@ -412,7 +411,8 @@ func TestAckEchoesRequestedBootItem(t *testing.T) {
 			dhcpv4.WithOption(dhcpv4.OptGeneric(dhcpv4.OptionVendorSpecificInformation, opt43)))
 		reply, ok := handle(pkt, testConfig(), 4011)
 		if !ok {
-			t.Fatal("expected an ACK")
+			t.Error("expected an ACK")
+			continue
 		}
 		if got := subOptions(t, reply)[pxeBootItem]; !bytes.Equal(got, item) {
 			t.Errorf("PXE_BOOT_ITEM = %x, want echoed %x", got, item)

@@ -37,9 +37,9 @@ func startTestServer(t *testing.T, dataDir string, bootFiles fs.FS) (*Server, *t
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(s.Shutdown)
+	t.Cleanup(func() { _ = s.Shutdown() })
 	// Dial 127.0.0.1: the bound address is the wildcard, which a client cannot dial.
-	c, err := tftp.NewClient(net.JoinHostPort("127.0.0.1", strconv.Itoa(s.Addr().(*net.UDPAddr).Port)))
+	c, err := tftp.NewClient(net.JoinHostPort("127.0.0.1", strconv.Itoa(udpAddr(t, s.Addr()).Port)))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestStartReturnsBindError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	port := l.LocalAddr().(*net.UDPAddr).Port
+	port := udpAddr(t, l.LocalAddr()).Port
 	if _, startErr := Start(Config{Port: port, DataDir: t.TempDir()}, make(chan error, 1)); startErr == nil {
 		t.Fatal("Start on a busy port succeeded, want error")
 	}
@@ -131,8 +131,11 @@ func TestShutdownIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Shutdown()
-	s.Shutdown()
+	for i := range 2 {
+		if err := s.Shutdown(); err != nil {
+			t.Errorf("Shutdown call %d: %v", i+1, err)
+		}
+	}
 }
 
 func TestServerPrefersEmbeddedBootFiles(t *testing.T) {
@@ -188,8 +191,8 @@ func TestTFTPStubDoesNotChangeDoInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	t.Cleanup(srv.Shutdown)
-	c, err := tftp.NewClient(net.JoinHostPort("127.0.0.1", strconv.Itoa(srv.Addr().(*net.UDPAddr).Port)))
+	t.Cleanup(func() { _ = srv.Shutdown() })
+	c, err := tftp.NewClient(net.JoinHostPort("127.0.0.1", strconv.Itoa(udpAddr(t, srv.Addr()).Port)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,4 +214,14 @@ func TestTFTPStubDoesNotChangeDoInstall(t *testing.T) {
 	if !host.DoInstall {
 		t.Fatal("DoInstall was cleared by fetching the stub")
 	}
+}
+
+// udpAddr is a's *net.UDPAddr; a test that listens on UDP never sees another type.
+func udpAddr(t *testing.T, a net.Addr) *net.UDPAddr {
+	t.Helper()
+	u, ok := a.(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("address %v is %T, want *net.UDPAddr", a, a)
+	}
+	return u
 }

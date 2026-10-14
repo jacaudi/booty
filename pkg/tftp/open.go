@@ -1,6 +1,7 @@
 package tftp
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -25,12 +26,10 @@ func openDataFile(root *os.Root, name string, topLevel []string) (*os.File, erro
 	}
 	fi, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("%w: %w", os.ErrNotExist, err)
+		return nil, errors.Join(fmt.Errorf("%w: %w", os.ErrNotExist, err), f.Close())
 	}
 	if fi.IsDir() {
-		_ = f.Close()
-		return nil, fmt.Errorf("%w: is a directory", os.ErrNotExist)
+		return nil, errors.Join(fmt.Errorf("%w: is a directory", os.ErrNotExist), f.Close())
 	}
 	return f, nil
 }

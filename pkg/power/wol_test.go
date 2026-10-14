@@ -25,11 +25,11 @@ func TestMagicPacketBytes(t *testing.T) {
 	mac := []byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x01}
 	for i := range 16 {
 		if got := pkt[6+6*i : 12+6*i]; !bytes.Equal(got, mac) {
-			t.Fatalf("repeat %d: % x", i, got)
+			t.Errorf("repeat %d: % x", i, got)
 		}
 	}
 	for _, bad := range []string{"", "not-a-mac", "01:02:03:04:05:06:07:08"} {
-		if _, err := MagicPacket(bad); err == nil { //nolint:govet // ported verbatim
+		if _, err := MagicPacket(bad); err == nil {
 			t.Errorf("%q must be refused", bad)
 		}
 	}
@@ -51,16 +51,16 @@ func TestDestinationsCoverBroadcastsAndTheHost(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("destinations %v, want %v", got, want)
 	}
-	if got := w.Destinations(""); slices.Contains(got, "192.168.1.42:9") || len(got) != 3 { //nolint:govet // verbatim
+	if got := w.Destinations(""); slices.Contains(got, "192.168.1.42:9") || len(got) != 3 {
 		t.Fatalf("no host IP: %v", got)
 	}
-	if got := w.Destinations("::1"); len(got) != 3 { //nolint:govet // ported verbatim
+	if got := w.Destinations("::1"); len(got) != 3 {
 		t.Fatalf("IPv6 host IP must be ignored: %v", got)
 	}
 }
 
 func TestWakeSendsThreeRoundsToAListener(t *testing.T) {
-	ln, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestWakeSendsThreeRoundsToAListener(t *testing.T) {
 			return nil
 		},
 	}
-	dests, err := w.Wake(context.Background(), "aa:bb:cc:dd:ee:01", "")
+	dests, err := w.Wake(t.Context(), "aa:bb:cc:dd:ee:01", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,18 +88,18 @@ func TestWakeSendsThreeRoundsToAListener(t *testing.T) {
 	buf := make([]byte, 256)
 	for i := range 3 {
 		_ = ln.SetReadDeadline(time.Now().Add(2 * time.Second))
-		n, _, err := ln.ReadFrom(buf) //nolint:govet // ported verbatim
+		n, _, err := ln.ReadFrom(buf)
 		if err != nil {
 			t.Fatalf("round %d: %v", i, err)
 		}
 		if !bytes.Equal(buf[:n], want) {
-			t.Fatalf("round %d: packet differs", i)
+			t.Errorf("round %d: packet differs", i)
 		}
 	}
 }
 
 func TestWakeStopsWhenCancelled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	w := &Waker{Interfaces: func() ([]net.Addr, error) { return nil, nil }}
 	if _, err := w.Wake(ctx, "aa:bb:cc:dd:ee:01", ""); err == nil {

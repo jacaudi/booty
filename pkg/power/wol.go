@@ -26,10 +26,10 @@ func MagicPacket(mac string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidMAC, mac)
 	}
-	if len(hw) != 6 { //nolint:mnd // ported verbatim
+	if len(hw) != 6 {
 		return nil, fmt.Errorf("%w: %q is not a 48-bit address", ErrInvalidMAC, mac)
 	}
-	pkt := bytes.Repeat([]byte{0xFF}, 6) //nolint:mnd // ported verbatim
+	pkt := bytes.Repeat([]byte{0xFF}, 6)
 	for range 16 {
 		pkt = append(pkt, hw...)
 	}
@@ -67,7 +67,7 @@ func (w *Waker) rounds() int {
 	if w.Rounds > 0 {
 		return w.Rounds
 	}
-	return 3 //nolint:mnd // ported verbatim
+	return 3
 }
 
 func (w *Waker) spacing() time.Duration {
@@ -104,7 +104,7 @@ func (w *Waker) interfaces() ([]net.Addr, error) {
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
-		list, err := iface.Addrs() //nolint:govet // ported verbatim
+		list, err := iface.Addrs()
 		if err != nil {
 			continue
 		}
@@ -122,7 +122,7 @@ func (w *Waker) Destinations(hostIP string) []string {
 	set := map[string]bool{}
 	addrs, err := w.interfaces()
 	if err != nil {
-		slog.Debug("Listing interfaces for Wake-on-LAN failed", "error", err) //nolint:sloglint // ported verbatim
+		slog.Debug("Listing interfaces for Wake-on-LAN failed", "error", err)
 	}
 	for _, a := range addrs {
 		ipnet, ok := a.(*net.IPNet)
@@ -134,13 +134,13 @@ func (w *Waker) Destinations(hostIP string) []string {
 			continue
 		}
 		mask := ipnet.Mask
-		if len(mask) == 16 { //nolint:mnd // ported verbatim
+		if len(mask) == 16 {
 			mask = mask[12:]
 		}
-		if len(mask) != 4 { //nolint:mnd // ported verbatim
+		if len(mask) != 4 {
 			continue
 		}
-		bcast := make(net.IP, 4) //nolint:mnd // ported verbatim
+		bcast := make(net.IP, 4)
 		for i := range bcast {
 			bcast[i] = ip4[i] | ^mask[i]
 		}
@@ -165,35 +165,35 @@ func (w *Waker) Destinations(hostIP string) []string {
 // times. It returns the destinations it sent to and the first error that
 // kept a round from reaching any of them; a single refused broadcast (a
 // container without the right interface) is logged, not returned.
-func (w *Waker) Wake(ctx context.Context, mac, hostIP string) ([]string, error) {
+func (w *Waker) Wake(ctx context.Context, mac, hostIP string) (dests []string, err error) {
 	pkt, err := MagicPacket(mac)
 	if err != nil {
 		return nil, err
 	}
-	dests := w.Destinations(hostIP)
-	conn, err := net.ListenPacket("udp4", ":0") //nolint:noctx // ported verbatim
+	dests = w.Destinations(hostIP)
+	conn, err := (&net.ListenConfig{}).ListenPacket(ctx, "udp4", ":0")
 	if err != nil {
 		return dests, fmt.Errorf("wol: udp socket: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
-	if err := enableBroadcast(conn); err != nil { //nolint:govet // ported verbatim
-		slog.Debug("Could not enable SO_BROADCAST; broadcast sends may fail", "error", err) //nolint:sloglint // ported
+	defer func() { err = errors.Join(err, conn.Close()) }()
+	if err := enableBroadcast(conn); err != nil {
+		slog.DebugContext(ctx, "Could not enable SO_BROADCAST; broadcast sends may fail", "error", err)
 	}
 	var firstErr error
 	for round := range w.rounds() {
 		if round > 0 {
-			if err := w.sleep(ctx, w.spacing()); err != nil { //nolint:govet // ported verbatim
+			if err := w.sleep(ctx, w.spacing()); err != nil {
 				return dests, err
 			}
 		}
 		sent := 0
 		for _, d := range dests {
-			addr, err := net.ResolveUDPAddr("udp4", d) //nolint:govet // ported verbatim
+			addr, err := net.ResolveUDPAddr("udp4", d)
 			if err != nil {
 				continue
 			}
-			if _, err := conn.WriteTo(pkt, addr); err != nil { //nolint:govet // ported verbatim
-				slog.Debug("Wake-on-LAN send failed", "to", d, "error", err) //nolint:sloglint // ported verbatim
+			if _, err := conn.WriteTo(pkt, addr); err != nil {
+				slog.DebugContext(ctx, "Wake-on-LAN send failed", "to", d, "error", err)
 				continue
 			}
 			sent++
