@@ -1,7 +1,12 @@
 # Design: import the worthwhile parts of upstream `jeefy/booty`
 
-**Status:** design v2. All decisions resolved with the maintainer on 2026-10-11 (§6, §7, §8); every
-fact verified against code or primary sources (§9). Awaiting final approval. Nothing is built yet.
+**Status:** implemented (landed through the split of PR #90, 2026-10). All decisions were resolved
+with the maintainer on 2026-10-11 (§6, §7, §8); every fact was verified against code or primary
+sources (§9).
+**As built, deviations from this design:** the lint config is not the `version: "2"`-only file of
+§2 item 13 and §9.7. maratori's golden config shipped first (1,172 findings), and the go-tricorder
+baseline then replaced it. Current counts live in `docs/development.md` (tracked in #96). Only new
+and changed code is gated (`task lint:new`).
 **Base:** `main` @ `eaea955` (the #86 merge).
 **Upstream reviewed:** `jeefy/booty` `main` @ `8a5a227` (2026-10-08). Common ancestor `d9eafed`
 (2024-10-12).
@@ -334,7 +339,8 @@ are unchanged.
   (`go generate ./boot/`), `check:ipxe` (`go test ./boot/`), `clean`, `image`, `image:push`,
   `image:buildx`, `image:run` (`--cap-drop ALL --cap-add NET_BIND_SERVICE --cap-add NET_RAW`).
 - `.golangci.yml` containing only `version: "2"` (default linters). `task lint` and `task vuln`
-  exist; lint findings (132 at baseline) are recorded, not fixed (§8.7).
+  exist; lint findings (132 at baseline) are recorded, not fixed (§8.7). *As built: superseded by
+  the go-tricorder baseline; see the Status note.*
 - Dockerfile: `npm ci`; a `go mod download` layer; `-s -w`; build stage `golang:1.26.9-alpine`;
   final stage **`gcr.io/distroless/static-debian13`** (root; §8.10); OCI labels; `EXPOSE 8080/tcp 69/udp`.
 - Docs: README, `docs/development.md`, `docs/standards.md` move from `make` to `task`.
@@ -502,7 +508,7 @@ booty's proxyDHCP.
   and `dir:` on a single command is silently ignored.
 - golangci-lint v2.14.0, installed as the release binary with a checksum (its docs advise against
   `go install`). A config of only `version: "2"` verifies. Baseline: 132 issues (errcheck 130,
-  staticcheck 2).
+  staticcheck 2). *As built: the shipped config differs; see the Status note.*
 - govulncheck v1.9.0, installed as a binary (`go run …@v1.9.0` scans the wrong standard library).
   At go1.26.2 there are 29 called vulnerabilities: 24 in the standard library (all fixed by go1.26.9),
   plus `x/net` v0.53.0 (fixed in v0.60.0) and `grpc` v1.79.3 (fixed in v1.83.1).
