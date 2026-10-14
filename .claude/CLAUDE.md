@@ -36,35 +36,67 @@ booty is the starting point for Kubernetes control-plane nodes, the "scaler" tha
 agent/worker nodes, a consistent configuration source for every other OS it boots, and a source
 of bootable tools. Configuration and repeatable extensions are the product.
 
-In priority order:
+In priority order (milestones M0–M7 that deliver these: `docs/roadmap.md`):
 
-1. **Talos Linux first.** PXE-boot Talos and supply its machine config. The Talos-based hypervisor
-   (an extension to Talos itself) is a primary target: booty supports the features it needs.
-   Cluster secrets (the Talos secrets bundle: cluster/OS/etcd/aggregator CAs, service-account key,
-   tokens) are to be **stored in an external secret store and read at render time**, through a
-   secrets seam with three backends: **local age** (today's), **1Password**, **OpenBao**.
-   That work has its own future design. Facts gathered so far (2026-10-11):
-   - `onepassword-sdk-go` v0.4.1, MIT, builds with `CGO_ENABLED=0` (WASM core, pure-Go runtime;
-     client start-up ~3.7 s here, so create once and reuse).
-   - `github.com/openbao/openbao/api/v2` (MPL-2.0) has KV v2 helpers.
-   - Talos control-plane configs must carry every CA private key, so a PKI engine cannot keep
-     them non-exportable.
-2. **Kubernetes via kubeadm on Flatcar and Fedora CoreOS**, and possibly Bluefin Server.
-   Upstream supports Bluefin Server as a kubeadm **worker only**; its kubeadm sysext pins
-   Kubernetes 1.35.9 and upstream has no version-skew check.
-3. **Flatcar with systemd-sysext running KubeSolo** as a backup to a single-node Talos. KubeSolo
-   (Portainer, MIT) has no Flatcar sysext in `flatcar/sysext-bakery`; one would have to be built.
-   Its install script refuses to run when Docker is present.
-4. **Generic Linux for desktops/laptops:** Debian and Debian-based; Arch and Arch-based (CachyOS,
-   SteamOS, EndeavourOS); Tails.
+1. **Talos Linux first, including the scaler and the secrets backends.** PXE-boot Talos and supply
+   its machine config. The Talos-based hypervisor (an extension to Talos itself) is a primary
+   target: booty supports the features it needs.
+   - **Cluster lifecycle must cover onboarding existing clusters and managing several clusters at
+     once.** Every lifecycle capability (and the scaler below) works for an imported cluster
+     exactly as for one booty created, and for each cluster independently.
+   - **Scaler:** an automated process in the spirit of Cluster API or Talos Omni. It knows which
+     machine best fits each job, and automates assigning it and bootstrapping whatever that
+     needs; it turns an approved machine into a joined node, and decides when and as what.
+     - It adds **control-plane nodes as well as workers**, both for a cluster booty created from
+       scratch and for an imported one.
+     - It joins a node only once the cluster's Kubernetes control plane is up and reachable.
+     - **Node type by hardware:** a machine is assigned the node type its hardware fits, e.g. an
+       AI node needs a GPU, an SDR node needs its radio. The hardware facts come from the
+       discovery OS (priority 2).
+     - **Workload demand:** booty adds nodes when the cluster needs them, e.g. 20 CI jobs waiting
+       means bring up another worker.
+   - **Node agent:** a container on every node (a DaemonSet) that is to booty what a VM guest
+     agent is to KVM.
+     - **Light controls** from booty: power off, reboot.
+     - **Telemetry** back to booty: CPU, memory, disk status and capacity, network, and devices
+       added to the node.
+     - How it is built, deployed and authenticated is an open design question.
+   - **Secrets backends:** cluster secrets (the Talos secrets bundle: cluster/OS/etcd/aggregator
+     CAs, service-account key, tokens) are to be **stored in an external secret store and read at
+     render time**, through a secrets seam with three backends: **local age** (today's),
+     **1Password**, **OpenBao**. That work has its own future design. Facts gathered so far
+     (2026-10-11):
+     - `onepassword-sdk-go` v0.4.1, MIT, builds with `CGO_ENABLED=0` (WASM core, pure-Go runtime;
+       client start-up ~3.7 s here, so create once and reuse).
+     - `github.com/openbao/openbao/api/v2` (MPL-2.0) has KV v2 helpers.
+     - Talos control-plane configs must carry every CA private key, so a PKI engine cannot keep
+       them non-exportable.
+2. **A lightweight discovery OS that every unassigned machine boots.** Every first-seen machine,
+   and every machine that is unapproved or has no OS assigned, boots it. It has two jobs:
+   - **Inventory:** gather the machine's hardware facts and report them back to booty.
+   - **Holding pattern:** keep the machine parked there until it is approved and assigned, then
+     hand it on to its assigned OS.
+   This replaces today's iPXE holding script for those machines. **gokrazy** is the first
+   candidate to evaluate; the choice and the report format are open design decisions.
+3. **Utility OSes** (rescue, disk, memory tools) **and Tails.** Several already ship via
+   netboot.xyz manifests.
+4. **Generic Linux for desktops/laptops: Debian and Arch.**
    - Arch's archiso has official PXE support.
    - No official netboot path was found for SteamOS or CachyOS (UNVERIFIED for CachyOS/EndeavourOS).
-5. **Server OSes:**
-   - Proxmox VE and Proxmox Backup Server. The installer supports PXE via
-     `prepare-iso --pxe --pxe-loader ipxe` from VE installer 9.1.7; the first PBS version is
-     UNVERIFIED.
-   - TrueNAS: no PXE path found.
-6. **Utility OSes** (rescue, disk, memory tools). Several already ship via netboot.xyz manifests.
+
+### Backlog (not prioritised)
+
+- **Kubernetes via kubeadm on Flatcar and Fedora CoreOS**, and possibly Bluefin Server.
+  Upstream supports Bluefin Server as a kubeadm **worker only**; its kubeadm sysext pins
+  Kubernetes 1.35.9 and upstream has no version-skew check.
+- **Flatcar with systemd-sysext running KubeSolo** as a backup to a single-node Talos. KubeSolo
+  (Portainer, MIT) has no Flatcar sysext in `flatcar/sysext-bakery`; one would have to be built.
+  Its install script refuses to run when Docker is present.
+- **Server OSes:**
+  - Proxmox VE and Proxmox Backup Server. The installer supports PXE via
+    `prepare-iso --pxe --pxe-loader ipxe` from VE installer 9.1.7; the first PBS version is
+    UNVERIFIED.
+  - TrueNAS: no PXE path found.
 
 ## Engineering principles (apply to every change)
 
@@ -159,6 +191,7 @@ Each item has a `tech-debt` issue; close the issue when the item is gone and dro
 | `web/` | React + Ant Design UI (Vite, Vitest). The built `dist/` is embedded by `web/embed.go`. |
 | `docs/designs/` | Design documents, one per change (`YYYY-MM-DD-<topic>-design.md`). |
 | `docs/schema/` | API, catalog, database and storage references. |
+| `docs/roadmap.md` | Milestones M0–M7 toward the mission, with dependencies and exit tests. |
 | `examples/`, `deploy/` | Example Butane/scripts, Kubernetes manifest, docker-compose. |
 
 ## How a boot works (today)
