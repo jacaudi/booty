@@ -6,15 +6,15 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jeefy/booty/pkg/bootscript"
 	"github.com/jeefy/booty/pkg/hardware"
-	"github.com/jeefy/booty/pkg/tftp"
 )
 
 // bootScriptHandler serves the per-host booty.ipxe script (holding, assigned
 // OS or menu). The host is identified by ?mac=, with ARP as the fallback.
 func bootScriptHandler(arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		script, kind := tftp.RenderBootScript(identifyHostWith(r, arp), tftp.URLHost())
+		script, kind := bootscript.RenderBootScript(identifyHostWith(r, arp), bootscript.URLHost())
 		// Log the normalised MAC ("" when ?mac= does not parse), never the
 		// raw, attacker-controlled query value.
 		mac, _ := hardware.NormalizeMAC(r.URL.Query().Get("mac"))
@@ -30,7 +30,7 @@ func bootScriptHandler(arp arpFunc) http.HandlerFunc {
 func menuSelectionHandler(arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filename := strings.TrimPrefix(r.URL.Path, "/")
-		script := tftp.MenuSelectionScript(identifyHostWith(r, arp), filename, tftp.URLHost())
+		script := bootscript.MenuSelectionScript(identifyHostWith(r, arp), filename, bootscript.URLHost())
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		//nolint:gosec // G705: text/plain iPXE script, not HTML
 		_, _ = io.WriteString(w, script)

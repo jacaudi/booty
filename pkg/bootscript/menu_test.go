@@ -1,5 +1,5 @@
-// pkg/tftp/menu_test.go
-package tftp
+// pkg/bootscript/menu_test.go
+package bootscript
 
 import (
 	"os"

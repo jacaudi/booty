@@ -1,4 +1,4 @@
-package tftp
+package bootscript
 
 // Literal iPXE scripts for netboot.xyz-sourced tools, one per tool, pinned from
 // netboot.xyz's own menu templates. They are literal rather than generated from
