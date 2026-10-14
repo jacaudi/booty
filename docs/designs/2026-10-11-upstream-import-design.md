@@ -25,7 +25,7 @@ reviewing them. Everything fits the fork's architecture: SQLite (`pkg/db`), `pkg
 - Fix five shared bugs (items 1–5).
 - Make the boot chain self-contained: embedded iPXE, MAC-based identification (items 6–8).
 - Add Wake-on-LAN and opt-in node health / running-version reports (items 9–10).
-- Clean up build and dependencies (items 11–13). Item 14 (vendored skills) is done.
+- Clean up build and dependencies (items 11–13). Item 14 (vendored skills) was dropped: the skills come from per-user plugins, not the repo.
 
 ### Non-goals
 - Upstream autopilot, kubeadm/k0s, CNI, Bluefin Server, Storage view, power tracker, actuators.
