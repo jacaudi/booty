@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/jeefy/booty/pkg/cache"
@@ -96,8 +97,17 @@ func bindHostConfigRoles(store *db.Store, host *hardware.Host, configID *int64, 
 	return writeHostConfigRoles(host, configID, roleIDs)
 }
 
+// wakeWindow is the minimum gap between wake-host sends to one host.
+const wakeWindow = 10 * time.Second
+
 func registerHosts(api huma.API, deps APIDeps) {
 	registerHostHealth(api, deps)
+
+	now := deps.now
+	if now == nil {
+		now = time.Now
+	}
+	wakeLimit := nodereport.MustNewLimiter(1, wakeWindow, limiterCapacity, now)
 
 	// GET /hosts (?approved=)
 	huma.Register(api, huma.Operation{
@@ -398,6 +408,17 @@ func registerHosts(api huma.API, deps APIDeps) {
 		h, err := hardware.GetMacAddress(in.MAC)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("get host", err)
+		}
+		// Checked after the lookups so a 404/422/503 does not use up the
+		// window. A send that then fails does: it may have reached some
+		// destinations, and the packets are what the limit bounds. h.MAC is
+		// the stored row's key, already normalised by the lookup above, so
+		// every spelling of a MAC shares one window.
+		if !wakeLimit.Allow(h.MAC) {
+			return nil, huma.ErrorWithHeaders(
+				huma.Error429TooManyRequests("wake-host allows one wake per host every "+wakeWindow.String()),
+				http.Header{"Retry-After": {strconv.Itoa(int(wakeWindow.Seconds()))}},
+			)
 		}
 		sent, err := deps.Waker.Wake(ctx, h.MAC, h.IP)
 		if err != nil {

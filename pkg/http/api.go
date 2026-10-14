@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"net/http"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
@@ -27,6 +28,9 @@ type APIDeps struct {
 	}
 	// NodeReports enables POST /node/report; nil leaves the feature off (404).
 	NodeReports *NodeReports
+	// now supplies the clock for the wake-host limiter; nil means time.Now.
+	// Tests set it to step past the limiter window.
+	now func() time.Time
 }
 
 // RegisterAPI mounts the Huma /api/v1 surface on mux (the existing booty

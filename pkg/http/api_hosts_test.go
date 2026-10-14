@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
@@ -713,6 +714,119 @@ func TestWakeHost(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) { runWakeCase(t, tc) })
 	}
+}
+
+// wakeLimitRig is a wake-host API with a fake waker and a hand-stepped clock.
+type wakeLimitRig struct {
+	post  func(mac string) (code int, retryAfter string)
+	waker *fakeWaker
+	clock *time.Time
+}
+
+// newWakeLimitRig seeds the given MACs as hosts and returns the rig.
+func newWakeLimitRig(t *testing.T, seed ...string) wakeLimitRig {
+	t.Helper()
+	deps := hostsTestSetup(t)
+	clock := time.Unix(1000, 0)
+	deps.now = func() time.Time { return clock }
+	fw := &fakeWaker{sent: []string{"10.0.0.255:9"}}
+	deps.Waker = fw
+	for _, mac := range seed {
+		if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, IP: "10.0.0.7"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api := newTestAPI(t, deps)
+	return wakeLimitRig{
+		post: func(mac string) (int, string) {
+			resp := api.Post("/api/v1/hosts/" + mac + "/wake")
+			return resp.Code, resp.Header().Get("Retry-After")
+		},
+		waker: fw,
+		clock: &clock,
+	}
+}
+
+func TestWakeHostRateLimit(t *testing.T) {
+	const a, b = "aa:bb:cc:dd:ee:c0", "aa:bb:cc:dd:ee:c1"
+
+	t.Run("second wake inside the window is 429 and sends nothing", func(t *testing.T) {
+		r := newWakeLimitRig(t, a)
+		if code, _ := r.post(a); code != 200 {
+			t.Fatalf("first wake = %d, want 200", code)
+		}
+		code, retry := r.post(a)
+		if code != 429 {
+			t.Fatalf("second wake = %d, want 429", code)
+		}
+		if retry != "10" {
+			t.Errorf("Retry-After = %q, want %q", retry, "10")
+		}
+		if len(r.waker.calls) != 1 {
+			t.Errorf("waker calls = %v, want exactly 1", r.waker.calls)
+		}
+	})
+
+	t.Run("allowed again once the window has passed", func(t *testing.T) {
+		r := newWakeLimitRig(t, a)
+		r.post(a)
+		*r.clock = r.clock.Add(wakeWindow)
+		if code, _ := r.post(a); code != 200 {
+			t.Fatalf("wake after the window = %d, want 200", code)
+		}
+		if len(r.waker.calls) != 2 {
+			t.Errorf("waker calls = %v, want 2", r.waker.calls)
+		}
+	})
+
+	t.Run("another host is unaffected", func(t *testing.T) {
+		r := newWakeLimitRig(t, a, b)
+		r.post(a)
+		if code, _ := r.post(b); code != 200 {
+			t.Fatalf("wake of other host = %d, want 200", code)
+		}
+	})
+
+	t.Run("MAC spellings share one window", func(t *testing.T) {
+		r := newWakeLimitRig(t, a)
+		if code, _ := r.post(a); code != 200 {
+			t.Fatalf("first wake = %d, want 200", code)
+		}
+		for _, spelling := range []string{"AA:BB:CC:DD:EE:C0", "aa-bb-cc-dd-ee-c0"} {
+			if code, _ := r.post(spelling); code != 429 {
+				t.Errorf("wake as %q = %d, want 429", spelling, code)
+			}
+		}
+		if len(r.waker.calls) != 1 {
+			t.Errorf("waker calls = %v, want exactly 1", r.waker.calls)
+		}
+	})
+
+	t.Run("a rejected request does not use up the window", func(t *testing.T) {
+		r := newWakeLimitRig(t)
+		for range 2 {
+			if code, _ := r.post(a); code != 404 {
+				t.Errorf("wake of unknown host = %d, want 404 every time", code)
+			}
+		}
+		if err := hardware.WriteMacAddress(a, hardware.Host{MAC: a, IP: "10.0.0.7"}); err != nil {
+			t.Fatal(err)
+		}
+		if code, _ := r.post(a); code != 200 {
+			t.Fatalf("wake after registering = %d, want 200", code)
+		}
+	})
+
+	t.Run("a failed send still uses up the window", func(t *testing.T) {
+		r := newWakeLimitRig(t, a)
+		r.waker.err = errors.New("no destination accepted the packet")
+		if code, _ := r.post(a); code != 502 {
+			t.Fatalf("failed wake = %d, want 502", code)
+		}
+		if code, _ := r.post(a); code != 429 {
+			t.Fatalf("retry after failed send = %d, want 429", code)
+		}
+	})
 }
 
 // storeHealth writes a stored health report for mac.
