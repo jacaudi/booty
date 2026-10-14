@@ -351,6 +351,27 @@ func TestReplyDestination(t *testing.T) {
 			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 68},
 			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 68},
 		},
+		// A spoofed REQUEST with ciaddr set to a victim must not let the sender
+		// pick the port the ACK lands on: only PXE client ports are honoured
+		// (issue #102). Everything else gets the pre-EDK2 ciaddr:68.
+		{
+			"ciaddr matches source from 67",
+			[]dhcpv4.Modifier{dhcpv4.WithClientIP(net.IPv4(192, 168, 1, 50))},
+			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 67},
+			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 68},
+		},
+		{
+			"ciaddr matches source from 53",
+			[]dhcpv4.Modifier{dhcpv4.WithClientIP(net.IPv4(192, 168, 1, 50))},
+			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 53},
+			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 68},
+		},
+		{
+			"ciaddr matches source from an ephemeral port",
+			[]dhcpv4.Modifier{dhcpv4.WithClientIP(net.IPv4(192, 168, 1, 50))},
+			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 50000},
+			&net.UDPAddr{IP: net.IPv4(192, 168, 1, 50), Port: 68},
+		},
 		{
 			"relay",
 			[]dhcpv4.Modifier{dhcpv4.WithGatewayIP(net.IPv4(10, 0, 0, 1)), dhcpv4.WithBroadcast(true)},
