@@ -7,6 +7,11 @@ vars:
     sh: git log -1 --format=%cI 2>/dev/null || echo unknown
   IMAGE: booty:dev
   PLATFORMS: linux/amd64,linux/arm64
+  # go-tricorder is not published yet: lint builds its plugin from a local checkout. Override
+  # with the environment (TRICORDER_DIR=/path/to/go-tricorder task lint). Drop with the `path:`
+  # line in .custom-gcl.yml once a tag exists.
+  TRICORDER_DIR:
+    sh: echo "${TRICORDER_DIR:-{{.ROOT_DIR}}/../go-tricorder}"
 
 tasks:
   web:
@@ -53,21 +58,39 @@ tasks:
     cmds:
       - test -z "$(gofmt -l $(git ls-files '*.go'))"
 
-  lint:
-    desc: golangci-lint, whole tree (existing findings are known and not yet fixed; see docs/development.md)
+  lint:bin:
+    desc: Build bin/custom-gcl, golangci-lint with the go-tricorder plugin (only when its inputs change)
+    method: timestamp
+    dir: bin/custom-gcl-build
+    sources:
+      - "{{.ROOT_DIR}}/.custom-gcl.yml"
+      - "{{.TRICORDER_DIR}}/go.mod"
+      - "{{.TRICORDER_DIR}}/go.sum"
+      - "{{.TRICORDER_DIR}}/**/*.go"
+    generates:
+      - "{{.ROOT_DIR}}/bin/custom-gcl"
     preconditions:
+      - sh: test -d "{{.TRICORDER_DIR}}"
+        msg: "go-tricorder checkout not found at {{.TRICORDER_DIR}}: clone it there or set TRICORDER_DIR=/path/to/go-tricorder (see docs/development.md)"
       - sh: command -v golangci-lint
-        msg: "install golangci-lint v2.14.0 (see docs/development.md)"
+        msg: "install golangci-lint v2 to build bin/custom-gcl (see docs/development.md)"
     cmds:
-      - golangci-lint run ./...
+      # destination in the rendered file is ".." so the binary lands in bin/. Clones golangci-lint
+      # over the network, which is why sources/generates skip the build when nothing changed.
+      - sed "s#@TRICORDER_DIR@#$(cd "{{.TRICORDER_DIR}}" && pwd)#" "{{.ROOT_DIR}}/.custom-gcl.yml" > .custom-gcl.yml
+      - golangci-lint custom
+
+  lint:
+    desc: Lint the whole tree with bin/custom-gcl (existing findings are known and not yet fixed; see docs/development.md)
+    deps: [lint:bin]
+    cmds:
+      - bin/custom-gcl run ./...
 
   lint:new:
-    desc: golangci-lint on code changed since origin/main (must be clean)
-    preconditions:
-      - sh: command -v golangci-lint
-        msg: "install golangci-lint v2.14.0 (see docs/development.md)"
+    desc: Lint code changed since origin/main (must be clean)
+    deps: [lint:bin]
     cmds:
-      - golangci-lint run --new-from-merge-base=origin/main ./...
+      - bin/custom-gcl run --new-from-merge-base=origin/main ./...
 
   vuln:
     desc: govulncheck against the repo's toolchain
