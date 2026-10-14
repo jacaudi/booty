@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+
+	"github.com/jeefy/booty/pkg/nodereport"
 )
 
 // UpsertHostHealth stores the latest health report for a host and marks the
@@ -44,23 +46,51 @@ func (s *Store) GetHostHealth(mac string) (string, []byte, error) {
 	return receivedAt, []byte(report), nil
 }
 
-// ListHostHealth returns every stored report keyed by MAC.
-func (s *Store) ListHostHealth() (map[string][]byte, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT mac, report FROM host_health`)
+// ListHostHealthSummaries returns the list-view summary of every stored
+// report keyed by MAC, extracted by SQLite so a refresh does not read and
+// decode every full report (up to 64 KiB each). A nil value marks a report
+// that is stored but not a JSON object, which [nodereport.Health] could not
+// decode either; a host that never reported is absent. Every field is
+// guarded so one corrupt row cannot fail the whole listing.
+func (s *Store) ListHostHealthSummaries() (map[string]*nodereport.Summary, error) {
+	// j is the report when it is a JSON object, else NULL; the nested CASE
+	// keeps json_type off invalid JSON, which would raise "malformed JSON".
+	rows, err := s.db.QueryContext(context.Background(), `
+		SELECT mac, j IS NOT NULL,
+		       COALESCE(json_extract(j, '$.running'), ''),
+		       COALESCE(json_extract(j, '$.kernel'), ''),
+		       COALESCE(json_extract(j, '$.firmware'), ''),
+		       COALESCE(json_extract(j, '$.receivedAt'), ''),
+		       COALESCE(json_array_length(j, '$.failedUnits'), 0),
+		       COALESCE(json_extract(j, '$.dmi.vendor'), ''),
+		       COALESCE(json_extract(j, '$.dmi.product'), '')
+		FROM (SELECT mac, CASE WHEN json_valid(report)
+		                       THEN CASE WHEN json_type(report) = 'object' THEN report END
+		                  END AS j
+		      FROM host_health)`)
 	if err != nil {
-		return nil, fmt.Errorf("list host health: %w", err)
+		return nil, fmt.Errorf("list host health summaries: %w", err)
 	}
 	defer rows.Close()
-	out := make(map[string][]byte)
+	out := make(map[string]*nodereport.Summary)
 	for rows.Next() {
-		var mac, report string
-		if err = rows.Scan(&mac, &report); err != nil {
-			return nil, fmt.Errorf("scan host health: %w", err)
+		var (
+			mac string
+			ok  bool
+			sum nodereport.Summary
+		)
+		if err = rows.Scan(&mac, &ok, &sum.Running, &sum.Kernel, &sum.Firmware, &sum.ReceivedAt,
+			&sum.FailedUnitCount, &sum.Vendor, &sum.Product); err != nil {
+			return nil, fmt.Errorf("scan host health summary: %w", err)
 		}
-		out[mac] = []byte(report)
+		if ok {
+			out[mac] = &sum
+		} else {
+			out[mac] = nil
+		}
 	}
 	if err = rows.Err(); err != nil {
-		return nil, fmt.Errorf("list host health: %w", err)
+		return nil, fmt.Errorf("list host health summaries: %w", err)
 	}
 	return out, nil
 }

@@ -96,22 +96,6 @@ func bindHostConfigRoles(store *db.Store, host *hardware.Host, configID *int64, 
 	return writeHostConfigRoles(host, configID, roleIDs)
 }
 
-// healthSummary condenses a stored report; a missing or unreadable report is
-// absent (nil), the latter logged.
-func healthSummary(mac string, raw []byte) *nodereport.Summary {
-	if raw == nil {
-		return nil
-	}
-	var h nodereport.Health
-	if err := json.Unmarshal(raw, &h); err != nil {
-		//nolint:sloglint // default logger: no injected logger in this package yet
-		slog.Warn("stored node report unreadable", "mac", mac, "err", err)
-		return nil
-	}
-	sum := h.Summary()
-	return &sum
-}
-
 func registerHosts(api huma.API, deps APIDeps) {
 	registerHostHealth(api, deps)
 
@@ -137,7 +121,7 @@ func registerHosts(api huma.API, deps APIDeps) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("list hosts", err)
 		}
-		healths, err := deps.Store.ListHostHealth()
+		healths, err := deps.Store.ListHostHealthSummaries()
 		if err != nil {
 			return nil, huma.Error500InternalServerError("list host health", err)
 		}
@@ -146,7 +130,12 @@ func registerHosts(api huma.API, deps APIDeps) {
 			if approvedFilter != nil && h.Approved != *approvedFilter {
 				continue
 			}
-			out.Body.Hosts = append(out.Body.Hosts, hostView{Host: h, Health: healthSummary(h.MAC, healths[h.MAC])})
+			sum, reported := healths[h.MAC]
+			if reported && sum == nil {
+				//nolint:sloglint // default logger: no injected logger in this package yet
+				slog.Warn("stored node report unreadable", "mac", h.MAC)
+			}
+			out.Body.Hosts = append(out.Body.Hosts, hostView{Host: h, Health: sum})
 		}
 		// []string{} and NOT nil: a nil slice marshals to JSON null, and the
 		// UI flatMaps array fields — a null survives as an element and reaches
