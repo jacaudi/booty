@@ -41,30 +41,31 @@ type openRoute struct {
 // entries at the bottom are registered by huma/humago itself and no booty
 // source names them.
 //
-// A pattern with no method answers every method with its handler, which for
-// the read-only entries ignores the method and serves the same read; that is
-// why "mutates" is declared per route rather than inferred from the verb.
+// Read-only routes are registered for GET (which also matches HEAD), so any
+// other method falls to the "/" catch-all instead of reaching a read handler
+// (#149). A pattern with no method answers every method with its handler,
+// which is why "mutates" is declared per route rather than inferred.
 func openRouteTable() map[string]openRoute {
 	const huma = "registered by huma at adapter level, outside the gated group: "
 	return map[string]openRoute{
-		"/":               {probe: "/", why: "catch-all: every unmatched path and method, including a wrong method on an /api/v1 path, is a 302 to /ui/"},
-		"/ignition.json":  {probe: "/ignition.json", why: "boot path: Ignition config for the booting host, identified by ?mac= or ARP; read-only"},
-		"/machineconfig":  {probe: "/machineconfig", why: "boot path: Talos machine config for the booting host; read-only"},
-		"/preseed":        {probe: "/preseed", why: "boot path: Debian preseed for the booting host; read-only"},
-		"GET /booty.ipxe": {probe: "/booty.ipxe", why: "boot path: the rendered iPXE script (holding, assigned or menu); read-only"},
-		"GET /menu/":      {probe: "/menu/x", why: "boot path: iPXE boot-menu selection script; read-only"},
+		"/":                  {probe: "/", why: "catch-all: every unmatched path and method, including a wrong method on an /api/v1 path, is a 302 to /ui/"},
+		"GET /ignition.json": {probe: "/ignition.json", why: "boot path: Ignition config for the booting host, identified by ?mac= or ARP; read-only"},
+		"GET /machineconfig": {probe: "/machineconfig", why: "boot path: Talos machine config for the booting host; read-only"},
+		"GET /preseed":       {probe: "/preseed", why: "boot path: Debian preseed for the booting host; read-only"},
+		"GET /booty.ipxe":    {probe: "/booty.ipxe", why: "boot path: the rendered iPXE script (holding, assigned or menu); read-only"},
+		"GET /menu/":         {probe: "/menu/x", why: "boot path: iPXE boot-menu selection script; read-only"},
 		"/node/report": {
 			probe:   "/node/report",
 			mutates: true,
 			why:     "POST records a node health report; authenticated by a per-host HMAC token and rate limited rather than by the API gate",
 		},
-		"/version.txt":                  {probe: "/version.txt", why: "newest cached Flatcar/CoreOS versions; read-only"},
-		"/version.json":                 {probe: "/version.json", why: "newest cached Flatcar/CoreOS versions; read-only"},
-		"/healthz":                      {probe: "/healthz", why: "liveness probe; read-only"},
+		"GET /version.txt":              {probe: "/version.txt", why: "newest cached Flatcar/CoreOS versions; read-only"},
+		"GET /version.json":             {probe: "/version.json", why: "newest cached Flatcar/CoreOS versions; read-only"},
+		"GET /healthz":                  {probe: "/healthz", why: "liveness probe; read-only"},
 		"/login":                        {probe: "/login", why: "POST trades the API token for a session cookie; it authenticates the caller itself and keeps no server-side state"},
 		"/logout":                       {probe: "/logout", why: "POST clears the session cookie and requires a valid one; keeps no server-side state"},
-		"/data/":                        {probe: "/data/x", why: "boot path: artifacts under dataDir, served only from an explicit allowlist; read-only"},
-		"/ui/":                          {probe: "/ui/x", why: "the embedded web UI's static files; read-only"},
+		"GET /data/":                    {probe: "/data/x", why: "boot path: artifacts under dataDir, served only from an explicit allowlist; read-only"},
+		"GET /ui/":                      {probe: "/ui/x", why: "the embedded web UI's static files; read-only"},
 		bootPathPrefix + bootRouteLabel: {probe: bootPathPrefix + "ipxe.efi", why: "boot path: embedded iPXE binaries, GET and HEAD only; intercepted by withBootRoute ahead of the mux"},
 
 		"GET /api/v1/docs":             {probe: "/api/v1/docs", why: huma + "API documentation page"},

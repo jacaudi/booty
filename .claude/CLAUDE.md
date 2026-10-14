@@ -174,7 +174,6 @@ Each item has an open issue; close the issue when the item is gone and drop its 
 - `enableBroadcast` (`SO_BROADCAST`) is duplicated in `pkg/power` and `pkg/proxydhcp` (#109).
 - Packages log through the global `slog` default instead of an injected `*slog.Logger` (#116).
 - The proxyDHCP no-ciaddr unicast reply goes to a client-chosen source port (#147).
-- Read-only boot routes accept every HTTP method (#149).
 - Unverified on real hardware: BIOS PXE via `undionly.kpxe` (#106), the Debian node-report
   `late_command` (#107), `booty-health.service` on Flatcar/FCOS (#108).
 
