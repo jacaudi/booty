@@ -81,6 +81,12 @@ In priority order:
   - Accept interfaces, return structs. Wrap errors with `%w`. Use table-driven tests.
   - No new package-level mutable state.
   - Code passes `gofmt`, `go vet`, `golangci-lint` v2 and `govulncheck`.
+  - **Lint gate:** `.golangci.yml` is maratori's golden config (v2.14.0) with `paralleltest` and
+    `testpackage` disabled. New and changed code must pass
+    `golangci-lint run --new-from-merge-base=origin/main ./...`.
+  - **Modern idioms:** before editing a `.go` file, run the vendored JetBrains `use-modern-go`
+    skill (`sh .claude/skills/use-modern-go/scripts/run-tool.sh list --file-path <file>`) and apply
+    what it returns.
   - Follow go.dev guidance (Effective Go, Code Review Comments, Go Proverbs).
 - **Seam.** One interface per capability: OS type, secret store, boot-script renderer, power
   action, notifier and so on. A seam has one or more **backends**, each in its own package and
@@ -109,8 +115,8 @@ debt, not to be copied into new code:
 - Package-level injected stores: `hardware.SetStore`, `tftp.SetStore`, `absDataDir`.
 - The layout is `pkg/` rather than `internal/`, and there is no patchbay package.
 - Servers call `os.Exit` inside goroutines (TFTP, HTTP).
-- `golangci-lint` / `govulncheck` findings are not yet fixed. The tasks exist to run them; the
-  findings are recorded, not blocking.
+- Existing `golangci-lint` findings (1,231 with the golden config at `7432c81`) are not yet fixed.
+  Only new and changed code is gated. govulncheck findings are fixed in the upstream-import work.
 
 ## Repository map
 
@@ -131,7 +137,7 @@ debt, not to be copied into new code:
 | `docs/designs/` | Design documents, one per change (`YYYY-MM-DD-<topic>-design.md`). |
 | `docs/schema/` | API, catalog, database and storage references. |
 | `examples/`, `deploy/` | Example Butane/scripts, Kubernetes manifest, docker-compose. |
-| `.claude/skills/` | obra/superpowers skills, vendored unmodified (see its README). |
+| `.claude/skills/` | obra/superpowers skills and JetBrains `use-modern-go`, vendored unmodified (see its README). |
 
 ## How a boot works (today)
 

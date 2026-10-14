@@ -24,6 +24,7 @@
 
 | # | File | Items | Depends on |
 |---|---|---|---|
+| 0 | (done in the planning session) | `.golangci.yml` golden config, `use-modern-go` skill | none |
 | 1 | `01-security-fixes.md` | 0, 0b | none |
 | 2 | `02-tftp-hardening.md` | 8, 3 | 1 |
 | 3 | `03-proxydhcp.md` | 1 | none |
@@ -52,6 +53,16 @@ These apply to every task in every phase. Values are copied from the design.
   - **No attribution trailers** (`.claude/settings.json` disables them).
   - One commit per task unless the task says otherwise.
   - Run `go build ./... && go vet ./...` before every commit, plus the task's tests.
+- **Modern Go.** Before editing any `.go` file, run the vendored JetBrains skill:
+  `sh .claude/skills/use-modern-go/scripts/run-tool.sh list --file-path <file>`.
+  - Read the whole output.
+  - Apply the guidelines it returns to the code you write.
+  - If a plan code block uses an older idiom that a returned guideline replaces, use the modern form. The exception is a form that would change behaviour; then keep the plan's form.
+- **Lint gate (maintainer decision 2026-10-11).** `.golangci.yml` is maratori's golden config @ v2.14.0, with `paralleltest`/`testpackage` disabled.
+  - Before every commit, run `golangci-lint run --new-from-merge-base=origin/main ./...`. Expected: `0 issues.`
+  - Fix findings in code **you added or changed in this task**, without changing behaviour.
+  - If a finding can only be fixed by deviating from an explicit plan instruction (a name, a signature, a file layout), stop and report it. Do not add `//nolint` without a one-line reason naming the linter and why.
+  - Install: phase 10 Task 2 Step 1, or `research/tooling-qemu.md` §2. golangci-lint v2.14.0 is the binary release.
 - Release notes accumulate in `docs/releases/UNRELEASED.md` (created in phase 1).
 - Phase exit: `go build ./... && go vet ./... && go test -race ./...` all `ok`. Phases that touch `web/` also run `cd web && npx tsc -b && npm test`.
 
