@@ -3,7 +3,6 @@ package bootscript
 import (
 	"cmp"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -21,27 +20,27 @@ import (
 // path would resolve outside its cache subtree.
 var errPathEscapes = errors.New("tftp: path escapes dataDir")
 
-// storeMu guards the package-level store handle. Mirrors hardware.SetStore/
+// injected is the package-level store handle, guarded by its mutex. Mirrors hardware.SetStore/
 // withRLockedStore discipline exactly: set once at startup from cmd/main.go,
 // read under RLock for each request. Never opens a second DB handle.
-var (
-	storeMu sync.RWMutex
-	tftpDB  *db.Store
-)
+var injected struct { //nolint:gochecknoglobals // set once at startup by SetStore; constructor injection is tracked in #93
+	mu sync.RWMutex
+	db *db.Store
+}
 
 // SetStore injects the shared DB store the menu path uses to partition cached
 // versions into in-window vs archived. Wired once at startup from cmd/main.go,
 // mirroring hardware.SetStore. Safe if nil (menu then treats all as in-window).
 func SetStore(s *db.Store) {
-	storeMu.Lock()
-	defer storeMu.Unlock()
-	tftpDB = s
+	injected.mu.Lock()
+	defer injected.mu.Unlock()
+	injected.db = s
 }
 
 func currentStore() *db.Store {
-	storeMu.RLock()
-	defer storeMu.RUnlock()
-	return tftpDB
+	injected.mu.RLock()
+	defer injected.mu.RUnlock()
+	return injected.db
 }
 
 // bootDispatch is the pure host-state -> boot-decision function (design §2.5).
@@ -154,7 +153,10 @@ func debianSourceMode(arch, segment string) string {
 	if store == nil {
 		return "netinst"
 	}
-	params, _ := cache.EncodeParams(map[string]string{"channel": segment})
+	params, err := cache.EncodeParams(map[string]string{"channel": segment})
+	if err != nil {
+		return "netinst"
+	}
 	t, err := store.GetTargetByIdentity("debian", arch, params)
 	if err != nil || t == nil || t.SourceMode == "" {
 		return "netinst"
@@ -276,5 +278,5 @@ func assignedScript(host *hardware.Host, urlHost string) string {
 			"os", osToLoad, "mac", host.MAC)
 		return holdingScript(urlHost)
 	}
-	return applyTokens(PXEConfig[fmt.Sprintf("%s.ipxe", osToLoad)], bootTokens(osToLoad, urlHost, host))
+	return applyTokens(PXEConfig[osToLoad+".ipxe"], bootTokens(osToLoad, urlHost, host))
 }

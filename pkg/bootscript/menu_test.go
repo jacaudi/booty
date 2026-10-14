@@ -1,4 +1,3 @@
-// pkg/bootscript/menu_test.go
 package bootscript
 
 import (

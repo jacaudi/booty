@@ -1,3 +1,5 @@
+// Package hardware holds the per-host records (identity by MAC, boot OS,
+// approval, hostname) that every boot endpoint reads and the API edits.
 package hardware
 
 import (
@@ -83,7 +85,7 @@ var (
 	unknownMu    sync.Mutex
 	unknownHosts = map[string]*Host{}
 	// unknownOrder holds unknownHosts' keys, earliest-tracked first.
-	unknownOrder []string //nolint:gochecknoglobals // pairs with the existing unknownHosts global under unknownMu; moving both off package state is out of scope
+	unknownOrder []string //nolint:gochecknoglobals // pairs with the unknownHosts global under unknownMu; package-level host state is tracked in #93
 )
 
 // SetStore injects the shared database store. Call it once at startup before
