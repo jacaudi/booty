@@ -42,27 +42,28 @@ import (
 func baseMux(deps APIDeps, dataRoot *os.Root) (*http.ServeMux, error) {
 	myHandler := http.NewServeMux()
 
-	// All URLs will be handled by this function
+	// All URLs will be handled by this function. The read-only routes below
+	// are GET (HEAD too), so any other method lands here instead (#149).
 	myHandler.HandleFunc("/", handleRequest)
-	myHandler.HandleFunc("/ignition.json", ignitionHandler(deps.Store, deps.NodeReports))
-	myHandler.HandleFunc("/machineconfig", handleMachineConfigRequest(deps.Store))
-	myHandler.HandleFunc("/preseed", preseedHandler(deps.Store, deps.NodeReports))
+	myHandler.HandleFunc("GET /ignition.json", ignitionHandler(deps.Store, deps.NodeReports))
+	myHandler.HandleFunc("GET /machineconfig", handleMachineConfigRequest(deps.Store))
+	myHandler.HandleFunc("GET /preseed", preseedHandler(deps.Store, deps.NodeReports))
 	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(arpLookup))
 	myHandler.Handle("GET /menu/", menuSelectionHandler(arpLookup))
 	// Bare path: every method reaches the handler, so a non-POST is a 405
 	// (404 when the feature is off) instead of falling to the "/" catch-all.
 	myHandler.Handle("/node/report", nodeReportHandler(deps))
-	myHandler.HandleFunc("/version.txt", handleVersionRequest)
-	myHandler.HandleFunc("/version.json", handleVersionRequest)
-	myHandler.HandleFunc("/healthz", handleHealthz)
+	myHandler.HandleFunc("GET /version.txt", handleVersionRequest)
+	myHandler.HandleFunc("GET /version.json", handleVersionRequest)
+	myHandler.HandleFunc("GET /healthz", handleHealthz)
 	myHandler.HandleFunc("/login", handleLogin(deps.Auth))
 	myHandler.HandleFunc("/logout", handleLogout(deps.Auth))
-	myHandler.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(dataRoot)))
+	myHandler.Handle("GET /data/", http.StripPrefix("/data/", dataFileHandler(dataRoot)))
 	uiFS, err := web.DistFS()
 	if err != nil {
 		return nil, fmt.Errorf("http: ui embed: %w", err)
 	}
-	myHandler.Handle("/ui/", http.StripPrefix("/ui/", uiHandler(uiFS)))
+	myHandler.Handle("GET /ui/", http.StripPrefix("/ui/", uiHandler(uiFS)))
 
 	return myHandler, nil
 }
