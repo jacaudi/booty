@@ -17,7 +17,7 @@ func enableBroadcast(conn net.PacketConn) error {
 		return err
 	}
 	var sockErr error
-	if err := raw.Control(func(fd uintptr) { //nolint:govet // ported verbatim
+	if err := raw.Control(func(fd uintptr) {
 		sockErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
 	}); err != nil {
 		return err

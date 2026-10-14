@@ -10,6 +10,7 @@
 package proxydhcp
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -45,25 +46,24 @@ func (s *Server) Start() error {
 		return fmt.Errorf("proxydhcp: listen UDP/%d: %w (needs root or CAP_NET_BIND_SERVICE)", s.cfg.Port67, err)
 	}
 	if err := enableBroadcast(conn67); err != nil {
-		conn67.Close()
-		return fmt.Errorf("proxydhcp: enable broadcast on UDP/%d: %w", s.cfg.Port67, err)
+		return errors.Join(fmt.Errorf("proxydhcp: enable broadcast on UDP/%d: %w", s.cfg.Port67, err), conn67.Close())
 	}
 	s.conn67 = conn67
 
 	conn4011, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: s.cfg.Port4011})
 	if err != nil {
-		conn67.Close()
-		return fmt.Errorf("proxydhcp: listen UDP/%d: %w", s.cfg.Port4011, err)
+		return errors.Join(fmt.Errorf("proxydhcp: listen UDP/%d: %w", s.cfg.Port4011, err), conn67.Close())
 	}
 	if err = enableBroadcast(conn4011); err != nil {
-		_ = conn67.Close()
-		_ = conn4011.Close()
-		return fmt.Errorf("proxydhcp: enable broadcast on UDP/%d: %w", s.cfg.Port4011, err)
+		return errors.Join(
+			fmt.Errorf("proxydhcp: enable broadcast on UDP/%d: %w", s.cfg.Port4011, err),
+			conn67.Close(), conn4011.Close(),
+		)
 	}
 	s.conn4011 = conn4011
 
 	slog.Info("proxyDHCP listening",
-		"ports", fmt.Sprintf("%d+%d", s.cfg.Port67, s.cfg.Port4011), "next-server", s.cfg.ServerIP.String(),
+		"ports", fmt.Sprintf("%d+%d", s.cfg.Port67, s.cfg.Port4011), "next_server", s.cfg.ServerIP.String(),
 		"relay", s.cfg.Relay,
 		"bios", s.cfg.BIOSFile, "efi", s.cfg.EFIFile, "arm64", s.cfg.ARM64File, "ipxe", s.cfg.IPXEScript)
 
@@ -75,18 +75,21 @@ func (s *Server) Start() error {
 // Shutdown stops both listeners and waits for the serve goroutines to exit.
 // Closing the conns unblocks ReadFromUDP, so this is inherently bounded. It is
 // idempotent: the close runs once, but every caller blocks until the goroutines
-// have exited.
-func (s *Server) Shutdown() {
+// have exited. It returns the errors from closing the sockets (only the first
+// call can).
+func (s *Server) Shutdown() error {
+	var err error
 	s.closeOnce.Do(func() {
 		close(s.done)
 		if s.conn67 != nil {
-			s.conn67.Close()
+			err = errors.Join(err, s.conn67.Close())
 		}
 		if s.conn4011 != nil {
-			s.conn4011.Close()
+			err = errors.Join(err, s.conn4011.Close())
 		}
 	})
 	s.wg.Wait()
+	return err
 }
 
 // loop reads and answers requests until Shutdown. port is the configured port
@@ -133,7 +136,7 @@ func (s *Server) respond(conn *net.UDPConn, src *net.UDPAddr, req *dhcpv4.DHCPv4
 		slog.Warn("proxyDHCP send error", "err", err)
 		return
 	}
-	slog.Info("proxyDHCP reply", //nolint:sloglint // default logger: no injected logger in this package yet
+	slog.Info("proxyDHCP reply",
 		"client", req.ClientHWAddr.String(), "type", resp.MessageType().String(),
 		"to", dst.String(), "file", resp.BootFileName)
 }

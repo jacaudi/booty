@@ -9,7 +9,7 @@ import (
 )
 
 func TestLookup(t *testing.T) {
-	for _, name := range Names {
+	for _, name := range Names() {
 		b, ok := Lookup(name)
 		if !ok || len(b) == 0 {
 			t.Errorf("Lookup(%q) = %d bytes, %v; want non-empty, true", name, len(b), ok)
@@ -34,11 +34,13 @@ func TestEmbeddedMatchesSHA256SUMS(t *testing.T) {
 	for _, line := range lines {
 		want, name, ok := strings.Cut(line, "  ")
 		if !ok {
-			t.Fatalf("malformed SHA256SUMS line %q", line)
+			t.Errorf("malformed SHA256SUMS line %q", line)
+			continue
 		}
 		b, found := Lookup(name)
 		if !found {
-			t.Fatalf("SHA256SUMS names %q, which is not embedded", name)
+			t.Errorf("SHA256SUMS names %q, which is not embedded", name)
+			continue
 		}
 		sum := sha256.Sum256(b)
 		if got := hex.EncodeToString(sum[:]); got != want {

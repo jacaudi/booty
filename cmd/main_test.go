@@ -226,12 +226,12 @@ func TestNodeReportsFlagRegistered(t *testing.T) {
 // TestRunTFTPListenFailureIsQuietAndClean proves a runtime startup error
 // (here: the TFTP port is taken) is returned without cobra's usage text.
 func TestRunTFTPListenFailureIsQuietAndClean(t *testing.T) {
-	pc, err := net.ListenPacket("udp", ":0")
+	pc, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp", ":0")
 	if err != nil {
 		t.Fatalf("occupy UDP port: %v", err)
 	}
 	defer pc.Close()
-	port := pc.LocalAddr().(*net.UDPAddr).Port
+	port := udpAddr(t, pc.LocalAddr()).Port
 
 	resetCmd(t)
 
@@ -273,12 +273,12 @@ func TestFlagParseErrorStillPrintsUsage(t *testing.T) {
 // before the TFTP server: with both a taken TFTP port and an unreadable key,
 // the key error wins.
 func TestRunBadNodeReportKeyFailsBeforeServicesStart(t *testing.T) {
-	pc, err := net.ListenPacket("udp", ":0")
+	pc, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp", ":0")
 	if err != nil {
 		t.Fatalf("occupy UDP port: %v", err)
 	}
 	defer pc.Close()
-	port := pc.LocalAddr().(*net.UDPAddr).Port
+	port := udpAddr(t, pc.LocalAddr()).Port
 
 	dataDir := t.TempDir()
 	// A directory where the key file belongs makes LoadOrCreateKey fail.
@@ -342,4 +342,14 @@ func TestWarnShadowedBootFiles(t *testing.T) {
 	if strings.Contains(got, "undionly.kpxe") || strings.Contains(got, "snponly.efi") {
 		t.Errorf("warned about a file that is absent or not a regular file:\n%s", got)
 	}
+}
+
+// udpAddr is a's *net.UDPAddr; a test that listens on UDP never sees another type.
+func udpAddr(t *testing.T, a net.Addr) *net.UDPAddr {
+	t.Helper()
+	u, ok := a.(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("address %v is %T, want *net.UDPAddr", a, a)
+	}
+	return u
 }

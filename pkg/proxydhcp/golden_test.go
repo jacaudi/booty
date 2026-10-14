@@ -15,7 +15,6 @@ import (
 	"github.com/insomniacslk/dhcp/iana"
 )
 
-//nolint:gochecknoglobals // ported from upstream verbatim
 var updateGolden = flag.Bool("update", false, "rewrite the golden ProxyDHCP replies under testdata/golden")
 
 // goldenCases are deterministic PXE and iPXE packets whose replies are

@@ -46,3 +46,14 @@ func stopWithTimeout(stop func(), d time.Duration) bool {
 		return false
 	}
 }
+
+// warnOnError adapts a Shutdown that returns the errors from closing its
+// sockets to a shutdownStep stop: nothing more can be done at that point, so
+// the failure is logged and shutdown goes on.
+func warnOnError(name string, stop func() error) func() {
+	return func() {
+		if err := stop(); err != nil {
+			slog.Warn("subsystem close failed", "subsystem", name, "err", err)
+		}
+	}
+}

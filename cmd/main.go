@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -426,7 +427,6 @@ func run(cmd *cobra.Command, argv []string) error {
 		return err
 	}
 	if viper.GetString(config.ServerIP) == "" {
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Info("serverIP autodetected", "ip", serverIP)
 	}
 	viper.Set(config.ServerIP, serverIP)
@@ -463,10 +463,8 @@ func run(cmd *cobra.Command, argv []string) error {
 		return fmt.Errorf("hardware: %w", err)
 	}
 	if bad, badErr := hardware.InvalidHostnames(); badErr != nil {
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Warn("hardware: hostname check failed", "err", badErr)
 	} else if len(bad) > 0 {
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Warn(
 			"hosts with hostnames that are not valid RFC 1123 names; "+
 				"control characters are stripped when rendering, fix them in the UI",
@@ -530,7 +528,7 @@ func run(cmd *cobra.Command, argv []string) error {
 		nodeReports = &bootyHTTP.NodeReports{Key: key}
 	}
 
-	warnShadowedBootFiles(viper.GetString(config.DataDir), boot.Names, slog.Default())
+	warnShadowedBootFiles(viper.GetString(config.DataDir), boot.Names(), slog.Default())
 
 	// Single cache reconciler replaces the per-OS version-check crons. Start it
 	// after the host store is loaded; it owns all target/version DB writes and
@@ -568,8 +566,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	})
 	if err != nil {
 		reconciler.Stop()
-		tftpServer.Shutdown()
-		return fmt.Errorf("http: %w", err)
+		return errors.Join(fmt.Errorf("http: %w", err), tftpServer.Shutdown())
 	}
 
 	// Start the proxyDHCP responder when enabled. Best-effort: nil when not
@@ -583,10 +580,8 @@ func run(cmd *cobra.Command, argv []string) error {
 	var runErr error
 	select {
 	case <-ctx.Done():
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Info("shutdown signal received")
 	case runErr = <-tftpErr:
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Error("TFTP server failed; shutting down", "err", runErr)
 	}
 
@@ -597,7 +592,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	// answering before the rest of the stack drains.
 	steps := []shutdownStep{}
 	if proxyDHCPServer != nil {
-		steps = append(steps, shutdownStep{name: "proxydhcp", stop: proxyDHCPServer.Shutdown})
+		steps = append(steps, shutdownStep{name: "proxydhcp", stop: warnOnError("proxydhcp", proxyDHCPServer.Shutdown)})
 	}
 	steps = append(steps,
 		shutdownStep{name: "http", stop: func() {
@@ -609,7 +604,7 @@ func run(cmd *cobra.Command, argv []string) error {
 		// The bound remains as a safety net; pin/tftp v3's single-port Shutdown
 		// returns promptly and Server.Shutdown closes the socket itself.
 		shutdownStep{name: "tftp", stop: func() {
-			if !stopWithTimeout(tftpServer.Shutdown, 5*time.Second) {
+			if !stopWithTimeout(warnOnError("tftp", tftpServer.Shutdown), 5*time.Second) {
 				slog.Warn("TFTP shutdown timed out; exiting anyway", "timeout", 5*time.Second)
 			}
 		}},

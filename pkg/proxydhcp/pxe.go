@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"slices"
 	"strings"
@@ -42,6 +43,8 @@ const (
 	ipxeUserClass   = "iPXE"
 )
 
+// Defaults for the Config boot file names: the embedded iPXE binaries for BIOS,
+// x86-64 UEFI and ARM64 UEFI clients, and the stub script iPXE chains to.
 const (
 	DefaultBIOSFile   = "undionly.kpxe"
 	DefaultEFIFile    = "ipxe.efi"
@@ -107,11 +110,10 @@ func handle(pkt *dhcpv4.DHCPv4, c Config, localPort int) (*dhcpv4.DHCPv4, bool) 
 	if pkt == nil || pkt.OpCode != dhcpv4.OpcodeBootRequest {
 		return nil, false
 	}
-	//nolint:sloglint // default logger: no injected logger in this package yet
 	log := slog.With("xid", pkt.TransactionID.String(), "mac", pkt.ClientHWAddr.String())
 
 	if !strings.HasPrefix(pkt.ClassIdentifier(), pxeClientPrefix) {
-		log.Debug("ProxyDHCP ignoring non-PXE packet", "classIdentifier", pkt.ClassIdentifier())
+		log.Debug("ProxyDHCP ignoring non-PXE packet", "class_identifier", pkt.ClassIdentifier())
 		return nil, false
 	}
 	archs := pkt.ClientArch()
@@ -124,11 +126,12 @@ func handle(pkt *dhcpv4.DHCPv4, c Config, localPort int) (*dhcpv4.DHCPv4, bool) 
 		return nil, false
 	}
 	if sid := pkt.ServerIdentifier(); sid != nil && !sid.Equal(c.ServerIP) {
-		log.Debug("ProxyDHCP ignoring packet addressed to another server", "serverIdentifier", sid)
+		log.Debug("ProxyDHCP ignoring packet addressed to another server", "server_identifier", sid)
 		return nil, false
 	}
 
-	switch pkt.MessageType() { //nolint:exhaustive // ported from upstream verbatim
+	//nolint:exhaustive // dhcpv4.MessageType is an external enum of which only DISCOVER and REQUEST are answered; default drops the rest
+	switch pkt.MessageType() {
 	case dhcpv4.MessageTypeDiscover:
 		if localPort != c.Port67 {
 			log.Debug("ProxyDHCP ignoring DISCOVER on the boot server port", "port", localPort)
@@ -206,7 +209,8 @@ func buildAck(pkt *dhcpv4.DHCPv4, c Config, arch iana.Arch, log *slog.Logger) (*
 // bootFileForArch maps the RFC 4578 client architecture to the iPXE binary
 // Booty serves over TFTP. Only x86 BIOS and x86-64 UEFI are shipped.
 func bootFileForArch(arch iana.Arch, c Config, log *slog.Logger) string {
-	switch arch { //nolint:exhaustive // ported from upstream verbatim
+	//nolint:exhaustive // iana.Arch is an external enum of which only the shipped architectures are mapped; default warns and falls back to the BIOS binary
+	switch arch {
 	case iana.INTEL_X86PC:
 		return c.BIOSFile
 	case iana.EFI_X86_64, iana.EFI_BC:
@@ -257,12 +261,12 @@ func isSet(ip net.IP) bool {
 // discovery control, a boot server list with only Booty, a one-entry boot
 // menu and a zero-timeout prompt so the client does not wait for a keypress.
 func offerVendorOptions(serverIP net.IP) []byte {
-	server := make([]byte, 0, 7) //nolint:mnd // ported from upstream verbatim
+	server := make([]byte, 0, 7)
 	server = binary.BigEndian.AppendUint16(server, pxeBootServerType)
 	server = append(server, 1)
 	server = append(server, serverIP.To4()...)
 
-	menu := make([]byte, 0, 3+len(pxeMenuText)) //nolint:mnd // ported from upstream verbatim
+	menu := make([]byte, 0, 3+len(pxeMenuText))
 	menu = binary.BigEndian.AppendUint16(menu, pxeBootServerType)
 	menu = append(menu, byte(len(pxeMenuText)))
 	menu = append(menu, pxeMenuText...)
@@ -295,8 +299,10 @@ func ackVendorOptions(req *dhcpv4.DHCPv4) []byte {
 }
 
 func appendSubOption(b []byte, tag uint8, value []byte) []byte {
-	b = append(b, tag, byte(len(value))) //nolint:gosec // ported from upstream verbatim
-	return append(b, value...)
+	// A PXE sub-option carries at most 255 bytes; every caller passes far fewer.
+	n := min(len(value), math.MaxUint8)
+	b = append(b, tag, byte(n))
+	return append(b, value[:n]...)
 }
 
 // parseSubOptions decodes a PXE option 43 payload into tag -> value. It
@@ -316,7 +322,7 @@ func parseSubOptions(b []byte) (map[uint8][]byte, error) {
 			return nil, fmt.Errorf("sub-option %d length %d exceeds data", tag, n)
 		}
 		out[tag] = b[i+2 : i+2+n]
-		i += 2 + n //nolint:mnd // ported from upstream verbatim
+		i += 2 + n
 	}
 	return nil, fmt.Errorf("missing end tag")
 }
