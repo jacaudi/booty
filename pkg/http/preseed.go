@@ -41,14 +41,20 @@ func preseedHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
 			// familyAllowsKind / authoringKindsForFamily.
 			if src, kind, ok := resolveConfig(store, host); ok && familyAllowsKind("preseed", kind) {
 				vars := preseedVars(store, host)
-				out, ct, err := renderPreseed(n, store, host, kind, src, vars)
+				healthCmd := ""
+				if kind == kindDebianConfig {
+					if s, u, ok := n.script(r.Context(), store, host); ok {
+						healthCmd = nodereport.DebianLateCommand(s, u)
+					}
+				}
+				out, ct, err := renderPreseed(kind, src, vars, healthCmd)
 				if err != nil {
 					writeError(w, http.StatusInternalServerError, "render bound preseed", err)
 					return
 				}
 				out = withDVDMirror(store, host, vars.ServerIP, out)
 				w.Header().Set("Content-Type", ct)
-				_, _ = w.Write(out)
+				writeBody(w, out)
 				return
 			}
 		}
@@ -72,26 +78,23 @@ func preseedHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
 		}
 		out = withDVDMirror(store, host, vars.ServerIP, out)
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write(out)
+		writeBody(w, out)
 	}
 }
 
-// renderPreseed is renderConfig, except that a debianconfig for a host with
-// node reports on also gets the health unit and curl.
-func renderPreseed(n *NodeReports, store *db.Store, host *hardware.Host, kind string, src []byte, vars TemplateVars,
-) ([]byte, string, error) {
-	if kind == kindDebianConfig {
-		if s, u, ok := n.script(store, host); ok {
-			rendered, rerr := executeTemplate(src, vars)
-			if rerr != nil {
-				return nil, "", rerr
-			}
-			out, err := translateDebianConfigWith(rendered, preseedOptions{
-				ExtraLateCommand: nodereport.DebianLateCommand(s, u),
-				ExtraPackages:    []string{"curl"},
-			})
-			return out, contentTypeText, err
+// renderPreseed is renderConfig, except that a debianconfig with a non-empty
+// healthCmd (the node report late_command) also gets that command and curl.
+func renderPreseed(kind string, src []byte, vars TemplateVars, healthCmd string) ([]byte, string, error) {
+	if kind == kindDebianConfig && healthCmd != "" {
+		rendered, rerr := executeTemplate(src, vars)
+		if rerr != nil {
+			return nil, "", rerr
 		}
+		out, err := translateDebianConfigWith(rendered, preseedOptions{
+			ExtraLateCommand: healthCmd,
+			ExtraPackages:    []string{"curl"},
+		})
+		return out, contentTypeText, err
 	}
 	out, contentType, _, err := renderConfig(kind, src, vars)
 	return out, contentType, err

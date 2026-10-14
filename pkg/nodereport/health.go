@@ -1,3 +1,7 @@
+// Package nodereport is the node health report: the Health model and its
+// server-side caps, the per-host HMAC token and key file, the rate limiter,
+// and the script and unit that booty injects into Ignition and Debian
+// installs so a node POSTs its report to /node/report.
 package nodereport
 
 import (
@@ -14,7 +18,7 @@ import (
 // excerpt of the boot's error-level journal, and the machine it runs on.
 // ReceivedAt and the caps below are booty's; everything else is the node's
 // word. booty records the latest report per host.
-type Health struct { //nolint:recvcheck // Summary has a value receiver by design; Normalize and SameBoot are ported verbatim
+type Health struct {
 	ReceivedAt string `json:"receivedAt"`
 	// BootID is /proc/sys/kernel/random/boot_id, so a report can be told
 	// from the previous boot's and a retried POST from a new boot.
@@ -57,6 +61,7 @@ const (
 	maxHealthFieldTruncMsg = "…"
 )
 
+// ErrInvalidHealth is wrapped by every Health.Normalize rejection.
 var ErrInvalidHealth = errors.New("invalid health report")
 
 // Normalize trims and caps every field of a report so that whatever a node
@@ -150,7 +155,7 @@ type Summary struct {
 }
 
 // Summary condenses a report for the host list.
-func (h Health) Summary() Summary {
+func (h *Health) Summary() Summary {
 	return Summary{
 		Running:         h.Running,
 		Kernel:          h.Kernel,

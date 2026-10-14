@@ -294,7 +294,7 @@ func TestMachineConfig_ValidatesHostnameQuery(t *testing.T) {
 		{"hostname=", http.StatusOK, ""},
 		{"hostname=node-x", http.StatusOK, "node-x"},
 	} {
-		req := httptest.NewRequest(http.MethodGet, "/machineconfig?"+tc.query, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?"+tc.query, http.NoBody)
 		req.RemoteAddr = "192.0.2.1:12345"
 		rec := httptest.NewRecorder()
 		machineConfigHandler(store, failingARP)(rec, req)
@@ -341,12 +341,13 @@ func TestMachineConfig_InvalidHostnameQueryIgnoredForKnownHost(t *testing.T) {
 		{"aa:bb:cc:dd:ee:01", "hostname: stored-01\n"},
 		{"aa:bb:cc:dd:ee:02", "hostname: \n"},
 	} {
-		req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+tc.mac+"&hostname=bad_name", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?mac="+tc.mac+"&hostname=bad_name", http.NoBody)
 		req.RemoteAddr = "192.0.2.1:12345"
 		rec := httptest.NewRecorder()
 		machineConfigHandler(store, failingARP)(rec, req)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("%s: status = %d, want 200; body=%q", tc.mac, rec.Code, rec.Body.String())
+			t.Errorf("%s: status = %d, want 200; body=%q", tc.mac, rec.Code, rec.Body.String())
+			continue
 		}
 		if body := rec.Body.String(); !strings.Contains(body, tc.contains) || strings.Contains(body, "bad_name") {
 			t.Errorf("%s: body %q, want %q and no bad_name", tc.mac, body, tc.contains)

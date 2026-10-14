@@ -28,36 +28,13 @@ func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 
 // machineConfigHandler is handleMachineConfigRequest with the ARP lookup
 // injected.
-//
-//nolint:gocognit // pre-existing handler complexity; this change only injects the ARP lookup and gates members, then filters the hostname
 func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("machineconfig request", "uri", r.RequestURI)
 
-		macAddress := r.URL.Query().Get("mac")
-		if macAddress == "" {
-			ip, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				slog.Warn("error splitting user ip; not IP:port", "remote", r.RemoteAddr)
-			}
-			if hwAddr, arpErr := arp(net.ParseIP(ip)); arpErr != nil {
-				//nolint:sloglint // default logger: no injected logger in this package yet
-				slog.Warn("error with ARP request", "err", arpErr)
-			} else {
-				macAddress = hwAddr.String()
-			}
-		}
-
+		macAddress := machineConfigMAC(r, arp)
 		hostname := queryHostname(r, macAddress)
-
-		var host *hardware.Host
-		if macAddress != "" {
-			h, err := hardware.GetMacAddress(macAddress)
-			if err != nil && !errors.Is(err, hardware.ErrNotFound) {
-				slog.Warn("error looking up host", "mac", macAddress, "err", err)
-			}
-			host = h
-		}
+		host := machineConfigHost(macAddress)
 
 		// P6 top rung: a cluster member serves its ACTIVE frozen, encrypted
 		// node config VERBATIM (materialize-and-freeze, design §5). A member
@@ -78,72 +55,116 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 			return
 		}
 
-		if host != nil {
-			if src, kind, ok := resolveConfig(store, host); ok && kind == "machineconfig" {
-				out, ct, _, err := renderConfig("machineconfig", src, machineConfigVars(store, r, host, hostname))
-				if err != nil {
-					writeError(w, http.StatusInternalServerError, "render bound machineconfig", err)
-					return
-				}
-				w.Header().Set("Content-Type", ct)
-				_, _ = w.Write(out)
-				return
-			}
-		}
-
-		schematic := viper.GetString(config.TalosSchematic)
-		templateData := struct {
-			Hostname       string
-			MAC            string
-			IP             string
-			UUID           string
-			Serial         string
-			ServerIP       string
-			ServerHTTPPort string
-			JoinString     string
-			Schematic      string
-		}{
-			Hostname:       hostname,
-			UUID:           r.URL.Query().Get("uuid"),
-			Serial:         r.URL.Query().Get("serial"),
-			ServerIP:       viper.GetString(config.ServerIP),
-			ServerHTTPPort: viper.GetString(config.ServerHttpPort),
-			JoinString:     viper.GetString(config.JoinString),
-			Schematic:      schematic,
-		}
-		// Unlike ignition's reboot-on-unknown, Talos legitimately fetches its config
-		// before it exists in the DB (identity comes from the query uuid/serial/hostname
-		// at first boot), so render a host-less config rather than forcing a reboot.
-		if host != nil {
-			if host.Hostname != "" {
-				templateData.Hostname = hardware.StripControl(host.Hostname)
-			}
-			templateData.MAC = host.MAC
-			templateData.IP = host.IP
-			if host.Schematic != "" {
-				templateData.Schematic = host.Schematic
-			}
-		}
-
-		path, err := resolveWithinDataDir(viper.GetString(config.TalosConfigFile))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "machineconfig template unavailable", err)
+		if host != nil && serveBoundMachineConfig(w, r, store, host, hostname) {
 			return
 		}
-		t, err := template.ParseFiles(path)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "machineconfig template unavailable", err)
-			return
-		}
-		var out bytes.Buffer
-		if err := t.Execute(&out, templateData); err != nil {
-			writeError(w, http.StatusInternalServerError, "machineconfig render failed", err)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/yaml")
-		_, _ = w.Write(out.Bytes())
+		serveFileMachineConfig(w, r, host, hostname)
 	}
+}
+
+// machineConfigMAC is the MAC the request names: ?mac= when present, else what
+// arp resolves for the client's address, else "".
+func machineConfigMAC(r *http.Request, arp arpFunc) string {
+	if mac := r.URL.Query().Get("mac"); mac != "" {
+		return mac
+	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		slog.WarnContext(r.Context(), "error splitting user ip; not IP:port", "remote", r.RemoteAddr)
+	}
+	hwAddr, err := arp(net.ParseIP(ip))
+	if err != nil {
+		slog.WarnContext(r.Context(), "error with ARP request", "err", err)
+		return ""
+	}
+	return hwAddr.String()
+}
+
+// machineConfigHost loads the host for macAddress, or nil when the MAC is
+// empty, unknown or the lookup fails (a failure is logged, not fatal).
+func machineConfigHost(macAddress string) *hardware.Host {
+	if macAddress == "" {
+		return nil
+	}
+	host, err := hardware.GetMacAddress(macAddress)
+	if err != nil && !errors.Is(err, hardware.ErrNotFound) {
+		slog.Warn("error looking up host", "mac", macAddress, "err", err)
+	}
+	return host
+}
+
+// serveBoundMachineConfig serves the DB-resolved config bound to host (rungs
+// 1–2) and reports whether it answered.
+func serveBoundMachineConfig(w http.ResponseWriter, r *http.Request, store *db.Store, host *hardware.Host, hostname string) bool {
+	src, kind, ok := resolveConfig(store, host)
+	if !ok || kind != "machineconfig" {
+		return false
+	}
+	out, ct, _, err := renderConfig("machineconfig", src, machineConfigVars(store, r, host, hostname))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "render bound machineconfig", err)
+		return true
+	}
+	w.Header().Set("Content-Type", ct)
+	writeBody(w, out)
+	return true
+}
+
+// serveFileMachineConfig renders the <dataDir>/<talosConfigFile> template (rungs
+// 3–4). host is nil for an unidentified client.
+func serveFileMachineConfig(w http.ResponseWriter, r *http.Request, host *hardware.Host, hostname string) {
+	schematic := viper.GetString(config.TalosSchematic)
+	templateData := struct {
+		Hostname       string
+		MAC            string
+		IP             string
+		UUID           string
+		Serial         string
+		ServerIP       string
+		ServerHTTPPort string
+		JoinString     string
+		Schematic      string
+	}{
+		Hostname:       hostname,
+		UUID:           r.URL.Query().Get("uuid"),
+		Serial:         r.URL.Query().Get("serial"),
+		ServerIP:       viper.GetString(config.ServerIP),
+		ServerHTTPPort: viper.GetString(config.ServerHttpPort),
+		JoinString:     viper.GetString(config.JoinString),
+		Schematic:      schematic,
+	}
+	// Unlike ignition's reboot-on-unknown, Talos legitimately fetches its config
+	// before it exists in the DB (identity comes from the query uuid/serial/hostname
+	// at first boot), so render a host-less config rather than forcing a reboot.
+	if host != nil {
+		if host.Hostname != "" {
+			templateData.Hostname = hardware.StripControl(host.Hostname)
+		}
+		templateData.MAC = host.MAC
+		templateData.IP = host.IP
+		if host.Schematic != "" {
+			templateData.Schematic = host.Schematic
+		}
+	}
+
+	path, err := resolveWithinDataDir(viper.GetString(config.TalosConfigFile))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "machineconfig template unavailable", err)
+		return
+	}
+	t, err := template.ParseFiles(path)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "machineconfig template unavailable", err)
+		return
+	}
+	var out bytes.Buffer
+	if err := t.Execute(&out, templateData); err != nil {
+		writeError(w, http.StatusInternalServerError, "machineconfig render failed", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/yaml")
+	writeBody(w, out.Bytes())
 }
 
 // machineConfigVars populates TemplateVars for the TALOS family: .ServerIP is
@@ -168,9 +189,7 @@ func queryHostname(r *http.Request, macAddress string) string {
 	if err == nil {
 		return h
 	}
-	mac, _ := hardware.NormalizeMAC(macAddress) // "" when it does not parse
-	//nolint:sloglint // default logger: no injected logger in this package yet
-	slog.Warn("machineconfig: ignoring invalid hostname", "mac", mac, "err", err)
+	slog.WarnContext(r.Context(), "machineconfig: ignoring invalid hostname", "mac", loggableMAC(macAddress), "err", err)
 	return ""
 }
 

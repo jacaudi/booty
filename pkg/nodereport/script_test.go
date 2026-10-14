@@ -69,7 +69,7 @@ type healthBody struct {
 // checks the JSON the real curl POSTs: escaping of quotes, backslashes,
 // tabs and control characters, the per-line and total journal caps, and
 // every field.
-func TestHealthReportScript(t *testing.T) { //nolint:cyclop,gocognit,gocyclo // ported from upstream verbatim
+func TestHealthReportScript(t *testing.T) {
 	for _, tool := range []string{"bash", "curl", "uname"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not installed", tool)
@@ -150,7 +150,7 @@ printf '%s\n' "booty-k8s-join.service loaded failed failed Join" "var-lib-contai
 
 	run := func(t *testing.T, extraEnv ...string) string {
 		t.Helper()
-		cmd := exec.Command("bash", script)
+		cmd := exec.CommandContext(t.Context(), "bash", script)
 		cmd.Env = append(append(os.Environ(),
 			"PATH="+stubs+string(os.PathListSeparator)+os.Getenv("PATH"),
 			"BOOTY_OS_RELEASE="+filepath.Join(dir, "os-release"),
@@ -180,7 +180,7 @@ printf '%s\n' "booty-k8s-join.service loaded failed failed Join" "var-lib-contai
 	if err := json.Unmarshal([]byte(bodies[0]), &got); err != nil {
 		t.Fatalf("body is not JSON: %v\n%s", err, bodies[0])
 	}
-	kernel, err := exec.Command("uname", "-r").Output()
+	kernel, err := exec.CommandContext(t.Context(), "uname", "-r").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,8 @@ printf '%s\n' "booty-k8s-join.service loaded failed failed Join" "var-lib-contai
 	total := 0
 	for _, l := range got.JournalErrors[:len(got.JournalErrors)-2] {
 		if len(l) != 300 || !strings.HasPrefix(l, "xxx") {
-			t.Fatalf("lines must be clipped to 300 chars, got %d", len(l))
+			t.Errorf("lines must be clipped to 300 chars, got %d", len(l))
+			continue
 		}
 		total += len(l)
 	}
@@ -242,7 +243,7 @@ func TestHealthReportScriptEmptyLists(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "os-release"), "ID=flatcar\nVERSION_ID=4757.2.0\n")
 	script := filepath.Join(dir, "health-report")
 	writeFile(t, script, mustScript(t, strings.TrimPrefix(srv.URL, "http://")))
-	cmd := exec.Command("bash", script)
+	cmd := exec.CommandContext(t.Context(), "bash", script)
 	cmd.Env = append(
 		os.Environ(),
 		"PATH="+stubs+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -284,7 +285,7 @@ func TestHealthReportScriptFailsWhenBootyRefuses(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "os-release"), "ID=flatcar\nVERSION_ID=4757.2.0\n")
 	script := filepath.Join(dir, "health-report")
 	writeFile(t, script, mustScript(t, strings.TrimPrefix(srv.URL, "http://")))
-	cmd := exec.Command("bash", script)
+	cmd := exec.CommandContext(t.Context(), "bash", script)
 	cmd.Env = append(
 		os.Environ(),
 		"PATH="+stubs+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -346,7 +347,7 @@ func TestScriptUsesEmbeddedMAC(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "os-release"), "ID=flatcar\nVERSION_ID=4757.2.0\n")
 	script := filepath.Join(dir, "health-report")
 	writeFile(t, script, mustScript(t, strings.TrimPrefix(srv.URL, "http://")))
-	cmd := exec.Command("bash", script)
+	cmd := exec.CommandContext(t.Context(), "bash", script)
 	cmd.Env = append(os.Environ(), "PATH="+stubs+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"BOOTY_OS_RELEASE="+filepath.Join(dir, "os-release"), "BOOTY_SYS="+filepath.Join(dir, "nosys"),
 		"BOOTY_PROC="+filepath.Join(dir, "noproc"), "BOOTY_MAC=")

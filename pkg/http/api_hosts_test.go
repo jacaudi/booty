@@ -722,7 +722,7 @@ func storeHealth(t *testing.T, s *db.Store, mac string, h nodereport.Health) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.UpsertHostHealth(mac, h.ReceivedAt, b); err != nil {
+	if err = s.UpsertHostHealth(t.Context(), mac, h.ReceivedAt, b); err != nil {
 		t.Fatalf("UpsertHostHealth: %v", err)
 	}
 }
@@ -841,7 +841,7 @@ func TestRotateHostReportTokenInvalidatesOldToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	send := func(remote, token string) int {
-		req := httptest.NewRequest(http.MethodPost, "/node/report?mac="+mac, strings.NewReader(reportBody))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/node/report?mac="+mac, strings.NewReader(reportBody))
 		req.RemoteAddr = remote
 		req.Header.Set("X-Booty-Node-Token", token)
 		w := httptest.NewRecorder()

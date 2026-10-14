@@ -121,7 +121,7 @@ func registerHosts(api huma.API, deps APIDeps) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError("list hosts", err)
 		}
-		healths, err := deps.Store.ListHostHealthSummaries()
+		healths, err := deps.Store.ListHostHealthSummaries(ctx)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("list host health", err)
 		}
@@ -132,8 +132,7 @@ func registerHosts(api huma.API, deps APIDeps) {
 			}
 			sum, reported := healths[h.MAC]
 			if reported && sum == nil {
-				//nolint:sloglint // default logger: no injected logger in this package yet
-				slog.Warn("stored node report unreadable", "mac", h.MAC)
+				slog.WarnContext(ctx, "stored node report unreadable", "mac", h.MAC)
 			}
 			out.Body.Hosts = append(out.Body.Hosts, hostView{Host: h, Health: sum})
 		}
@@ -492,7 +491,7 @@ func registerGetHostHealth(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "get-host-health", Method: http.MethodGet, Path: "/hosts/{mac}/health",
 		Summary: "Get a host's latest node health report", Tags: []string{"hosts"},
-	}, func(_ context.Context, in *struct {
+	}, func(ctx context.Context, in *struct {
 		MAC string `path:"mac"`
 	}) (*struct{ Body nodereport.Health }, error) {
 		mac, err := hardware.NormalizeMAC(in.MAC)
@@ -506,7 +505,7 @@ func registerGetHostHealth(api huma.API, deps APIDeps) {
 		if !exists {
 			return nil, huma.Error404NotFound("host not found")
 		}
-		_, raw, err := deps.Store.GetHostHealth(mac)
+		_, raw, err := deps.Store.GetHostHealth(ctx, mac)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, huma.Error404NotFound("no report yet")
 		}
@@ -525,7 +524,7 @@ func registerRotateReportToken(api huma.API, deps APIDeps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "rotate-host-report-token", Method: http.MethodPost, Path: "/hosts/{mac}/report-token/rotate",
 		Summary: "Rotate a host's node report token", Tags: []string{"hosts"},
-	}, func(_ context.Context, in *struct {
+	}, func(ctx context.Context, in *struct {
 		MAC string `path:"mac"`
 	}) (*struct {
 		Body struct {
@@ -546,7 +545,7 @@ func registerRotateReportToken(api huma.API, deps APIDeps) {
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
 		}
-		gen, err := deps.Store.BumpHostReportTokenGen(mac)
+		gen, err := deps.Store.BumpHostReportTokenGen(ctx, mac)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, huma.Error404NotFound("host not found")
 		}

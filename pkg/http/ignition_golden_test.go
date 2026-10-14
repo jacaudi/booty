@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"flag"
 	"net/http"
 	"net/http/httptest"
@@ -8,13 +9,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	ignitionConfig "github.com/coreos/ignition/v2/config"
+	ignitioncfg "github.com/coreos/ignition/v2/config"
 	"github.com/spf13/viper"
 
 	"github.com/jeefy/booty/pkg/config"
 )
 
-//nolint:gochecknoglobals // test flag, must be package-level for the flag package
 var updateIgnition = flag.Bool("update-ignition", false, "rewrite ignition goldens")
 
 // compareIgnitionGolden compares got with testdata/ignition/<name>, rewriting
@@ -31,7 +31,7 @@ func compareIgnitionGolden(t *testing.T, name string, got []byte) {
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
 	}
-	if string(want) != string(got) {
+	if !bytes.Equal(want, got) {
 		t.Errorf("%s changed.\nwant:\n%s\ngot:\n%s", name, want, got)
 	}
 }
@@ -55,7 +55,7 @@ func TestIgnitionOutputsStable(t *testing.T) {
 		viper.Set(config.ServerIP, "127.0.0.1")
 		viper.Set(config.ServerHttpPort, "80")
 
-		req := httptest.NewRequest(http.MethodGet, "/ignition", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ignition", http.NoBody)
 		req.RemoteAddr = "192.0.2.1:12345"
 		rec := httptest.NewRecorder()
 		handleIgnitionRequest(ignitionTestStore(t))(rec, req)
@@ -95,12 +95,12 @@ func TestRebootConfigIsValidIgnition(t *testing.T) {
 	viper.Set(config.ServerIP, "127.0.0.1")
 	viper.Set(config.ServerHttpPort, "80")
 
-	req := httptest.NewRequest(http.MethodGet, "/ignition", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ignition", http.NoBody)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
 	handleIgnitionRequest(ignitionTestStore(t))(rec, req)
 
-	_, rep, err := ignitionConfig.Parse(rec.Body.Bytes())
+	_, rep, err := ignitioncfg.Parse(rec.Body.Bytes())
 	if rep.IsFatal() {
 		t.Fatalf("reboot config is not valid Ignition: %v\n%s", err, rep.String())
 	}

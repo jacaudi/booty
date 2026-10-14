@@ -44,3 +44,13 @@ func requestFromMAC(r *http.Request, mac string, arp arpFunc) bool {
 	}
 	return got == want
 }
+
+// loggableMAC is raw normalised, or "" when it does not parse. Log this, never
+// the raw (attacker-controlled) query value.
+func loggableMAC(raw string) string {
+	mac, err := hardware.NormalizeMAC(raw)
+	if err != nil {
+		return ""
+	}
+	return mac
+}

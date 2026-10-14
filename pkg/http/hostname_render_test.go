@@ -46,7 +46,7 @@ func TestIgnitionFileTemplateStripsHostname(t *testing.T) {
 		"    - path: /etc/hostname\n      contents:\n        inline: {{ .Hostname }}\n")
 
 	rec := httptest.NewRecorder()
-	handleIgnitionRequest(s)(rec, httptest.NewRequest(http.MethodGet, "/ignition.json?mac="+mac, nil))
+	handleIgnitionRequest(s)(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ignition.json?mac="+mac, http.NoBody))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
 	}
@@ -63,7 +63,7 @@ func TestMachineConfigFileTemplateStripsHostname(t *testing.T) {
 	writeFile(t, "config/machineconfig.yaml", "machine:\n  network:\n    hostname: {{ .Hostname }}\n")
 
 	rec := httptest.NewRecorder()
-	handleMachineConfigRequest(s)(rec, httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil))
+	handleMachineConfigRequest(s)(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?mac="+mac, http.NoBody))
 	body := rec.Body.String()
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, body)
@@ -81,7 +81,7 @@ func TestPreseedFileTemplateStripsHostname(t *testing.T) {
 	writeFile(t, "config/preseed.cfg", "d-i netcfg/get_hostname string {{ .Hostname }}\n")
 
 	rec := httptest.NewRecorder()
-	handlePreseedRequest(s)(rec, httptest.NewRequest(http.MethodGet, "/preseed?mac="+mac, nil))
+	handlePreseedRequest(s)(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/preseed?mac="+mac, http.NoBody))
 	body := rec.Body.String()
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, body)

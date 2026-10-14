@@ -290,7 +290,7 @@ func TestDataFileHandler_SymlinksStayInDataDir(t *testing.T) {
 	if code, body, _ := getData(mux, "/data/public/rel"); code != http.StatusOK || string(body) != "public bytes" {
 		t.Errorf("/data/public/rel (-> ok.txt) = %d %q, want 200 %q", code, body, "public bytes")
 	}
-	req := httptest.NewRequest(http.MethodGet, "/data/public/ok.txt", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/data/public/ok.txt", http.NoBody)
 	req.Header.Set("Range", "bytes=0-5")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)

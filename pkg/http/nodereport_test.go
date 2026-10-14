@@ -42,8 +42,9 @@ func rowARP(ip net.IP) (net.HardwareAddr, error) {
 	return nil, errors.New("no reply")
 }
 
-func postReport(rr *reportReceiver, remote, query, token, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/node/report"+query, strings.NewReader(body))
+func postReport(t *testing.T, rr *reportReceiver, remote, query, token, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/node/report"+query, strings.NewReader(body))
 	req.RemoteAddr = remote
 	if token != "" {
 		req.Header.Set("X-Booty-Node-Token", token)
@@ -65,14 +66,14 @@ func TestNodeReportStatuses(t *testing.T) {
 			"malformed MAC",
 			http.StatusBadRequest,
 			func(_ *testing.T, rr *reportReceiver, _ *db.Store, row int) *httptest.ResponseRecorder {
-				return postReport(rr, fmt.Sprintf("10.1.0.%d:1000", row), "?mac=zz", "x", reportBody)
+				return postReport(t, rr, fmt.Sprintf("10.1.0.%d:1000", row), "?mac=zz", "x", reportBody)
 			},
 		},
 		{
 			"missing token header",
 			http.StatusUnauthorized,
 			func(_ *testing.T, rr *reportReceiver, _ *db.Store, row int) *httptest.ResponseRecorder {
-				return postReport(rr, fmt.Sprintf("10.1.0.%d:1000", row), "?mac="+nodeReportMAC(row), "", reportBody)
+				return postReport(t, rr, fmt.Sprintf("10.1.0.%d:1000", row), "?mac="+nodeReportMAC(row), "", reportBody)
 			},
 		},
 		{
@@ -80,7 +81,7 @@ func TestNodeReportStatuses(t *testing.T) {
 			http.StatusUnauthorized,
 			func(_ *testing.T, rr *reportReceiver, _ *db.Store, row int) *httptest.ResponseRecorder {
 				mac := "aa:bb:cc:dd:ee:ff"
-				return postReport(
+				return postReport(t,
 					rr,
 					fmt.Sprintf("10.1.0.%d:1000", row),
 					"?mac="+mac,
@@ -93,8 +94,9 @@ func TestNodeReportStatuses(t *testing.T) {
 			"token for another host",
 			http.StatusUnauthorized,
 			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				t.Helper()
 				seedReportHost(t, s, nodeReportMAC(0))
-				return postReport(
+				return postReport(t,
 					rr,
 					fmt.Sprintf("10.1.0.%d:1000", row),
 					"?mac="+nodeReportMAC(0),
@@ -107,16 +109,17 @@ func TestNodeReportStatuses(t *testing.T) {
 			"valid",
 			http.StatusNoContent,
 			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				t.Helper()
 				mac := nodeReportMAC(row)
 				seedReportHost(t, s, mac)
-				w := postReport(
+				w := postReport(t,
 					rr,
 					fmt.Sprintf("10.1.0.%d:1000", row),
 					"?mac="+mac,
 					nodereport.Token(key, mac, 0),
 					reportBody,
 				)
-				at, rep, err := s.GetHostHealth(mac)
+				at, rep, err := s.GetHostHealth(t.Context(), mac)
 				if err != nil {
 					t.Fatalf("GetHostHealth: %v", err)
 				}
@@ -131,10 +134,11 @@ func TestNodeReportStatuses(t *testing.T) {
 			"second valid report within 10 s",
 			http.StatusTooManyRequests,
 			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				t.Helper()
 				mac := nodeReportMAC(row)
 				seedReportHost(t, s, mac)
 				remote := fmt.Sprintf("10.1.0.%d:1000", row)
-				if first := postReport(
+				if first := postReport(t,
 					rr,
 					remote,
 					"?mac="+mac,
@@ -143,17 +147,18 @@ func TestNodeReportStatuses(t *testing.T) {
 				); first.Code != http.StatusNoContent {
 					t.Fatalf("first report = %d, want 204", first.Code)
 				}
-				return postReport(rr, remote, "?mac="+mac, nodereport.Token(key, mac, 0), reportBody)
+				return postReport(t, rr, remote, "?mac="+mac, nodereport.Token(key, mac, 0), reportBody)
 			},
 		},
 		{
 			"body over 64 KiB",
 			http.StatusRequestEntityTooLarge,
 			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				t.Helper()
 				mac := nodeReportMAC(row)
 				seedReportHost(t, s, mac)
 				big := `{"running":"` + strings.Repeat("a", 70<<10) + `"}`
-				return postReport(
+				return postReport(t,
 					rr,
 					fmt.Sprintf("10.1.0.%d:1000", row),
 					"?mac="+mac,
@@ -166,9 +171,10 @@ func TestNodeReportStatuses(t *testing.T) {
 			"bad firmware",
 			http.StatusBadRequest,
 			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				t.Helper()
 				mac := nodeReportMAC(row)
 				seedReportHost(t, s, mac)
-				return postReport(
+				return postReport(t,
 					rr,
 					fmt.Sprintf("10.1.0.%d:1000", row),
 					"?mac="+mac,
@@ -181,9 +187,10 @@ func TestNodeReportStatuses(t *testing.T) {
 			"undecodable JSON",
 			http.StatusBadRequest,
 			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				t.Helper()
 				mac := nodeReportMAC(row)
 				seedReportHost(t, s, mac)
-				return postReport(
+				return postReport(t,
 					rr,
 					fmt.Sprintf("10.1.0.%d:1000", row),
 					"?mac="+mac,
@@ -196,12 +203,13 @@ func TestNodeReportStatuses(t *testing.T) {
 			"stale token after bump",
 			http.StatusUnauthorized,
 			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				t.Helper()
 				mac := nodeReportMAC(row)
 				seedReportHost(t, s, mac)
-				if _, err := s.BumpHostReportTokenGen(mac); err != nil {
+				if _, err := s.BumpHostReportTokenGen(t.Context(), mac); err != nil {
 					t.Fatal(err)
 				}
-				return postReport(
+				return postReport(t,
 					rr,
 					fmt.Sprintf("10.1.0.%d:1000", row),
 					"?mac="+mac,
@@ -214,10 +222,11 @@ func TestNodeReportStatuses(t *testing.T) {
 			"valid token, ARP names another MAC",
 			http.StatusUnauthorized,
 			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				t.Helper()
 				mac := nodeReportMAC(0)
 				seedReportHost(t, s, mac)
 				rr.arp = fixedARP("aa:bb:cc:dd:ee:99")
-				return postReport(
+				return postReport(t,
 					rr,
 					fmt.Sprintf("10.1.0.%d:1000", row),
 					"?mac="+mac,
@@ -230,10 +239,11 @@ func TestNodeReportStatuses(t *testing.T) {
 			"valid token, ARP fails",
 			http.StatusUnauthorized,
 			func(t *testing.T, rr *reportReceiver, s *db.Store, row int) *httptest.ResponseRecorder {
+				t.Helper()
 				mac := nodeReportMAC(0)
 				seedReportHost(t, s, mac)
 				rr.arp = failingARP
-				return postReport(
+				return postReport(t,
 					rr,
 					fmt.Sprintf("10.1.0.%d:1000", row),
 					"?mac="+mac,
@@ -261,7 +271,7 @@ func TestNodeReportMethodNotAllowed(t *testing.T) {
 	s := servingStore(t)
 	rr := newReportReceiver(s, nodeReportKey(), nodeReportClock(), rowARP)
 	w := httptest.NewRecorder()
-	rr.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/node/report?mac="+nodeReportMAC(0), nil))
+	rr.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/node/report?mac="+nodeReportMAC(0), http.NoBody))
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", w.Code)
 	}
@@ -272,7 +282,7 @@ func TestNodeReportFeatureOff(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(
 		w,
-		httptest.NewRequest(http.MethodPost, "/node/report?mac="+nodeReportMAC(0), strings.NewReader(reportBody)),
+		httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/node/report?mac="+nodeReportMAC(0), strings.NewReader(reportBody)),
 	)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", w.Code)
@@ -299,25 +309,25 @@ func TestNodeReport401BodiesIdentical(t *testing.T) {
 	seedReportHost(t, s, nodeReportMAC(1))
 	rr := newReportReceiver(s, key, nodeReportClock(), rowARP)
 
-	missing := postReport(rr, "10.1.0.1:1000", "?mac="+nodeReportMAC(0), "", reportBody)
-	unknown := postReport(
+	missing := postReport(t, rr, "10.1.0.1:1000", "?mac="+nodeReportMAC(0), "", reportBody)
+	unknown := postReport(t,
 		rr,
 		"10.1.0.2:1000",
 		"?mac=aa:bb:cc:dd:ee:ff",
 		nodereport.Token(key, "aa:bb:cc:dd:ee:ff", 0),
 		reportBody,
 	)
-	other := postReport(
+	other := postReport(t,
 		rr,
 		"10.1.0.3:1000",
 		"?mac="+nodeReportMAC(0),
 		nodereport.Token(key, nodeReportMAC(1), 0),
 		reportBody,
 	)
-	garbage := postReport(rr, "10.1.0.4:1000", "?mac="+nodeReportMAC(0), "not-a-token", reportBody)
+	garbage := postReport(t, rr, "10.1.0.4:1000", "?mac="+nodeReportMAC(0), "not-a-token", reportBody)
 	// A valid token from an address that ARP-resolves to another MAC
 	// (10.1.0.1 answers as nodeReportMAC(1)).
-	arpMismatch := postReport(
+	arpMismatch := postReport(t,
 		rr,
 		"10.1.0.1:1000",
 		"?mac="+nodeReportMAC(0),
@@ -349,14 +359,14 @@ func TestNodeReportFloodHitsPerIPLimitBeforeDB(t *testing.T) {
 	rr := newReportReceiver(s, nodeReportKey(), nodeReportClock(), rowARP)
 	for i := 1; i <= 10; i++ {
 		mac := fmt.Sprintf("aa:bb:cc:00:00:%02x", i)
-		if w := postReport(
+		if w := postReport(t,
 			rr,
 			"10.1.0.9:1000",
 			"?mac="+mac,
 			"anything",
 			reportBody,
 		); w.Code != http.StatusUnauthorized {
-			t.Fatalf("request %d = %d, want 401", i, w.Code)
+			t.Errorf("request %d = %d, want 401", i, w.Code)
 		}
 	}
 	// Close the store: a DB lookup would now fail, but the 11th must be
@@ -364,7 +374,7 @@ func TestNodeReportFloodHitsPerIPLimitBeforeDB(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if w := postReport(
+	if w := postReport(t,
 		rr,
 		"10.1.0.9:1000",
 		"?mac=aa:bb:cc:00:00:ff",
@@ -380,7 +390,7 @@ func TestNodeReportLimiterMapsAreBounded(t *testing.T) {
 	rr := newReportReceiver(s, nodeReportKey(), nodeReportClock(), rowARP)
 	for i := range 5000 {
 		remote := fmt.Sprintf("10.%d.%d.%d:1000", i>>16&0xff, i>>8&0xff, i&0xff)
-		postReport(rr, remote, "?mac="+nodeReportMAC(0), "anything", reportBody)
+		postReport(t, rr, remote, "?mac="+nodeReportMAC(0), "anything", reportBody)
 	}
 	if n := rr.perIP.Len(); n > 4096 {
 		t.Fatalf("perIP.Len() = %d, want <= 4096", n)
@@ -394,31 +404,31 @@ func TestGenCache(t *testing.T) {
 	c := newGenCache(s, clock)
 	mac := nodeReportMAC(0)
 
-	if _, err := c.Lookup(mac); err == nil {
+	if _, err := c.Lookup(t.Context(), mac); err == nil {
 		t.Fatal("absent host: want error")
 	}
 	if len(c.m) != 0 {
 		t.Fatal("absent host was cached")
 	}
 	seedReportHost(t, s, mac)
-	if g, err := c.Lookup(mac); err != nil || g != 0 {
+	if g, err := c.Lookup(t.Context(), mac); err != nil || g != 0 {
 		t.Fatalf("gen = %d, %v; want 0", g, err)
 	}
-	if _, err := s.BumpHostReportTokenGen(mac); err != nil {
+	if _, err := s.BumpHostReportTokenGen(t.Context(), mac); err != nil {
 		t.Fatal(err)
 	}
-	if g, _ := c.Lookup(mac); g != 0 {
+	if g, _ := c.Lookup(t.Context(), mac); g != 0 {
 		t.Fatalf("cached gen = %d, want 0 within TTL", g)
 	}
 	c.Set(mac, 1)
-	if g, _ := c.Lookup(mac); g != 1 {
+	if g, _ := c.Lookup(t.Context(), mac); g != 1 {
 		t.Fatalf("gen after Set = %d, want 1", g)
 	}
-	if _, err := s.BumpHostReportTokenGen(mac); err != nil {
+	if _, err := s.BumpHostReportTokenGen(t.Context(), mac); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(61 * time.Second)
-	if g, _ := c.Lookup(mac); g != 2 {
+	if g, _ := c.Lookup(t.Context(), mac); g != 2 {
 		t.Fatalf("gen after TTL = %d, want 2", g)
 	}
 }
@@ -445,25 +455,25 @@ func TestGenCacheLateLookupCannotResurrectOldGeneration(t *testing.T) {
 	rr := newReportReceiver(s, key, now, fixedARP(mac))
 	seedReportHost(t, s, mac)
 
-	oldGen, err := rr.gens.Lookup(mac) // the in-flight lookup read generation N
+	oldGen, err := rr.gens.Lookup(t.Context(), mac) // the in-flight lookup read generation N
 	if err != nil || oldGen != 0 {
 		t.Fatalf("Lookup = %d, %v", oldGen, err)
 	}
-	newGen, err := s.BumpHostReportTokenGen(mac) // rotate
+	newGen, err := s.BumpHostReportTokenGen(t.Context(), mac) // rotate
 	if err != nil {
 		t.Fatal(err)
 	}
 	rr.gens.Set(mac, newGen)
 	rr.gens.put(mac, oldGen, now().Add(genCacheTTL)) // the late put(N)
 
-	if got, lerr := rr.gens.Lookup(mac); lerr != nil || got != newGen {
+	if got, lerr := rr.gens.Lookup(t.Context(), mac); lerr != nil || got != newGen {
 		t.Fatalf("cached gen = %d, %v, want %d", got, lerr, newGen)
 	}
 	oldTok, newTok := nodereport.Token(key, mac, oldGen), nodereport.Token(key, mac, newGen)
-	if w := postReport(rr, "10.3.0.1:1", "?mac="+mac, oldTok, reportBody); w.Code != http.StatusUnauthorized {
+	if w := postReport(t, rr, "10.3.0.1:1", "?mac="+mac, oldTok, reportBody); w.Code != http.StatusUnauthorized {
 		t.Fatalf("old token = %d, want 401", w.Code)
 	}
-	if w := postReport(rr, "10.3.0.2:1", "?mac="+mac, newTok, reportBody); w.Code != http.StatusNoContent {
+	if w := postReport(t, rr, "10.3.0.2:1", "?mac="+mac, newTok, reportBody); w.Code != http.StatusNoContent {
 		t.Fatalf("new token = %d, want 204", w.Code)
 	}
 }
@@ -520,7 +530,7 @@ func TestNodeReportRouteMethods(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			tc.mux.ServeHTTP(w, httptest.NewRequest(tc.method, "/node/report", nil))
+			tc.mux.ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), tc.method, "/node/report", http.NoBody))
 			if w.Code != tc.want {
 				t.Fatalf("%s /node/report = %d, want %d", tc.method, w.Code, tc.want)
 			}

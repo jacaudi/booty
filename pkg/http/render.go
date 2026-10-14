@@ -99,7 +99,7 @@ func executeTemplate(source []byte, vars TemplateVars) ([]byte, error) {
 // renderConfig executes source as a text/template against vars, then translates
 // per kind. It is the SHARED step consumed by both the serving handlers and
 // POST /configs/{id}/preview. vars must already be populated by the caller.
-func renderConfig(kind string, source []byte, vars TemplateVars) ([]byte, string, string, error) {
+func renderConfig(kind string, source []byte, vars TemplateVars) (out []byte, contentType, report string, err error) {
 	rendered, err := executeTemplate(source, vars)
 	if err != nil {
 		return nil, "", "", err

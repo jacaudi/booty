@@ -440,8 +440,6 @@ type preseedView struct {
 
 // buildPreseedView validates spec coherence and derives the emission view.
 // Validation errors surface as 422 through validateConfigSource's default arm.
-//
-//nolint:gocognit,funlen // existing function; only the opts parameter and two appends are new
 func buildPreseedView(spec debianConfigSpec, opts preseedOptions) (preseedView, error) {
 	v := preseedView{
 		Locale:   spec.Locale,
@@ -450,56 +448,13 @@ func buildPreseedView(spec debianConfigSpec, opts preseedOptions) (preseedView, 
 		Domain:   spec.Domain,
 		Timezone: spec.Timezone,
 	}
-	var sshCmd, sudoCmd string
-	var needOpenSSH, needSudo bool
-	if n := spec.Network; n != nil {
-		v.Iface = n.Interface
-		if s := n.Static; s != nil {
-			v.Static = true
-			v.StaticAddress, v.StaticNetmask, v.StaticGateway = s.Address, s.Netmask, s.Gateway
-			v.StaticNameservers = strings.Join(s.Nameservers, " ")
-		}
-	}
-	if m := spec.Mirror; m != nil {
-		// B2: d-i's choose-mirror ignores an operator hostname/directory unless
-		// mirror/country is "manual" (official example-preseed). booty generates
-		// these lines, so emitting the manual selector is booty's responsibility.
-		v.MirrorManual = true
-		v.MirrorHost, v.MirrorDir, v.MirrorProxy = m.Hostname, m.Directory, m.Proxy
-	}
-	if a := spec.Accounts; a != nil {
-		v.HasAccounts = true
-		v.RootHash = a.RootPasswordHash
-		if u := a.User; u != nil {
-			// F5 validation order: (1) username, (2) reachability (D1),
-			// (3) sudo coherence.
-			if err := validateUsername(u.Username); err != nil {
-				return preseedView{}, err
-			}
-			hasKeys := len(u.SSHAuthorizedKeys) > 0
-			if u.PasswordHash == "" && !hasKeys {
-				return preseedView{}, errors.New("http: debianconfig: accounts.user requires password_hash or ssh_authorized_keys")
-			}
-			if u.Sudo == sudoPassword && u.PasswordHash == "" {
-				return preseedView{}, errors.New("http: debianconfig: sudo: password requires accounts.user.password_hash")
-			}
-			v.HasUser = true
-			v.Username = u.Username
-			v.UserHash = cmp.Or(u.PasswordHash, "*") // D1: omitted -> locked sentinel
-			v.UserFullname = cmp.Or(u.Fullname, u.Username)
-			if hasKeys {
-				for _, k := range u.SSHAuthorizedKeys {
-					if err := validateSSHAuthorizedKey(k); err != nil {
-						return preseedView{}, err
-					}
-				}
-				sshCmd = sshLateCommand(u.Username, u.SSHAuthorizedKeys)
-				needOpenSSH = true
-			}
-			if u.Sudo != sudoNone {
-				sudoCmd = sudoLateCommand(u.Sudo, u.Username)
-				needSudo = true
-			}
+	applyNetwork(&v, spec.Network)
+	applyMirror(&v, spec.Mirror)
+	var extras accountExtras
+	if spec.Accounts != nil {
+		var err error
+		if extras, err = applyAccounts(&v, spec.Accounts); err != nil {
+			return preseedView{}, err
 		}
 	}
 	if spec.Disk != nil {
@@ -509,37 +464,113 @@ func buildPreseedView(spec debianConfigSpec, opts preseedOptions) (preseedView, 
 		}
 		v.Disk = dv
 	}
-	// Compose ONE late_command from ordered sources (design §4, M3), all run,
-	// ordering/ownership deterministic: ssh -> sudo -> ESP sync -> booty
-	// health -> the operator's own commands.
-	var lateParts []string
-	if sshCmd != "" {
-		lateParts = append(lateParts, sshCmd)
-	}
-	if sudoCmd != "" {
-		lateParts = append(lateParts, sudoCmd)
-	}
-	if v.Disk != nil && v.Disk.ESPSyncCmd != "" {
-		lateParts = append(lateParts, v.Disk.ESPSyncCmd)
-	}
-	if opts.ExtraLateCommand != "" {
-		lateParts = append(lateParts, opts.ExtraLateCommand)
-	}
-	if op := flattenLateCommand(string(spec.LateCommand)); op != "" {
-		lateParts = append(lateParts, op)
-	}
-	v.LateCommand = strings.Join(lateParts, " ; ")
+	v.LateCommand = composeLateCommand(extras, v.Disk, opts, spec.LateCommand)
 	// raw_preseed is appended LAST (design §4): later duplicate debconf answers
 	// win, so the hatch can always override a curated line.
 	v.RawPreseed = strings.TrimRight(spec.RawPreseed, "\n")
 	pkgs := slices.Clone(spec.Packages)
-	pkgs = appendIfAbsent(pkgs, "openssh-server", needOpenSSH) // F1: openssh-server first
-	pkgs = appendIfAbsent(pkgs, "sudo", needSudo)              // then sudo
+	pkgs = appendIfAbsent(pkgs, "openssh-server", extras.needOpenSSH) // F1: openssh-server first
+	pkgs = appendIfAbsent(pkgs, "sudo", extras.needSudo)              // then sudo
 	for _, p := range opts.ExtraPackages {
 		pkgs = appendIfAbsent(pkgs, p, true)
 	}
 	v.Packages = strings.Join(pkgs, " ")
 	return v, nil
+}
+
+func applyNetwork(v *preseedView, n *debianNetwork) {
+	if n == nil {
+		return
+	}
+	v.Iface = n.Interface
+	if s := n.Static; s != nil {
+		v.Static = true
+		v.StaticAddress, v.StaticNetmask, v.StaticGateway = s.Address, s.Netmask, s.Gateway
+		v.StaticNameservers = strings.Join(s.Nameservers, " ")
+	}
+}
+
+func applyMirror(v *preseedView, m *debianMirror) {
+	if m == nil {
+		return
+	}
+	// B2: d-i's choose-mirror ignores an operator hostname/directory unless
+	// mirror/country is "manual" (official example-preseed). booty generates
+	// these lines, so emitting the manual selector is booty's responsibility.
+	v.MirrorManual = true
+	v.MirrorHost, v.MirrorDir, v.MirrorProxy = m.Hostname, m.Directory, m.Proxy
+}
+
+// accountExtras is what the accounts block lowers to besides debconf lines:
+// the late_command snippets that install the user's SSH keys and sudo rule,
+// and the packages those need.
+type accountExtras struct {
+	sshCmd, sudoCmd       string
+	needOpenSSH, needSudo bool
+}
+
+// applyAccounts fills the account lines of v and returns the late_command
+// extras the user needs. Validation order (F5): (1) username, (2)
+// reachability (D1), (3) sudo coherence.
+func applyAccounts(v *preseedView, a *debianAccounts) (accountExtras, error) {
+	var extras accountExtras
+	v.HasAccounts = true
+	v.RootHash = a.RootPasswordHash
+	u := a.User
+	if u == nil {
+		return extras, nil
+	}
+	if err := validateUsername(u.Username); err != nil {
+		return extras, err
+	}
+	hasKeys := len(u.SSHAuthorizedKeys) > 0
+	if u.PasswordHash == "" && !hasKeys {
+		return extras, errors.New("http: debianconfig: accounts.user requires password_hash or ssh_authorized_keys")
+	}
+	if u.Sudo == sudoPassword && u.PasswordHash == "" {
+		return extras, errors.New("http: debianconfig: sudo: password requires accounts.user.password_hash")
+	}
+	v.HasUser = true
+	v.Username = u.Username
+	v.UserHash = cmp.Or(u.PasswordHash, "*") // D1: omitted -> locked sentinel
+	v.UserFullname = cmp.Or(u.Fullname, u.Username)
+	if hasKeys {
+		for _, k := range u.SSHAuthorizedKeys {
+			if err := validateSSHAuthorizedKey(k); err != nil {
+				return extras, err
+			}
+		}
+		extras.sshCmd = sshLateCommand(u.Username, u.SSHAuthorizedKeys)
+		extras.needOpenSSH = true
+	}
+	if u.Sudo != sudoNone {
+		extras.sudoCmd = sudoLateCommand(u.Sudo, u.Username)
+		extras.needSudo = true
+	}
+	return extras, nil
+}
+
+// composeLateCommand composes ONE late_command from ordered sources (design
+// §4, M3), all run, ordering/ownership deterministic: ssh -> sudo -> ESP sync
+// -> booty health -> the operator's own commands.
+func composeLateCommand(extras accountExtras, disk *diskView, opts preseedOptions, late stringOrList) string {
+	var parts []string
+	if extras.sshCmd != "" {
+		parts = append(parts, extras.sshCmd)
+	}
+	if extras.sudoCmd != "" {
+		parts = append(parts, extras.sudoCmd)
+	}
+	if disk != nil && disk.ESPSyncCmd != "" {
+		parts = append(parts, disk.ESPSyncCmd)
+	}
+	if opts.ExtraLateCommand != "" {
+		parts = append(parts, opts.ExtraLateCommand)
+	}
+	if op := flattenLateCommand(string(late)); op != "" {
+		parts = append(parts, op)
+	}
+	return strings.Join(parts, " ; ")
 }
 
 // preseedTemplateText emits the flat preseed. Layout convention: each debconf

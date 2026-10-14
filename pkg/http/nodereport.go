@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -68,7 +69,7 @@ func newGenCache(store *db.Store, now func() time.Time) *genCache {
 
 // Lookup returns the host's token generation. An absent host is an error
 // and is not cached.
-func (c *genCache) Lookup(mac string) (int64, error) {
+func (c *genCache) Lookup(ctx context.Context, mac string) (int64, error) {
 	now := c.now()
 	c.mu.Lock()
 	e, ok := c.m[mac]
@@ -76,7 +77,7 @@ func (c *genCache) Lookup(mac string) (int64, error) {
 	if ok && now.Before(e.exp) {
 		return e.gen, nil
 	}
-	gen, err := c.store.HostReportTokenGen(mac)
+	gen, err := c.store.HostReportTokenGen(ctx, mac)
 	if err != nil {
 		return 0, err
 	}
@@ -122,8 +123,8 @@ func newReportReceiver(store *db.Store, key []byte, now func() time.Time, arp ar
 		key:    key,
 		now:    now,
 		arp:    arp,
-		perIP:  nodereport.NewLimiter(perIPLimit, time.Minute, limiterCapacity, now),
-		perMAC: nodereport.NewLimiter(1, perMACWindow, limiterCapacity, now),
+		perIP:  nodereport.MustNewLimiter(perIPLimit, time.Minute, limiterCapacity, now),
+		perMAC: nodereport.MustNewLimiter(1, perMACWindow, limiterCapacity, now),
 		gens:   newGenCache(store, now),
 	}
 }
@@ -132,8 +133,7 @@ func newReportReceiver(store *db.Store, key []byte, now func() time.Time, arp ar
 // the bare status text, so every 401 body is identical. The token is never
 // logged.
 func (rr *reportReceiver) reject(w http.ResponseWriter, r *http.Request, rawMAC string, code int) {
-	//nolint:sloglint // default logger: no injected logger in this package yet
-	slog.Debug("node report rejected", "status", code, "mac", rawMAC, "remote", r.RemoteAddr)
+	slog.DebugContext(r.Context(), "node report rejected", "status", code, "mac", rawMAC, "remote", r.RemoteAddr)
 	http.Error(w, http.StatusText(code), code)
 }
 
@@ -148,7 +148,7 @@ func (rr *reportReceiver) authorize(r *http.Request, mac, token string) int {
 	if !rr.perIP.Allow(ip) {
 		return http.StatusTooManyRequests
 	}
-	gen, err := rr.gens.Lookup(mac)
+	gen, err := rr.gens.Lookup(r.Context(), mac)
 	if err != nil {
 		return http.StatusUnauthorized
 	}
@@ -192,7 +192,7 @@ func (rr *reportReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var h nodereport.Health
 	body := http.MaxBytesReader(w, r.Body, nodeReportMaxBody)
 	if err = json.NewDecoder(body).Decode(&h); err != nil {
-		if _, tooBig := errors.AsType[*http.MaxBytesError](err); tooBig {
+		if errors.As(err, new(*http.MaxBytesError)) {
 			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -209,7 +209,7 @@ func (rr *reportReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rr.reject(w, r, rawMAC, http.StatusBadRequest)
 		return
 	}
-	if err = rr.store.UpsertHostHealth(mac, h.ReceivedAt, b); err != nil {
+	if err = rr.store.UpsertHostHealth(r.Context(), mac, h.ReceivedAt, b); err != nil {
 		// The host was deleted between the token check and the write.
 		rr.reject(w, r, rawMAC, http.StatusUnauthorized)
 		return
@@ -221,18 +221,17 @@ func (rr *reportReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // when the feature is off, the host is unknown, the generation lookup fails
 // or the inputs cannot be embedded safely; the caller then serves the config
 // unchanged.
-func (n *NodeReports) script(store *db.Store, host *hardware.Host) (string, string, bool) {
+func (n *NodeReports) script(ctx context.Context, store *db.Store, host *hardware.Host) (script, unit string, ok bool) {
 	if n == nil || host == nil {
 		return "", "", false
 	}
-	gen, err := store.HostReportTokenGen(host.MAC)
+	gen, err := store.HostReportTokenGen(ctx, host.MAC)
 	if err != nil {
 		return "", "", false
 	}
-	script, err := nodereport.Script(bootscript.URLHost(), host.MAC, nodereport.Token(n.Key, host.MAC, gen))
+	script, err = nodereport.Script(bootscript.URLHost(), host.MAC, nodereport.Token(n.Key, host.MAC, gen))
 	if err != nil {
-		//nolint:sloglint // default logger: no injected logger in this package yet
-		slog.Warn("node report injection skipped", "mac", host.MAC, "err", err)
+		slog.WarnContext(ctx, "node report injection skipped", "mac", host.MAC, "err", err)
 		return "", "", false
 	}
 	return script, nodereport.Unit(nodereport.ScriptPath), true

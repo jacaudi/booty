@@ -69,7 +69,7 @@ func TestMemberConfigRequiresMatchingARP(t *testing.T) {
 			s := servingStore(t)
 			testSecretsKey(t)
 			frozen := seedMember(t, s, mac)
-			req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?mac="+mac, http.NoBody)
 			req.RemoteAddr = c.remoteAddr
 			rr := httptest.NewRecorder()
 			machineConfigHandler(s, c.arp)(rr, req)
@@ -94,7 +94,7 @@ func TestNonMemberIgnoresARP(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?mac="+mac, http.NoBody)
 	rr := httptest.NewRecorder()
 	machineConfigHandler(s, failingARP)(rr, req)
 	if rr.Code != 200 {
