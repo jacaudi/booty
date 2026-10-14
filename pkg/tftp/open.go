@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/jeefy/booty/pkg/dataroot"
 )
 
-// openDataFile opens name from root if it is on the TFTP allowlist. Every
+// openDataFile opens name from root if it is on the TFTP allowlist, both as
+// requested and as resolved through any symlink (see [dataroot.Open]). Every
 // refusal wraps [os.ErrNotExist] so the client sees "file not found" and learns
 // nothing about why. [os.Root] refuses ".." and symlinks that leave root.
 func openDataFile(root *os.Root, name string, topLevel []string) (*os.File, error) {
@@ -17,12 +20,9 @@ func openDataFile(root *os.Root, name string, topLevel []string) (*os.File, erro
 	if strings.HasPrefix(name, "/") {
 		return nil, fmt.Errorf("%w: absolute name", os.ErrNotExist)
 	}
-	if !allowedDataFile(name, topLevel) {
-		return nil, fmt.Errorf("%w: not an allowlisted path", os.ErrNotExist)
-	}
-	f, err := root.Open(name)
+	f, err := dataroot.Open(root, name, func(p string) bool { return allowedDataFile(p, topLevel) })
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", os.ErrNotExist, err)
+		return nil, err
 	}
 	fi, err := f.Stat()
 	if err != nil {

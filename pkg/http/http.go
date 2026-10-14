@@ -20,6 +20,7 @@ import (
 
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/dataroot"
 	"github.com/jeefy/booty/web"
 )
 
@@ -149,10 +150,11 @@ func StartHTTP(deps APIDeps, errCh chan<- error) (*Server, error) {
 // Serving goes through http.FileServer so conditional and ranged GETs keep
 // working — iPXE and the multi-GB ISO paths depend on Range — but over a
 // listing-free FS, so a directory is indistinguishable from a miss. Files are
-// opened through root (an [os.Root] on dataDir), which refuses any path or
-// symlink that resolves outside dataDir, the same as TFTP.
+// opened through root (an [os.Root] on dataDir) by [dataroot.Open], the same as
+// TFTP: it refuses a path or symlink that resolves outside dataDir AND one that
+// resolves, inside dataDir, to a path the allowlist does not admit.
 func dataFileHandler(root *os.Root) http.Handler {
-	dataFS := http.FileServer(noListingFS{http.FS(root.FS())})
+	dataFS := http.FileServer(noListingFS{root})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Both predicates must judge the SAME path http.FileServer will open,
 		// which is path.Clean(r.URL.Path) (net/http/fs.go:995). Testing the raw
@@ -160,7 +162,7 @@ func dataFileHandler(root *os.Root) http.Handler {
 		// suffix check — ServeMux cleans the literal "/." spelling away before
 		// dispatch, but not the encoded one.
 		cleaned := path.Clean("/" + r.URL.Path)
-		if !isAllowedDataPath(cleaned) || isPartialPath(cleaned) {
+		if !isServedDataPath(cleaned) {
 			http.NotFound(w, r)
 			return
 		}
@@ -187,8 +189,9 @@ var dataSubtrees = []string{"/" + cache.DirName, "/public"}
 //
 // Matching is strictly BELOW each subtree, so the subtree roots are not
 // addressable either. Cleaning first, then prefix-matching, is the same idiom
-// as pkg/tftp's allowedDataFile. Symlinks that leave dataDir are refused by the
-// [os.Root] dataFileHandler opens files through, not here.
+// as pkg/tftp's allowedDataFile. Symlinks are not judged here: [dataroot.Open]
+// re-runs isServedDataPath on the path a request resolves to, and [os.Root]
+// refuses those that leave dataDir.
 func isAllowedDataPath(p string) bool {
 	// path.Clean needs a leading slash to resolve ".." (StripPrefix leaves none)
 	// and collapses a doubled one when p already had it.
@@ -201,22 +204,33 @@ func isAllowedDataPath(p string) bool {
 	return false
 }
 
-// noListingFS is an [http.FileSystem] with directory opens refused, so
-// [http.FileServer] renders no index and cannot answer differently for a
-// directory than for a miss. The listing under a cached version directory
-// named the in-flight .partial/.download files by hand-browsable path, which
-// is the discovery half of fetching one; the 301-on-directory behaviour was
-// also an existence oracle for paths the allowlist otherwise hides.
-type noListingFS struct{ http.FileSystem }
+// isServedDataPath reports whether a /data/-relative path may be served: inside
+// an allowlisted subtree and not an in-flight download. It is the predicate
+// [dataroot.Open] applies to the requested path and to the path it resolves to.
+func isServedDataPath(p string) bool {
+	return isAllowedDataPath(p) && !isPartialPath(p)
+}
 
-// Open opens name, refusing directories. Every open failure is reported as a
-// miss, as pkg/tftp's openDataFile does: an [os.Root] escape error (a symlink
-// leaving dataDir) would otherwise be a 500, which tells a prober the path
-// exists.
+// noListingFS is an [http.FileSystem] over an [os.Root] on dataDir with
+// directory opens refused, so [http.FileServer] renders no index and cannot
+// answer differently for a directory than for a miss. The listing under a
+// cached version directory named the in-flight .partial/.download files by
+// hand-browsable path, which is the discovery half of fetching one; the
+// 301-on-directory behaviour was also an existence oracle for paths the
+// allowlist otherwise hides.
+type noListingFS struct{ root *os.Root }
+
+// Open opens name, refusing directories and anything [isServedDataPath] does
+// not admit, as requested or as resolved through a symlink. Every open failure
+// is reported as a miss, as pkg/tftp's openDataFile does: an [os.Root] escape
+// error (a symlink leaving dataDir) would otherwise be a 500, which tells a
+// prober the path exists.
 func (d noListingFS) Open(name string) (http.File, error) {
-	f, err := d.FileSystem.Open(name)
+	// http.FileServer passes a cleaned, slash-prefixed name; dataroot wants it
+	// relative to the root.
+	f, err := dataroot.Open(d.root, strings.TrimPrefix(name, "/"), isServedDataPath)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", fs.ErrNotExist, err)
+		return nil, err // already wraps os.ErrNotExist
 	}
 	info, err := f.Stat()
 	if err != nil {
