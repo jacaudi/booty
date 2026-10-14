@@ -9,4 +9,8 @@ data/
 # implementation plans, design docs, generated reports, and prompt scratch.
 docs/plans/
 docs/reports/
-docs/prompts/
+docs/prompts/# Runtime state written when booty runs with --dataDir=. (never commit)
+api-token
+booty.db
+booty.db-*
+node-report-key
