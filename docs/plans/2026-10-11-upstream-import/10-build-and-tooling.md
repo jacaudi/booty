@@ -60,13 +60,7 @@ Expected:
 
 The binary install follows golangci-lint's docs, which advise against `go install` (`install/local.md:116-118`). govulncheck was installed in phase 7.
 - [ ] **Step 1b: Make the tree gofmt-clean**, since `task fmt` gates the exit check. Eight files were not gofmt-clean at `f36482c`: `pkg/cache/debiandvd_test.go`, `pkg/cache/list.go`, `pkg/db/db.go`, `pkg/db/host.go`, `pkg/hardware/mac.go`, `pkg/http/api_cache.go`, `pkg/http/api_targets_test.go` and `pkg/tftp/menu_test.go`. Run `gofmt -l $(git ls-files '*.go')`, then `gofmt -w` on exactly the files it lists, then `go build ./... && go test ./...`. Commit with `git commit -am "style: gofmt"`. Expected afterwards: `gofmt -l $(git ls-files '*.go')` prints nothing.
-- [ ] **Step 2: Create `.golangci.yml`** containing exactly:
-
-```yaml
-version: "2"
-```
-
-  Then run `golangci-lint config verify`. Expected: exit 0.
+- [ ] **Step 2: `.golangci.yml` already exists** (phase 0: maratori golden config @ v2.14.0, with `paralleltest`/`testpackage` disabled). Run `golangci-lint config verify`. Expected: exit 0.
 - [ ] **Step 3: Create `taskfile.yml`** with exactly this content:
 
 ```yaml
@@ -126,12 +120,20 @@ tasks:
       - test -z "$(gofmt -l $(git ls-files '*.go'))"
 
   lint:
-    desc: golangci-lint (findings are known and not yet fixed; see docs/development.md)
+    desc: golangci-lint, whole tree (existing findings are known and not yet fixed; see docs/development.md)
     preconditions:
       - sh: command -v golangci-lint
         msg: "install golangci-lint v2.14.0 (see docs/development.md)"
     cmds:
       - golangci-lint run ./...
+
+  lint:new:
+    desc: golangci-lint on code changed since origin/main (must be clean)
+    preconditions:
+      - sh: command -v golangci-lint
+        msg: "install golangci-lint v2.14.0 (see docs/development.md)"
+    cmds:
+      - golangci-lint run --new-from-merge-base=origin/main ./...
 
   vuln:
     desc: govulncheck against the repo's toolchain
@@ -183,9 +185,10 @@ tasks:
   - `task --list` lists every task with a `desc`.
   - `task fmt && task vet && task build` succeed, and `bin/booty --help` prints usage.
   - `task check:ipxe` passes, if phase 5 is done.
-  - `task lint` exits 1 with errcheck/staticcheck findings. Record the summary line (`N issues`) in the commit message.
+  - `task lint:new` prints `0 issues.`
+  - `task lint` exits 1 with the existing findings (1,231 at `7432c81`, measured with this config). Record the summary line (`N issues`) in the commit message.
 - [ ] **Step 5:** `git rm Makefile`.
-- [ ] **Step 6:** Commit: `git add taskfile.yml .golangci.yml && git commit -m "build: taskfile.yml replaces the Makefile; add lint and vuln tasks (lint findings recorded, not fixed: <N> issues)"`.
+- [ ] **Step 6:** Commit: `git add taskfile.yml && git commit -m "build: taskfile.yml replaces the Makefile; add lint and vuln tasks (lint findings recorded, not fixed: <N> issues)"`.
 
 ### Task 3: Dockerfile
 
@@ -268,7 +271,7 @@ ENTRYPOINT [ "/booty" ]
 - [ ] **Step 3:** `docs/development.md`:
   - add a "Tasks" section listing `task build|run|test|vet|fmt|lint|vuln|ipxe|check:ipxe|image`;
   - add the golangci-lint install commands from Task 2 Step 1;
-  - add a "Known findings" paragraph: `golangci-lint (default linters) reports <N> issues, mostly errcheck; govulncheck reports none called after the go1.26.9 bump. Lint findings are not yet fixed.`
+  - add a "Known findings" paragraph: `golangci-lint (golden config, .golangci.yml) reports <N> issues on the whole tree (largest groups: govet, revive, sloglint, goimports, goconst, golines, noctx); new and changed code must be clean (task lint:new). govulncheck reports none called after the go1.26.9 bump.`
 - [ ] **Step 4:** `docs/standards.md`:
   - §1.1: replace the line `- Go version: _TBD_` with `- Go version: go1.26.9 toolchain (go.mod)`;
   - change `base-debian12` to `static-debian13` and `make docker-buildx` to `task image:buildx`;
