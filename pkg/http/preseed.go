@@ -2,6 +2,7 @@ package http
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -49,7 +50,8 @@ func preseedHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
 				}
 				out, ct, err := renderPreseed(kind, src, vars, healthCmd)
 				if err != nil {
-					writeError(w, http.StatusInternalServerError, "render bound preseed", err)
+					// The error can quote template values, including the join string (#138).
+					writeError(w, http.StatusInternalServerError, "render bound preseed", errors.New(redactJoinString(err.Error(), vars.JoinString)))
 					return
 				}
 				out = withDVDMirror(store, host, vars.ServerIP, out)
