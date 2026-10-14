@@ -530,17 +530,18 @@ func run(cmd *cobra.Command, argv []string) error {
 
 	warnShadowedBootFiles(viper.GetString(config.DataDir), boot.Names(), slog.Default())
 
-	// Single cache reconciler replaces the per-OS version-check crons. Start it
-	// after the host store is loaded; it owns all target/version DB writes and
-	// eager artifact caching. Serving (TFTP/HTTP below) may begin immediately —
-	// boots before the first reconcile 404 the same way they did pre-first-sync.
+	// Single cache reconciler replaces the per-OS version-check crons; it owns
+	// all target/version DB writes and eager artifact caching. It is built here
+	// because HTTP needs its Trigger, but started only once TFTP and HTTP are up:
+	// its first pass downloads every catalog artifact and Stop waits for that
+	// pass, so starting it first made a listener failure wait minutes (#119).
+	// Boots before the first reconcile 404 the same way they did pre-first-sync.
 	reconciler := cache.NewReconciler(
 		store,
 		viper.GetDuration(config.CacheInterval),
 		viper.GetInt(config.CacheConcurrency),
 		catalog,
 	)
-	reconciler.Start(ctx)
 
 	tftpErr := make(chan error, 1)
 	tftpServer, err := tftp.Start(tftp.Config{
@@ -550,7 +551,6 @@ func run(cmd *cobra.Command, argv []string) error {
 		BootFiles:         boot.Files,
 	}, tftpErr)
 	if err != nil {
-		reconciler.Stop()
 		return err
 	}
 
@@ -565,9 +565,10 @@ func run(cmd *cobra.Command, argv []string) error {
 		NodeReports: nodeReports,
 	})
 	if err != nil {
-		reconciler.Stop()
 		return errors.Join(fmt.Errorf("http: %w", err), tftpServer.Shutdown())
 	}
+
+	reconciler.Start(ctx)
 
 	// Start the proxyDHCP responder when enabled. Best-effort: nil when not
 	// started, in which case the shutdown step is skipped below.

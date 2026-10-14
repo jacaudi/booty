@@ -15,6 +15,7 @@ import (
 
 	"github.com/jeefy/booty/pkg/auth"
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
@@ -224,7 +225,9 @@ func TestNodeReportsFlagRegistered(t *testing.T) {
 }
 
 // TestRunTFTPListenFailureIsQuietAndClean proves a runtime startup error
-// (here: the TFTP port is taken) is returned without cobra's usage text.
+// (here: the TFTP port is taken) is returned without cobra's usage text, and
+// before the cache reconciler starts (#119): its first pass applies the
+// catalog, so no target row may exist afterwards.
 func TestRunTFTPListenFailureIsQuietAndClean(t *testing.T) {
 	pc, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp", ":0")
 	if err != nil {
@@ -235,11 +238,12 @@ func TestRunTFTPListenFailureIsQuietAndClean(t *testing.T) {
 
 	resetCmd(t)
 
+	dataDir := t.TempDir()
 	var out bytes.Buffer
 	Cmd.SetOut(&out)
 	Cmd.SetErr(&out)
 	Cmd.SetArgs([]string{
-		"--dataDir", t.TempDir(),
+		"--dataDir", dataDir,
 		"--serverIP", "127.0.0.1",
 		"--tftpPort", strconv.Itoa(port),
 		"--httpPort", "0",
@@ -250,6 +254,19 @@ func TestRunTFTPListenFailureIsQuietAndClean(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "Usage:") {
 		t.Errorf("runtime error printed usage:\n%s", out.String())
+	}
+
+	store, err := db.Open(filepath.Join(dataDir, "booty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	targets, err := store.ListTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 0 {
+		t.Errorf("the cache reconciler ran before the TFTP bind failed: %d target rows", len(targets))
 	}
 }
 
