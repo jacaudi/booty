@@ -13,6 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+
 	"github.com/jeefy/booty/boot"
 	"github.com/jeefy/booty/pkg/auth"
 	"github.com/jeefy/booty/pkg/bootscript"
@@ -25,8 +28,6 @@ import (
 	"github.com/jeefy/booty/pkg/power"
 	"github.com/jeefy/booty/pkg/proxydhcp"
 	"github.com/jeefy/booty/pkg/tftp"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 var Cmd = &cobra.Command{
@@ -555,6 +556,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	}
 
 	// Start the HTTP server (non-blocking; returns the running server).
+	httpErr := make(chan error, 1)
 	httpServer, err := bootyHTTP.StartHTTP(bootyHTTP.APIDeps{
 		Store:       store,
 		Trigger:     reconciler.Trigger,
@@ -563,9 +565,9 @@ func run(cmd *cobra.Command, argv []string) error {
 		BootFiles:   boot.Files,
 		Waker:       &power.Waker{},
 		NodeReports: nodeReports,
-	})
+	}, httpErr)
 	if err != nil {
-		return errors.Join(fmt.Errorf("http: %w", err), tftpServer.Shutdown())
+		return errors.Join(err, tftpServer.Shutdown())
 	}
 
 	reconciler.Start(ctx)
@@ -584,6 +586,8 @@ func run(cmd *cobra.Command, argv []string) error {
 		slog.Info("shutdown signal received")
 	case runErr = <-tftpErr:
 		slog.Error("TFTP server failed; shutting down", "err", runErr)
+	case runErr = <-httpErr:
+		slog.Error("HTTP server failed; shutting down", "err", runErr)
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

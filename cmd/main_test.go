@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,11 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+
 	"github.com/jeefy/booty/pkg/auth"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 )
 
 // TestStartProxyDHCPDisabledReturnsNil proves the default-off invariant: with
@@ -267,6 +269,52 @@ func TestRunTFTPListenFailureIsQuietAndClean(t *testing.T) {
 	}
 	if len(targets) != 0 {
 		t.Errorf("the cache reconciler ran before the TFTP bind failed: %d target rows", len(targets))
+	}
+}
+
+// TestRunHTTPListenFailureIsReturned proves an HTTP bind failure (here: the
+// port is taken) comes back from run as an error, without usage text, instead
+// of exiting the process from the serve goroutine (#95), and that the cache
+// reconciler never started.
+func TestRunHTTPListenFailureIsReturned(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", ":0")
+	if err != nil {
+		t.Fatalf("occupy TCP port: %v", err)
+	}
+	defer ln.Close()
+	port := int(netip.MustParseAddrPort(ln.Addr().String()).Port())
+
+	resetCmd(t)
+
+	dataDir := t.TempDir()
+	var out bytes.Buffer
+	Cmd.SetOut(&out)
+	Cmd.SetErr(&out)
+	Cmd.SetArgs([]string{
+		"--dataDir", dataDir,
+		"--serverIP", "127.0.0.1",
+		"--tftpPort", "0",
+		"--httpPort", strconv.Itoa(port),
+	})
+	err = Cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "http: listen") {
+		t.Fatalf("Execute() error = %v, want one containing %q", err, "http: listen")
+	}
+	if strings.Contains(out.String(), "Usage:") {
+		t.Errorf("runtime error printed usage:\n%s", out.String())
+	}
+
+	store, err := db.Open(filepath.Join(dataDir, "booty.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	targets, err := store.ListTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 0 {
+		t.Errorf("the cache reconciler ran before the HTTP bind failed: %d target rows", len(targets))
 	}
 }
 

@@ -513,8 +513,8 @@ func TestGenCacheSetRespectsCapacity(t *testing.T) {
 func TestNodeReportRouteMethods(t *testing.T) {
 	s := servingStore(t)
 	root := testDataRoot(t, t.TempDir())
-	on := baseMux(APIDeps{Store: s, NodeReports: &NodeReports{Key: nodeReportKey()}}, root)
-	off := baseMux(APIDeps{Store: s}, root)
+	on := mustBaseMux(t, APIDeps{Store: s, NodeReports: &NodeReports{Key: nodeReportKey()}}, root)
+	off := mustBaseMux(t, APIDeps{Store: s}, root)
 	tests := []struct {
 		name   string
 		mux    *http.ServeMux

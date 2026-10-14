@@ -34,6 +34,16 @@ func testDataRoot(t *testing.T, dir string) *os.Root {
 	return root
 }
 
+// mustBaseMux builds the real base mux or fails the test.
+func mustBaseMux(t *testing.T, deps APIDeps, dataRoot *os.Root) *http.ServeMux {
+	t.Helper()
+	mux, err := baseMux(deps, dataRoot)
+	if err != nil {
+		t.Fatalf("baseMux: %v", err)
+	}
+	return mux
+}
+
 // getData issues target against the mux and returns status, body and Location.
 func getData(mux *http.ServeMux, target string) (int, []byte, string) {
 	req := httptest.NewRequest(http.MethodGet, target, nil)
@@ -455,7 +465,7 @@ func TestDataFileHandler_BlocksPartial(t *testing.T) {
 // through to the catch-all, while the routes that must survive stay distinct
 // from it.
 func TestRetiredRoutesAreGone(t *testing.T) {
-	mux := baseMux(APIDeps{}, testDataRoot(t, t.TempDir()))
+	mux := mustBaseMux(t, APIDeps{}, testDataRoot(t, t.TempDir()))
 
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodPost, "/register"},

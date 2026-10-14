@@ -1,8 +1,10 @@
 package http
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,9 +13,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
+	"github.com/spf13/viper"
+
 	"github.com/jeefy/booty/pkg/auth"
 	"github.com/jeefy/booty/pkg/config"
-	"github.com/spf13/viper"
 )
 
 // gatedHarness builds the /api/v1 group with the authorizer installed exactly
@@ -503,7 +506,7 @@ func TestStartHTTPRefusesANilStoreWithoutNoAuth(t *testing.T) {
 	viper.Set(config.DataDir, t.TempDir())
 	viper.Set(config.HttpPort, 0) // never actually bound: the guard returns first
 
-	srv, err := StartHTTP(APIDeps{})
+	srv, err := StartHTTP(APIDeps{}, make(chan error, 1))
 	if err == nil {
 		if srv != nil {
 			_ = srv.Close()
@@ -533,7 +536,7 @@ func TestNilAuthStorePassesThroughSoExistingTestsKeepWorking(t *testing.T) {
 // instead.
 func TestLoginAndLogoutAreMountedOnTheBaseMux(t *testing.T) {
 	store := tokenStore(t, "mounted-token")
-	mux := baseMux(APIDeps{Auth: store}, testDataRoot(t, t.TempDir()))
+	mux := mustBaseMux(t, APIDeps{Auth: store}, testDataRoot(t, t.TempDir()))
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", nil)
@@ -569,7 +572,7 @@ func TestStartHTTPAllowsANilStoreUnderNoAuth(t *testing.T) {
 	viper.Set(config.DataDir, t.TempDir())
 	viper.Set(config.HttpPort, 0)
 
-	srv, err := StartHTTP(APIDeps{NoAuth: true})
+	srv, err := StartHTTP(APIDeps{NoAuth: true}, make(chan error, 1))
 	if err != nil {
 		t.Fatalf("StartHTTP(NoAuth: true) with a nil Auth store = %v, want nil error", err)
 	}
@@ -581,6 +584,33 @@ func TestStartHTTPAllowsANilStoreUnderNoAuth(t *testing.T) {
 	}
 }
 
+// TestStartHTTPReturnsABindError: a taken port is a startup error returned to
+// the caller, not an os.Exit from the serve goroutine (#95).
+func TestStartHTTPReturnsABindError(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", ":0")
+	if err != nil {
+		t.Fatalf("occupy TCP port: %v", err)
+	}
+	defer ln.Close()
+
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.HttpPort, int(netip.MustParseAddrPort(ln.Addr().String()).Port()))
+
+	srv, err := StartHTTP(APIDeps{NoAuth: true}, make(chan error, 1))
+	if err == nil {
+		_ = srv.Close()
+		t.Fatal("StartHTTP on a taken port = nil error, want a bind error")
+	}
+	if !strings.Contains(err.Error(), "http: listen") {
+		t.Errorf("StartHTTP error = %v, want one containing %q", err, "http: listen")
+	}
+	if srv != nil {
+		t.Fatal("a failed StartHTTP must not return a server")
+	}
+}
+
 // TestStartHTTPFailsWhenDataDirCannotBeOpened: /data/ serves through an
 // [os.Root] opened at startup, so a missing dataDir is a startup error.
 func TestStartHTTPFailsWhenDataDirCannotBeOpened(t *testing.T) {
@@ -589,7 +619,7 @@ func TestStartHTTPFailsWhenDataDirCannotBeOpened(t *testing.T) {
 	viper.Set(config.DataDir, filepath.Join(t.TempDir(), "missing"))
 	viper.Set(config.HttpPort, 0)
 
-	srv, err := StartHTTP(APIDeps{NoAuth: true})
+	srv, err := StartHTTP(APIDeps{NoAuth: true}, make(chan error, 1))
 	if err == nil {
 		_ = srv.Close()
 		t.Fatal("StartHTTP with an unopenable dataDir = nil error, want a startup error")
