@@ -87,8 +87,10 @@ func (c *genCache) Lookup(ctx context.Context, mac string) (int64, error) {
 
 // put caches gen. Generations only increase, so a live entry is never
 // lowered: a lookup that read the database before a rotation and puts after
-// it must not bring the old token back. An expired entry is replaced, which
-// lets a deleted and re-added host (generation back at 0) recover.
+// it must not bring the old token back. An expired entry is replaced, so a
+// deleted and re-added host (generation back at 0) recovers once the old
+// entry expires, genCacheTTL after it was cached. Until then the old token is
+// still accepted and the new generation-0 token is refused.
 func (c *genCache) put(mac string, gen int64, exp time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
