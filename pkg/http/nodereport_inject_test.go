@@ -1,13 +1,14 @@
 package http
 
 import (
+	"bytes"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	ignitionConfig "github.com/coreos/ignition/v2/config"
+	ignitioncfg "github.com/coreos/ignition/v2/config"
 	"github.com/spf13/viper"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -19,12 +20,12 @@ const injectButane = "variant: fcos\nversion: 1.5.0\n"
 
 // injectIgnitionHosts binds a flatcar host to a stored butane config and also
 // leaves a file-path default, returning the DB-bound and unbound MACs.
-func injectIgnitionHosts(t *testing.T) (*db.Store, string, string) {
+func injectIgnitionHosts(t *testing.T) (s *db.Store, boundMAC, fileMAC string) {
 	t.Helper()
-	s := servingStore(t)
+	s = servingStore(t)
 	viper.Set(config.IgnitionFile, "config/ignition.yaml")
 	writeFile(t, "config/ignition.yaml", injectButane)
-	boundMAC, fileMAC := "aa:bb:cc:dd:ee:81", "aa:bb:cc:dd:ee:82"
+	boundMAC, fileMAC = "aa:bb:cc:dd:ee:81", "aa:bb:cc:dd:ee:82"
 	for _, mac := range []string{boundMAC, fileMAC} {
 		if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar", Approved: true}); err != nil {
 			t.Fatal(err)
@@ -50,7 +51,7 @@ func injectIgnitionHosts(t *testing.T) (*db.Store, string, string) {
 func getBody(t *testing.T, h http.HandlerFunc, target string) string {
 	t.Helper()
 	rr := httptest.NewRecorder()
-	h(rr, httptest.NewRequest(http.MethodGet, target, nil))
+	h(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("%s = %d: %s", target, rr.Code, rr.Body.String())
 	}
@@ -62,7 +63,7 @@ func TestIgnitionUnchangedWhenReportsOff(t *testing.T) {
 	for _, mac := range []string{bound, file} {
 		body := getBody(t, ignitionHandler(s, nil), "/ignition.json?mac="+mac)
 		if strings.Contains(body, "booty-health") {
-			t.Fatalf("%s: reports off but body has booty-health:\n%s", mac, body)
+			t.Errorf("%s: reports off but body has booty-health:\n%s", mac, body)
 		}
 	}
 }
@@ -73,12 +74,12 @@ func TestIgnitionGetsHealthWhenOn(t *testing.T) {
 	for name, mac := range map[string]string{"db-bound": bound, "file": file} {
 		t.Run(name, func(t *testing.T) {
 			body := getBody(t, ignitionHandler(s, n), "/ignition.json?mac="+mac)
-			if _, rep, err := ignitionConfig.Parse([]byte(body)); err != nil {
+			if _, rep, err := ignitioncfg.Parse([]byte(body)); err != nil {
 				t.Fatalf("Parse: %v (report %s)\n%s", err, rep.String(), body)
 			}
 			for _, want := range []string{"booty-health.service", "/opt/booty/health-report"} {
 				if !strings.Contains(body, want) {
-					t.Fatalf("missing %q:\n%s", want, body)
+					t.Errorf("missing %q:\n%s", want, body)
 				}
 			}
 		})
@@ -104,11 +105,11 @@ func TestWithNodeReportMergeErrorServesOriginal(t *testing.T) {
 	seedReportHost(t, s, mac)
 	n := &NodeReports{Key: nodeReportKey()}
 	host := &hardware.Host{MAC: mac}
-	if _, _, ok := n.script(s, host); !ok {
+	if _, _, ok := n.script(t.Context(), s, host); !ok {
 		t.Fatal("precondition: script not available for a known host")
 	}
 	in := []byte("not an ignition config")
-	if got := withNodeReport(n, s, host, in); string(got) != string(in) {
+	if got := withNodeReport(t.Context(), n, s, host, in); !bytes.Equal(got, in) {
 		t.Fatalf("withNodeReport = %q, want the original %q", got, in)
 	}
 }

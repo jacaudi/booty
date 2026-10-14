@@ -1,3 +1,6 @@
+// Package http is booty's HTTP server: the management API under /api/v1,
+// the read-only boot endpoints (iPXE, Ignition, machineconfig, preseed), the
+// node health report receiver and the embedded web UI.
 package http
 
 import (

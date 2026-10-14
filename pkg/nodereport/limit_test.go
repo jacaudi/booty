@@ -25,10 +25,10 @@ func (c *fakeClock) advance(d time.Duration) {
 
 func TestLimiterWindow(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(1000, 0)}
-	l := NewLimiter(2, time.Minute, 10, clk.now)
+	l := MustNewLimiter(2, time.Minute, 10, clk.now)
 	for i, want := range []bool{true, true, false} {
 		if got := l.Allow("k"); got != want {
-			t.Fatalf("call %d: got %v, want %v", i, got, want)
+			t.Errorf("call %d: got %v, want %v", i, got, want)
 		}
 	}
 	clk.advance(time.Minute + time.Second)
@@ -39,13 +39,14 @@ func TestLimiterWindow(t *testing.T) {
 
 func TestLimiterCapacityEvictsLRU(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(1000, 0)}
-	l := NewLimiter(1, time.Hour, 3, clk.now)
+	l := MustNewLimiter(1, time.Hour, 3, clk.now)
 	for _, k := range []string{"a", "b", "c", "d"} {
 		if !l.Allow(k) {
-			t.Fatalf("first %s denied", k)
+			t.Errorf("first %s denied", k)
+			continue
 		}
 		if l.Len() > 3 {
-			t.Fatalf("Len = %d after %s, exceeds capacity", l.Len(), k)
+			t.Errorf("Len = %d after %s, exceeds capacity", l.Len(), k)
 		}
 	}
 	if l.Len() != 3 {
@@ -61,7 +62,7 @@ func TestLimiterCapacityEvictsLRU(t *testing.T) {
 
 func TestLimiterConcurrent(t *testing.T) {
 	clk := &fakeClock{t: time.Unix(1000, 0)}
-	l := NewLimiter(5, time.Minute, 8, clk.now)
+	l := MustNewLimiter(5, time.Minute, 8, clk.now)
 	var wg sync.WaitGroup
 	for g := range 50 {
 		wg.Go(func() {
@@ -80,7 +81,7 @@ func TestLimiterConcurrent(t *testing.T) {
 	}
 }
 
-func TestNewLimiterPanicsOnBadBounds(t *testing.T) {
+func TestMustNewLimiterPanicsOnBadBounds(t *testing.T) {
 	for _, tt := range []struct {
 		name            string
 		limit, capacity int
@@ -93,7 +94,7 @@ func TestNewLimiterPanicsOnBadBounds(t *testing.T) {
 					t.Error("want panic")
 				}
 			}()
-			NewLimiter(tt.limit, time.Minute, tt.capacity, time.Now)
+			MustNewLimiter(tt.limit, time.Minute, tt.capacity, time.Now)
 		})
 	}
 }

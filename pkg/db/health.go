@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/jeefy/booty/pkg/nodereport"
@@ -10,13 +12,17 @@ import (
 // UpsertHostHealth stores the latest health report for a host and marks the
 // host as seen, in one transaction. It fails when the host does not exist
 // (foreign key).
-func (s *Store) UpsertHostHealth(mac, receivedAt string, report []byte) error {
-	ctx := context.Background()
+func (s *Store) UpsertHostHealth(ctx context.Context, mac, receivedAt string, report []byte) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin host health upsert: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		// After Commit the rollback reports sql.ErrTxDone, which is not an error here.
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			err = errors.Join(err, rbErr)
+		}
+	}()
 
 	if _, err = tx.ExecContext(ctx,
 		`INSERT INTO host_health (mac, received_at, report) VALUES (?, ?, ?)
@@ -35,9 +41,9 @@ func (s *Store) UpsertHostHealth(mac, receivedAt string, report []byte) error {
 }
 
 // GetHostHealth returns the stored report for mac, or [sql.ErrNoRows].
-func (s *Store) GetHostHealth(mac string) (string, []byte, error) {
+func (s *Store) GetHostHealth(ctx context.Context, mac string) (string, []byte, error) {
 	var receivedAt, report string
-	err := s.db.QueryRowContext(context.Background(),
+	err := s.db.QueryRowContext(ctx,
 		`SELECT received_at, report FROM host_health WHERE mac = ?`, mac,
 	).Scan(&receivedAt, &report)
 	if err != nil {
@@ -52,10 +58,10 @@ func (s *Store) GetHostHealth(mac string) (string, []byte, error) {
 // that is stored but not a JSON object, which [nodereport.Health] could not
 // decode either; a host that never reported is absent. Every field is
 // guarded so one corrupt row cannot fail the whole listing.
-func (s *Store) ListHostHealthSummaries() (map[string]*nodereport.Summary, error) {
+func (s *Store) ListHostHealthSummaries(ctx context.Context) (map[string]*nodereport.Summary, error) {
 	// j is the report when it is a JSON object, else NULL; the nested CASE
 	// keeps json_type off invalid JSON, which would raise "malformed JSON".
-	rows, err := s.db.QueryContext(context.Background(), `
+	rows, err := s.db.QueryContext(ctx, `
 		SELECT mac, j IS NOT NULL,
 		       COALESCE(json_extract(j, '$.running'), ''),
 		       COALESCE(json_extract(j, '$.kernel'), ''),
@@ -71,7 +77,7 @@ func (s *Store) ListHostHealthSummaries() (map[string]*nodereport.Summary, error
 	if err != nil {
 		return nil, fmt.Errorf("list host health summaries: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // read-only; rows.Err below reports iteration failures
 	out := make(map[string]*nodereport.Summary)
 	for rows.Next() {
 		var (
@@ -97,9 +103,9 @@ func (s *Store) ListHostHealthSummaries() (map[string]*nodereport.Summary, error
 
 // HostReportTokenGen returns the host's report-token generation, or
 // [sql.ErrNoRows] when the host is absent.
-func (s *Store) HostReportTokenGen(mac string) (int64, error) {
+func (s *Store) HostReportTokenGen(ctx context.Context, mac string) (int64, error) {
 	var gen int64
-	err := s.db.QueryRowContext(context.Background(), `SELECT report_token_gen FROM hosts WHERE mac = ?`, mac).
+	err := s.db.QueryRowContext(ctx, `SELECT report_token_gen FROM hosts WHERE mac = ?`, mac).
 		Scan(&gen)
 	if err != nil {
 		return 0, err
@@ -109,9 +115,9 @@ func (s *Store) HostReportTokenGen(mac string) (int64, error) {
 
 // BumpHostReportTokenGen increments the generation (invalidating the host's
 // old token) and returns the new value, or [sql.ErrNoRows] for an absent host.
-func (s *Store) BumpHostReportTokenGen(mac string) (int64, error) {
+func (s *Store) BumpHostReportTokenGen(ctx context.Context, mac string) (int64, error) {
 	var gen int64
-	err := s.db.QueryRowContext(context.Background(),
+	err := s.db.QueryRowContext(ctx,
 		`UPDATE hosts SET report_token_gen = report_token_gen + 1 WHERE mac = ? RETURNING report_token_gen`, mac,
 	).Scan(&gen)
 	if err != nil {

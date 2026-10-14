@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,7 +44,7 @@ func ValidToken(key []byte, mac string, gen int64, presented string) bool {
 // LoadOrCreateKey returns the 32-byte token key at path, creating it with
 // crypto/rand (atomically, mode 0600) when the file does not exist.
 func LoadOrCreateKey(path string) ([]byte, error) {
-	key, err := os.ReadFile(path)
+	key, err := os.ReadFile(path) //nolint:gosec // G304: path is the operator-set dataDir key file, never request input
 	if err == nil {
 		if len(key) != keyLen {
 			return nil, fmt.Errorf("node report key %s: %d bytes, want %d", path, len(key), keyLen)
@@ -75,21 +76,21 @@ func writeKey(path string, key []byte) (err error) {
 	tmpPath := tmp.Name()
 	defer func() {
 		// A successful rename leaves nothing at tmpPath; on error discard it.
-		if err != nil {
-			_ = os.Remove(tmpPath)
+		if err == nil {
+			return
+		}
+		if rmErr := os.Remove(tmpPath); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+			err = errors.Join(err, rmErr)
 		}
 	}()
 	if cerr := tmp.Chmod(keyMode); cerr != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("chmod node report key: %w", cerr)
+		return errors.Join(fmt.Errorf("chmod node report key: %w", cerr), tmp.Close())
 	}
 	if _, werr := tmp.Write(key); werr != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write node report key: %w", werr)
+		return errors.Join(fmt.Errorf("write node report key: %w", werr), tmp.Close())
 	}
 	if serr := tmp.Sync(); serr != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync node report key: %w", serr)
+		return errors.Join(fmt.Errorf("sync node report key: %w", serr), tmp.Close())
 	}
 	if cerr := tmp.Close(); cerr != nil {
 		return fmt.Errorf("close node report key: %w", cerr)
@@ -102,13 +103,12 @@ func writeKey(path string, key []byte) (err error) {
 
 // syncDir fsyncs a directory so a rename into it is durable.
 func syncDir(dir string) error {
-	d, err := os.Open(dir)
+	d, err := os.Open(dir) //nolint:gosec // G304: dir is the operator-set dataDir, never request input
 	if err != nil {
 		return fmt.Errorf("open node report key dir: %w", err)
 	}
 	if serr := d.Sync(); serr != nil {
-		_ = d.Close()
-		return fmt.Errorf("sync node report key dir: %w", serr)
+		return errors.Join(fmt.Errorf("sync node report key dir: %w", serr), d.Close())
 	}
 	if cerr := d.Close(); cerr != nil {
 		return fmt.Errorf("close node report key dir: %w", cerr)

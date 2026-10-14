@@ -1,13 +1,11 @@
 package http
 
 import (
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/jeefy/booty/pkg/bootscript"
-	"github.com/jeefy/booty/pkg/hardware"
 )
 
 // bootScriptHandler serves the per-host booty.ipxe script (holding, assigned
@@ -15,13 +13,9 @@ import (
 func bootScriptHandler(arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		script, kind := bootscript.RenderBootScript(identifyHostWith(r, arp), bootscript.URLHost())
-		// Log the normalised MAC ("" when ?mac= does not parse), never the
-		// raw, attacker-controlled query value.
-		mac, _ := hardware.NormalizeMAC(r.URL.Query().Get("mac"))
-		//nolint:sloglint // default logger: no injected logger in this package yet
-		slog.Info("boot script", "kind", kind, "mac", mac)
+		slog.InfoContext(r.Context(), "boot script", "kind", kind, "mac", loggableMAC(r.URL.Query().Get("mac")))
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = io.WriteString(w, script)
+		writeBody(w, []byte(script))
 	}
 }
 
@@ -32,7 +26,6 @@ func menuSelectionHandler(arp arpFunc) http.HandlerFunc {
 		filename := strings.TrimPrefix(r.URL.Path, "/")
 		script := bootscript.MenuSelectionScript(identifyHostWith(r, arp), filename, bootscript.URLHost())
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		//nolint:gosec // G705: text/plain iPXE script, not HTML
-		_, _ = io.WriteString(w, script)
+		writeBody(w, []byte(script))
 	}
 }

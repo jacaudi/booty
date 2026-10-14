@@ -67,8 +67,7 @@ func bootFileHandler(files fs.FS) http.Handler {
 		}
 		//nolint:gosec // G705: data is an embedded binary served as application/efi or octet-stream, never HTML
 		if _, werr := w.Write(data); werr != nil {
-			//nolint:sloglint // default logger: no injected logger in this package yet
-			slog.Debug("writing boot file failed", "name", name, "err", werr)
+			slog.DebugContext(r.Context(), "writing boot file failed", "name", name, "err", werr)
 		}
 	})
 }

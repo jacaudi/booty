@@ -56,7 +56,7 @@ func TestBootScriptHandlers(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tc.target, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tc.target, http.NoBody)
 			if tc.remote != "" {
 				req.RemoteAddr = tc.remote
 			}
@@ -86,7 +86,7 @@ func TestBootScriptRejectsPost(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /booty.ipxe", bootScriptHandler(noARP))
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/booty.ipxe", nil))
+	mux.ServeHTTP(rr, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/booty.ipxe", http.NoBody))
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rr.Code)
 	}
@@ -100,7 +100,7 @@ func TestBootScriptDoesNotChangeDoInstall(t *testing.T) {
 	}
 	noARP := func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp") }
 	rr := httptest.NewRecorder()
-	bootScriptHandler(noARP)(rr, httptest.NewRequest(http.MethodGet, "/booty.ipxe?mac="+mac, nil))
+	bootScriptHandler(noARP)(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/booty.ipxe?mac="+mac, http.NoBody))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
 	}
@@ -128,7 +128,7 @@ func TestBootScriptLogsNormalisedMAC(t *testing.T) {
 		{"evil%0Afake=1", `mac=""`, "evil"},
 	} {
 		logBuf.Reset()
-		req := httptest.NewRequest(http.MethodGet, "/booty.ipxe?mac="+tc.query, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/booty.ipxe?mac="+tc.query, http.NoBody)
 		bootScriptHandler(noARP)(httptest.NewRecorder(), req)
 		got := logBuf.String()
 		if !strings.Contains(got, `msg="boot script"`) || !strings.Contains(got, "kind=") ||

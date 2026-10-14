@@ -23,7 +23,7 @@ func bootTestFiles() fstest.MapFS {
 // not clean it, straight to the handler.
 func bootDo(t *testing.T, h http.Handler, method, p string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), method, "/", http.NoBody)
 	req.URL.Path = p
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
