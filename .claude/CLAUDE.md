@@ -113,9 +113,9 @@ debt, not to be copied into new code:
 
 Each item has a `tech-debt` issue; close the issue when the item is gone and drop its line here.
 
-- `viper.Get*` is read deep inside `pkg/cache`, `pkg/http`, `pkg/ostype`, `pkg/tftp` and `pkg/hardware` (#91).
-- New exported helpers `tftp.URLHost` and `tftp.TopLevelBootFiles` read viper directly (#92).
-- Package-level injected stores: `hardware.SetStore`, `tftp.SetStore` (#93).
+- `viper.Get*` is read deep inside `pkg/cache`, `pkg/http`, `pkg/ostype`, `pkg/tftp`, `pkg/bootscript` and `pkg/hardware` (#91).
+- New exported helpers `bootscript.URLHost` and `tftp.TopLevelBootFiles` read viper directly (#92).
+- Package-level injected stores: `hardware.SetStore`, `bootscript.SetStore` (#93).
 - The layout is `pkg/` rather than `internal/`, and there is no patchbay package (#94).
 - The HTTP server calls `os.Exit` inside a goroutine and on UI embed failure; TFTP no longer does (#95).
 - Existing `golangci-lint` findings (1,172 uncapped at `ed6198d`) are not yet fixed (#96).
@@ -144,7 +144,8 @@ Each item has a `tech-debt` issue; close the issue when the item is gone and dro
 | `pkg/ostype/` | OS taxonomy: families (ignition, talos, debian, tool), OS registrations, version discovery, verification keys. |
 | `pkg/cache/` | Artifact cache: catalog (`catalog.yaml`), reconciler, download/verify, retention/eviction, Debian DVD handling. |
 | `pkg/checksum/` | `sha256sum`-format digest parsing. |
-| `pkg/tftp/` | TFTP server, `booty.ipxe` dispatch (holding / assigned / menu), boot menu, per-OS iPXE templates and tool scripts. |
+| `pkg/tftp/` | TFTP server: allowlisted dataDir files, embedded iPXE, the `booty.ipxe` stub. |
+| `pkg/bootscript/` | Boot-script renderer shared by HTTP and TFTP: `booty.ipxe` dispatch (holding / assigned / menu), boot menu, per-OS iPXE templates, tool scripts, `URLHost`. |
 | `pkg/http/` | Base mux (boot-path endpoints, `/data/` allowlist, login/logout, UI) plus the huma `/api/v1` surface. Also config rendering for Butane→Ignition, Talos machineconfig and debianconfig→preseed, and Talos cluster generation/import. |
 | `pkg/proxydhcp/` | Default-off proxyDHCP responder (UDP 67 + 4011). |
 | `pkg/power/` | Wake-on-LAN. |
