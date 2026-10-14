@@ -97,6 +97,40 @@ tasks:
     cmds:
       - docker build --build-arg BOOTY_VERSION={{.VERSION}} --build-arg BOOTY_TIMESTAMP={{.TIMESTAMP}} -t {{.IMAGE}} .
 
+  image:smoke:
+    desc: Build the image for this machine's arch and smoke-test it (binary arch matches, booty starts, /healthz, /version.json and /ui/ answer)
+    deps: [image]
+    vars:
+      NAME: booty-smoke
+      PORT: '18080'
+    cmds:
+      - docker rm -f {{.NAME}} >/dev/null 2>&1 || true
+      - defer: docker rm -f {{.NAME}} >/dev/null 2>&1 || true
+      # The binary must be built for the image's platform (an amd64 binary once shipped in the arm64 image).
+      - |
+        want=$(docker image inspect -f '{{"{{"}}.Architecture{{"}}"}}' {{.IMAGE}})
+        docker create --name {{.NAME}} {{.IMAGE}} >/dev/null
+        mkdir -p bin
+        docker cp {{.NAME}}:/booty bin/booty-smoke
+        docker rm {{.NAME}} >/dev/null
+        got=$(go version -m bin/booty-smoke | awk '$1=="build" && sub(/^GOARCH=/, "", $2) {print $2}')
+        rm -f bin/booty-smoke
+        echo "image arch: $want, binary GOARCH: $got"
+        test "$want" = "$got"
+      # Bridge networking, so this runs on macOS too; TFTP and proxyDHCP are not exercised.
+      - docker run -d --name {{.NAME}} -p 127.0.0.1:{{.PORT}}:8080 --tmpfs /data {{.IMAGE}} --dataDir=/data >/dev/null
+      - |
+        for i in $(seq 1 30); do
+          curl -fsS http://127.0.0.1:{{.PORT}}/healthz >/dev/null 2>&1 && break
+          if [ "$(docker inspect -f '{{"{{"}}.State.Running{{"}}"}}' {{.NAME}})" != true ]; then docker logs {{.NAME}}; exit 1; fi
+          sleep 1
+        done
+        curl -fsS http://127.0.0.1:{{.PORT}}/healthz >/dev/null || { docker logs {{.NAME}}; exit 1; }
+        curl -fsS http://127.0.0.1:{{.PORT}}/version.json
+        echo
+        curl -fsS -o /dev/null http://127.0.0.1:{{.PORT}}/ui/
+        echo "smoke test passed"
+
   image:push:
     deps: [image]
     cmds:
