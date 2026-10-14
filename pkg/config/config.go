@@ -23,6 +23,16 @@ import (
 // DefaultTFTPPort is the default of --tftpPort.
 const DefaultTFTPPort = 69
 
+// Config keys for the TFTP port, the proxyDHCP relay switch and the node-report switch.
+const (
+	// TFTPPort is the UDP port the TFTP server binds.
+	TFTPPort = "tftpPort"
+	// ProxyDHCPRelay makes proxyDHCP answer relayed (giaddr) requests too.
+	ProxyDHCPRelay = "proxyDHCPRelay"
+	// NodeReports turns on the node health report receiver and its injection.
+	NodeReports = "nodeReports"
+)
+
 const (
 	FlatcarChannel         = "flatcarChannel"
 	CoreOSChannel          = "coreOSChannel"
@@ -32,7 +42,6 @@ const (
 	FlatcarArchitecture    = "flatcarArchitecture"
 	Debug                  = "debug"
 	HttpPort               = "httpPort"
-	TFTPPort               = "tftpPort"
 	DataDir                = "dataDir"
 	FlatcarURL             = "flatcarURL"
 	CoreOSURL              = "coreOSURL"
@@ -43,8 +52,6 @@ const (
 	ProxyDHCPBootfileBIOS  = "proxyDHCPBootfileBIOS"
 	ProxyDHCPBootfileUEFI  = "proxyDHCPBootfileUEFI"
 	ProxyDHCPBootfileARM64 = "proxyDHCPBootfileARM64"
-	ProxyDHCPRelay         = "proxyDHCPRelay"
-	NodeReports            = "nodeReports"
 	TalosArchitecture      = "talosArchitecture"
 	TalosSchematic         = "talosSchematic"
 	TalosRetainMinors      = "talosRetainMinors"
@@ -196,7 +203,6 @@ func DetectServerIP() (string, error) {
 // caller.
 func CloseQuietly(c io.Closer, what string) {
 	if err := c.Close(); err != nil {
-		//nolint:sloglint // default logger: no injected logger in this package yet
 		slog.Debug("Close failed", "what", what, "error", err)
 	}
 }

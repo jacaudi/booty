@@ -1,3 +1,5 @@
+// Package bootscript renders the iPXE boot scripts and menus that booty
+// serves to PXE clients, and the per-boot tokens they carry.
 package bootscript
 
 import (
@@ -38,8 +40,8 @@ func StubScript(urlHost string) string {
 
 // RenderBootScript renders the per-host booty.ipxe script and returns it with
 // the kind of boot (holding, assigned, menu) it chose.
-func RenderBootScript(host *hardware.Host, urlHost string) (string, string) {
-	kind, _ := bootDispatch(host)
+func RenderBootScript(host *hardware.Host, urlHost string) (script, kind string) {
+	kind, _ = bootDispatch(host)
 	switch kind {
 	case kindAssigned:
 		return assignedScript(host, urlHost), kind
