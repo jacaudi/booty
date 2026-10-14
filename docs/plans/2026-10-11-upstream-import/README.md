@@ -53,8 +53,8 @@ These apply to every task in every phase. Values are copied from the design.
   - **No attribution trailers** (`.claude/settings.json` disables them).
   - One commit per task unless the task says otherwise.
   - Run `go build ./... && go vet ./...` before every commit, plus the task's tests.
-- **Modern Go.** Before editing any `.go` file, run the vendored JetBrains skill:
-  `sh .claude/skills/use-modern-go/scripts/run-tool.sh list --file-path <file>`.
+- **Modern Go.** Before editing any `.go` file, run the JetBrains `use-modern-go` skill
+  (the per-user `modern-go-guidelines` plugin; it was vendored during the import and later removed).
   - Read the whole output.
   - Apply the guidelines it returns to the code you write.
   - If a plan code block uses an older idiom that a returned guideline replaces, use the modern form. The exception is a form that would change behaviour; then keep the plan's form.
