@@ -104,7 +104,9 @@ In priority order (milestones M0–M7 that deliver these: `docs/roadmap.md`):
 - **DRY.** One implementation per behaviour. Example: TFTP and HTTP share one boot-script renderer.
 - **SOLID.** Small single-purpose types that depend on narrow interfaces, not concretions.
 - **12-Factor.**
-  - Config comes from flags and env (viper keys equal flag names).
+  - Config comes from flags and env. A flag's viper key equals its name; a few keys have no
+    flag and come from a default or env only (`ignitionFile`/`IGNITION_FILE`, `databasePath`,
+    `hardwareMap`, the upstream URL keys).
   - Logs are structured `log/slog` to stderr (see `docs/standards.md` §1.7).
   - Start up fast and shut down gracefully (cancel context, drain servers, bounded timeouts).
 - **Idiomatic, modern Go.**
@@ -136,10 +138,18 @@ In priority order (milestones M0–M7 that deliver these: `docs/roadmap.md`):
 - **Security invariants.**
   - Every state-changing endpoint lives under `/api/v1`, behind the auth gate.
   - Boot-path endpoints (`/ignition.json`, `/machineconfig`, `/preseed`, `/booty.ipxe`,
-    `/boot/*`, `/data/*`) are read-only.
+    `/menu/`, `/boot/*`, `/data/*`) are read-only. The one open route that writes is
+    `POST /node/report` (node health, per-host HMAC token plus an ARP match).
+    `TestOnlyAllowlistedRoutesAnswerWithoutACredential` (`pkg/http/open_routes_test.go`) pins
+    the exact set of routes that answer without a credential.
   - Files under `dataDir` are served only from an explicit allowlist, on HTTP and TFTP alike.
-  - Secrets are never logged and never written outside their store.
+  - Secrets are never logged and never written outside their store. Rendered-config errors pass
+    through `redactJoinString` (`pkg/http/ignition.go`). Known residual: a yaml type error quotes
+    the first 7 characters of a mistyped scalar, which full-string redaction cannot catch.
   - Any new unauthenticated endpoint carries its own credential and bounded, pre-auth rate limiting.
+    Boot-path routes are the exception: firmware and installers have no credential to present, so
+    they stay open and read-only (`/booty.ipxe`, `/menu/`, `/boot/` have neither credential nor
+    rate limit).
 
 ### How the principles apply to existing code
 
@@ -153,18 +163,18 @@ Each item has an open issue; close the issue when the item is gone and drop its 
 - New exported helpers `bootscript.URLHost` and `tftp.TopLevelBootFiles` read viper directly (#92).
 - Package-level injected stores: `hardware.SetStore`, `bootscript.SetStore` (#93).
 - The layout is `pkg/` rather than `internal/`, and there is no patchbay package (#94).
-- The HTTP server calls `os.Exit` inside a goroutine and on UI embed failure; TFTP no longer does (#95).
 - Existing `golangci-lint` findings (828 under go-tricorder, uncapped) are not yet fixed (#96).
   Only new and changed code is gated. govulncheck reports no called vulnerabilities.
 - Host operations report a `HasHost` database error as 422 "invalid MAC" (#97).
 - Most flags cannot be set from the environment; only four keys are env-bound (#98).
-- A runtime startup error is printed twice (#99).
 - `boot.Lookup` is unused (#100).
-- A symlink that stays inside `--dataDir` bypasses the TFTP and `/data/` allowlist (#101).
 - proxyDHCP answers on whatever source port a client claims (#102).
-- `wake-host` has no per-host rate limit (#103).
 - `GET /menu/<anything>` answers 200 with the holding script (#104).
 - proxyDHCP broadcasts may leave through the wrong interface on multi-homed hosts (#105).
+- `enableBroadcast` (`SO_BROADCAST`) is duplicated in `pkg/power` and `pkg/proxydhcp` (#109).
+- Packages log through the global `slog` default instead of an injected `*slog.Logger` (#116).
+- The proxyDHCP no-ciaddr unicast reply goes to a client-chosen source port (#147).
+- Read-only boot routes accept every HTTP method (#149).
 - Unverified on real hardware: BIOS PXE via `undionly.kpxe` (#106), the Debian node-report
   `late_command` (#107), `booty-health.service` on Flatcar/FCOS (#108).
 
@@ -172,7 +182,7 @@ Each item has an open issue; close the issue when the item is gone and drop its 
 
 | Path | Purpose |
 |---|---|
-| `cmd/` | Cobra entrypoint. `main.go` registers flags into an `args` struct in `init()` and binds them all with one `viper.BindPFlags(flags)`. It also holds the `run` startup sequence and ordered shutdown, and the `token` and `convert-preseed` subcommands. |
+| `cmd/` | Cobra entrypoint. `main.go` registers flags into an `args` struct in `init()` and binds them all with one `viper.BindPFlags(flags)`, and holds the `run` startup sequence; `shutdown.go` the ordered shutdown; `token.go` and `convert_preseed.go` the `token` and `convert-preseed` subcommands. |
 | `pkg/config/` | Viper key constants, `LoadConfig` defaults/env bindings, path helpers, `--secretsKey` (age) loading. |
 | `pkg/auth/` | Shared API token store (`<dataDir>/api-token`, 0600) and the stateless signed session cookie. Leaf package. |
 | `pkg/db/` | SQLite (`modernc.org/sqlite`, pure Go) typed store. Migrations are embedded `migrations/NNNN_name.sql` files, applied in order against `PRAGMA user_version`; there are no down migrations. |
@@ -204,7 +214,9 @@ Each item has an open issue; close the issue when the item is gone and drop its 
    fallback.
 3. The OS kernel/initrd come from `/data/cache/...` over HTTP. The config comes from
    `/ignition.json`, `/machineconfig` or `/preseed`, identified by `?mac=` or ARP.
-4. Unknown MACs get a reboot-loop config and appear as unknown hosts until approved.
+4. Unknown or unapproved MACs get the holding script from `/booty.ipxe` and appear as unknown
+   hosts until approved. The reboot-loop config is `/ignition.json`'s answer for a host it cannot
+   identify, not part of the iPXE path.
 
 ## Conventions
 
@@ -224,7 +236,10 @@ Each item has an open issue; close the issue when the item is gone and drop its 
   - Update the hard-coded `user_version` assertions in `pkg/db/migrate_test.go`.
   - The `ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT` pattern is established.
 - **Tests.**
-  - `go test -race ./...` must pass; the baseline is about 720 Go tests in about 60 s.
+  - `go test -race ./...` must pass; the baseline is about 1,150 test runs (`=== RUN` lines,
+    subtests included; 858 top-level tests) in about 72 s (2026-10-14). Count with
+    `go test -race -v ./... > out.txt 2>&1`, then `awk '/^=== RUN/{n++}END{print n}' out.txt` as a
+    separate command; the shell hook mangles piped or chained counts.
   - Use `restoreViper` (cmd) or `viper.Reset(); t.Cleanup(viper.Reset)` to isolate viper state.
   - Web: `cd web && npm ci && npm test` (Vitest), and `npx tsc -b` for type checks.
 - **Ported upstream code** keeps a one-line provenance comment naming the upstream file and
@@ -236,13 +251,16 @@ Each item has an open issue; close the issue when the item is gone and drop its 
 ## Working in this repo
 
 - Build/test: `go build ./...`, `go vet ./...`, `go test -race ./...`.
-  - The `go.mod` toolchain line selects go1.26.9; the system `go` here may be older and
-    auto-switches.
+  - The `go.mod` toolchain line is go1.26.9. It only ever upgrades: the local `go` here is 1.27.2,
+    so local builds and scans use 1.27.2. CI's `setup-go` installs the `go` line (1.26.1), and
+    commands run inside the module switch up to 1.26.9. Tools started with `go run pkg@version`
+    run outside the module and do not switch, which is why CI installs govulncheck instead.
   - The Makefile is gone; `taskfile.yml` (go-task) is the build tool.
   - The lint gate needs a golangci-lint v2 on `PATH` (it builds `bin/custom-gcl`, v2.14.0 plus the
     plugin, with Go >= 1.26) and a go-tricorder checkout; see `docs/development.md`.
-- CI: `.github/workflows/go-test.yml` (build, vet, `go test -race`) and `web-test.yml`. Publish
-  workflows are being removed and will be rebuilt later.
+- CI: `.github/workflows/go-test.yml` (build, vet, gofmt, govulncheck, `go test -race`) and
+  `web-test.yml`. The lint gate is not in CI yet (#152). Publish workflows are being removed and
+  will be rebuilt later.
 - Real network boots need L2 adjacency, UDP 67/69/4011 and `CAP_NET_BIND_SERVICE` + `CAP_NET_RAW`.
   Never assume a PXE client or QEMU exists. Check (`which qemu-system-x86_64`) and install if
   the task needs it.
