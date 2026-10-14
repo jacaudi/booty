@@ -494,8 +494,8 @@ linters:
         text: must not log at Info
       # booty: every package logs through the process logger that cmd/ installs with
       # slog.SetDefault; injecting a *slog.Logger into each package (go-standards §7) is the same
-      # debt class as #91 (a value read from a process global instead of passed in) and is not
-      # tracked separately yet. The attribute-key and *Context checks stay on.
+      # debt class as #91 (a value read from a process global instead of passed in), tracked
+      # in #116. The attribute-key and *Context checks stay on.
       - path: ^(cmd|pkg)/
         linters:
           - sloglint
