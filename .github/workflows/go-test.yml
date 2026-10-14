@@ -23,5 +23,19 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      - name: Format
+        # Same check as `task fmt`: fail listing every unformatted tracked file.
+        run: |
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+      - name: Vulnerabilities
+        # Fails (exit 3) only on a vulnerability the code actually calls.
+        # Installed, then run inside the module, so its go calls switch to the
+        # go.mod toolchain and scan the standard library booty ships with;
+        # `go run pkg@version` runs outside the module and would scan the older
+        # Go that setup-go installed from the go line. -show version logs it.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$(go env GOPATH)/bin/govulncheck" -show version ./...
       - name: Test
         run: go test -race ./...
