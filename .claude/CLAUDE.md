@@ -81,9 +81,13 @@ In priority order:
   - Accept interfaces, return structs. Wrap errors with `%w`. Use table-driven tests.
   - No new package-level mutable state.
   - Code passes `gofmt`, `go vet`, `golangci-lint` v2 and `govulncheck`.
-  - **Lint gate:** `.golangci.yml` is maratori's golden config (v2.14.0) with `paralleltest` and
-    `testpackage` disabled. New and changed code must pass
-    `golangci-lint run --new-from-merge-base=origin/main ./...`.
+  - **Lint gate:** `.golangci.yml` is the go-tricorder baseline (a golangci-lint v2.14.0 build with the
+    `tricorder` plugin; `paralleltest` and `testpackage` stay off). New and changed code must pass
+    `task lint:new` (`bin/custom-gcl run --new-from-merge-base=origin/main ./...`), which builds
+    `bin/custom-gcl` from the go-tricorder checkout in `TRICORDER_DIR` (default `../go-tricorder`).
+    The stock `golangci-lint` cannot load the config. Fix findings; a `//nolint` names its linter
+    and a real reason, and "ported verbatim" is not one. The scoped exclusions in `.golangci.yml`
+    each carry their reason and, where one exists, the issue that removes them.
   - **Modern idioms:** before editing a `.go` file, run the JetBrains `use-modern-go` skill
     (the `modern-go-guidelines` plugin, installed per user, not vendored here) and apply what it
     returns.
@@ -118,12 +122,12 @@ Each item has a `tech-debt` issue; close the issue when the item is gone and dro
 - Package-level injected stores: `hardware.SetStore`, `bootscript.SetStore` (#93).
 - The layout is `pkg/` rather than `internal/`, and there is no patchbay package (#94).
 - The HTTP server calls `os.Exit` inside a goroutine and on UI embed failure; TFTP no longer does (#95).
-- Existing `golangci-lint` findings (1,172 uncapped at `ed6198d`) are not yet fixed (#96).
+- Existing `golangci-lint` findings (828 under go-tricorder, uncapped) are not yet fixed (#96).
   Only new and changed code is gated. govulncheck reports no called vulnerabilities.
 - Host operations report a `HasHost` database error as 422 "invalid MAC" (#97).
 - Most flags cannot be set from the environment; only four keys are env-bound (#98).
 - A runtime startup error is printed twice (#99).
-- `boot.Lookup` is unused and `boot.Names` is a mutable exported slice (#100).
+- `boot.Lookup` is unused (#100).
 - A symlink that stays inside `--dataDir` bypasses the TFTP and `/data/` allowlist (#101).
 - proxyDHCP answers on whatever source port a client claims (#102).
 - `wake-host` has no per-host rate limit (#103).
@@ -202,7 +206,8 @@ Each item has a `tech-debt` issue; close the issue when the item is gone and dro
   - The `go.mod` toolchain line selects go1.26.9; the system `go` here may be older and
     auto-switches.
   - The Makefile is gone; `taskfile.yml` (go-task) is the build tool.
-  - The golangci-lint gate needs v2.14.0 built with Go >= 1.26, at `$HOME/go/bin`.
+  - The lint gate needs a golangci-lint v2 on `PATH` (it builds `bin/custom-gcl`, v2.14.0 plus the
+    plugin, with Go >= 1.26) and a go-tricorder checkout; see `docs/development.md`.
 - CI: `.github/workflows/go-test.yml` (build, vet, `go test -race`) and `web-test.yml`. Publish
   workflows are being removed and will be rebuilt later.
 - Real network boots need L2 adjacency, UDP 67/69/4011 and `CAP_NET_BIND_SERVICE` + `CAP_NET_RAW`.

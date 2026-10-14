@@ -1,482 +1,534 @@
-# booty: adopted unmodified from maratori/golangci-lint-config @ v2.14.0
-# (https://github.com/maratori/golangci-lint-config), except: goimports
-# local-prefixes set to this module, and paralleltest/testpackage disabled
-# (see the two "booty:" comments). New code must be clean:
-#   golangci-lint run --new-from-merge-base=origin/main ./...
-# Existing findings are recorded in docs/development.md, not yet fixed.
-
-# This file is licensed under the terms of the MIT license https://opensource.org/license/mit
-# Copyright (c) 2021-2025 Marat Reimers
-
-## Golden config for golangci-lint v2.14.0
-#
-# This is the best config for golangci-lint based on my experience and opinion.
-# It is very strict, but not extremely strict.
-# Feel free to adapt it to suit your needs.
-# If this config helps you, please consider keeping a link to this repo (see the next comment).
-
-# Based on https://github.com/maratori/golangci-lint-config
-
+# booty: the go-tricorder baseline (config/golangci.yml), adopted with goimports local-prefixes
+# set to this module. Lint through bin/custom-gcl only (task lint, task lint:new): the stock
+# golangci-lint cannot load the tricorder plugin. Edits to the baseline carry a "booty:" comment.
+# paralleltest and testpackage are not in the baseline and stay off on purpose: booty's tests
+# share viper's package-global state (cannot run in parallel) and are white-box, in-package
+# files that call unexported helpers (maintainer decision 2026-10-11).
+# go-tricorder baseline: codifies go-standards (~/.config/reference/go-standards.md).
+# A superset of the github-actions-align fleet floor (config/fleet-floor.golangci.yml, D12);
+# every deviation from the floor carries a "deviation:" head comment (task floor:check).
+# Needs the custom binary built from .custom-gcl.yml; stock golangci-lint cannot load the
+# tricorder plugin. Consumers: set goimports local-prefixes to your module path.
 version: "2"
 
+run:
+  timeout: 5m
+  tests: true
+  allow-parallel-runners: true
+  # Paths relative to the go.mod directory, so symlinked or relocated configs keep
+  # path exclusions and editor paths correct (D33).
+  relative-path-mode: gomod
+  # Lint files behind these build tags too (samber review; gate 2 m11).
+  build-tags:
+    - integration
+    - e2e
+
+linters:
+  default: none
+  enable:
+    # fleet floor
+    - bodyclose
+    - dupl
+    - errcheck
+    - errorlint
+    - gocritic
+    - gocyclo
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - modernize
+    - nolintlint
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    # docs (go-standards §11.2)
+    - godoclint
+    # tests (§8)
+    - usetesting
+    - testifylint
+    - thelper
+    - testableexamples
+    # errors (§4.4)
+    - errname
+    - nilerr
+    - forcetypeassert
+    # enums (§4.2)
+    - exhaustive
+    - iotamixing
+    # globals, init (§5.4; D26)
+    - gochecknoglobals
+    - gochecknoinits
+    # dependencies (§3, §10)
+    - depguard
+    - gomoddirectives
+    # interfaces (§12)
+    - interfacebloat
+    - ireturn
+    - iface
+    # context and concurrency (§13)
+    - containedctx
+    - contextcheck
+    - noctx
+    - fatcontext
+    # logging and tracing (§7, §14)
+    - sloglint
+    - spancheck
+    # databases (samber review)
+    - sqlclosecheck
+    - rowserrcheck
+    # naming and receivers (Effective Go, samber review)
+    - goprintffuncname
+    - recvcheck
+    - nakedret
+    # marshaling (samber review)
+    - musttag
+    # banned calls (§7, §10, §15.1; D13, D37)
+    - forbidigo
+    # upstream catalogue (Phase 2 D48, D49): importas UP-21 (GB#protocol-buffer-messages-and-stubs),
+    # embeddedstructfieldcheck UP-57/UP-76 (U#embedding-in-structs), perfsprint UP-109
+    # (U#prefer-strconv-over-fmt), godot UP-27 (CRC#comment-sentences; defaults: period only).
+    - importas
+    - embeddedstructfieldcheck
+    - perfsprint
+    - godot
+    # go-tricorder's own analyzers
+    - tricorder
+
+  settings:
+    # go-tricorder's analyzers (design §4.3). Keep the `disable: []` line bare: e2e rewrites it.
+    custom:
+      tricorder:
+        type: module
+        description: go-tricorder standards analyzers
+        original-url: github.com/jacaudi/go-tricorder
+        settings:
+          disable: []
+
+    # go-standards §8.5 minimum set; fieldalignment and shadow are noise for this codebase style.
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+        - shadow
+
+    # go-standards §8.5; includes naming (ST1003), doc (ST1000/ST1020) and quick fixes (QF1012).
+    staticcheck:
+      checks:
+        - all
+
+    # go-standards §8.5; Effective Go idioms (ifElseChain, typeSwitchVar, deferInLoop, exitAfterDefer).
+    gocritic:
+      enable-all: true
+      # whyNoLint duplicates nolintlint.
+      disabled-checks:
+        - unnamedResult
+        - hugeParam
+        - whyNoLint
+
+    # fleet floor.
+    gocyclo:
+      min-complexity: 15
+
+    errcheck:
+      # Never discard an error with _ (Effective Go #blank_assign; D38).
+      check-blank: true
+
+    # go-standards §4.4: %w wrapping, errors.Is/As instead of == and type assertions.
+    errorlint:
+      asserts: true
+      comparison: true
+      errorf: true
+
+    # go-standards §8.5: every //nolint names its linter and says why.
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+    gosec:
+      # errcheck covers unhandled errors, and better (fleet floor).
+      excludes:
+        - G104
+
+    # go-standards §3, §4.4, §11.2, §13; fleet floor rules first.
+    revive:
+      rules:
+        # fleet floor
+        # UP-5 (GD#initialisms): iOS and gRPC keep one case, plus DB (Phase 2 D48). DDOS is not
+        # listed: revive would then suggest DDOS, which GD calls incorrect for DDoS (D56).
+        - name: var-naming
+          arguments:
+            - []
+            - [DB, IOS, GRPC]
+        - name: package-comments
+        - name: exported
+        - name: error-return
+        - name: error-naming
+        - name: indent-error-flow
+        - name: unexported-return
+        - name: comment-spacings
+        - name: import-shadowing
+        # go-standards
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-strings
+        - name: errorf
+        - name: use-any
+        - name: use-slices-sort
+        - name: use-waitgroup-go
+        - name: unsecure-url-scheme
+        # upstream conflict defaults (design §5)
+        - name: dot-imports
+        - name: deep-exit
+        # Effective Go (D37)
+        - name: superfluous-else
+        - name: confusing-results
+        - name: defer
+        - name: package-directory-mismatch
+        - name: blank-imports
+        # upstream catalogue (Phase 2 D48); the RULES.md UP row is named on each rule.
+        # UP-1 (CRC#receiver-names): receiver names are one or two letters.
+        - name: receiver-naming
+          arguments:
+            - max-length: 2
+        # UP-10 (GD#package-names): no uninformative package names.
+        - name: package-naming
+          arguments:
+            - check-extra-bad-name: true
+              user-defined-bad-names: [utility, helper, lib, model, testhelper]
+        # UP-21 (GD#import-renaming): import aliases follow package-name rules.
+        - name: import-alias-naming
+        # UP-22 (CRC#imports): no alias that repeats the package name.
+        - name: redundant-import-alias
+        # UP-69 (U#top-level-variable-declarations): omit a type the expression already has.
+        - name: var-declaration
+        # UP-78 (U#use-time-to-handle-time): Unix-time variables name their unit.
+        - name: epoch-naming
+        # UP-86, UP-87 (GD#nil-slices): nil slices, not []T{} or make([]T, 0).
+        - name: enforce-slice-style
+          arguments:
+            - nil
+        # UP-103 (U#reduce-nesting): at most five nested control blocks.
+        - name: max-control-nesting
+          arguments:
+            - 5
+        # UP-83 (U#functional-options, GB#function-argument-lists; Phase 3 D61): 6+ parameters
+        # need an option struct, functional options or a builder.
+        - name: argument-limit
+          arguments: [5]
+
+    # go-standards §11.2: every exported symbol and package documented.
+    godoclint:
+      default: basic
+      enable:
+        - require-doc
+        - require-pkg-doc
+
+    # go-standards §4.2: enum switches list every value.
+    exhaustive:
+      default-signifies-exhaustive: false
+
+    interfacebloat:
+      # §12: more than five methods needs splitting.
+      max: 5
+
+    ireturn:
+      # stdlib allows returning hash.Hash32, io.Reader and friends (D36).
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        - generic
+
+    # go-standards §12: interfaces at the consumer, no duplicates, no single-use exports.
+    iface:
+      enable:
+        - identical
+        - unused
+        - opaque
+
+    gomoddirectives:
+      # §3: no local replace directives.
+      replace-local: false
+
+    # go-standards §8.1: t.TempDir, t.Context.
+    usetesting:
+      os-temp-dir: true
+      context-background: true
+      context-todo: true
+
+    sloglint:
+      # §14.2 *Context variants when ctx is in scope; §7 no package-level loggers.
+      context: scope
+      no-global: all
+      static-msg: true
+      key-naming-case: snake
+      forbidden-keys:
+        - password
+        - passwd
+        - secret
+        - token
+        - api_key
+        - apikey
+        - authorization
+        - cookie
+        - ssn
+        - credit_card
+
+    # go-standards §14: spans are ended and error paths set status (samber review).
+    spancheck:
+      checks:
+        - end
+        - set-status
+
+    musttag:
+      # D13: viper decodes into structs via mapstructure tags.
+      functions:
+        - name: (*github.com/spf13/viper.Viper).Unmarshal
+          tag: mapstructure
+          arg-pos: 0
+        - name: (*github.com/spf13/viper.Viper).UnmarshalKey
+          tag: mapstructure
+          arg-pos: 1
+        # UP-79 (U#use-field-tags-in-marshaled-structs): the next two entries cover the YAML
+        # library go-standards §10 names, which reads json tags.
+        - name: sigs.k8s.io/yaml.Marshal
+          tag: json
+          arg-pos: 0
+        - name: sigs.k8s.io/yaml.Unmarshal
+          tag: json
+          arg-pos: 1
+
+    # go-standards §7, §9.3, §10, §16; samber review bans (design §8).
+    depguard:
+      rules:
+        banned:
+          list-mode: lax
+          deny:
+            - pkg: github.com/sirupsen/logrus
+              desc: use log/slog (go-standards §7)
+            - pkg: github.com/rs/zerolog
+              desc: use log/slog (go-standards §7)
+            - pkg: log$
+              desc: use log/slog (go-standards §7; Effective Go, D37)
+            - pkg: github.com/labstack/echo
+              desc: use Huma (go-standards §10)
+            - pkg: github.com/gin-gonic/gin
+              desc: use Huma (go-standards §10)
+            - pkg: github.com/gofiber/fiber
+              desc: fasthttp, non-stdlib handlers; use Huma (go-standards §10)
+            - pkg: github.com/swaggo/
+              desc: Huma generates OpenAPI (go-standards §10)
+            - pkg: github.com/mattn/go-sqlite3
+              desc: cgo; use modernc.org/sqlite (go-standards §9.3)
+            - pkg: gopkg.in/yaml
+              desc: use sigs.k8s.io/yaml (go-standards §10)
+            - pkg: github.com/golang/mock
+              desc: prefer hand-written fakes (go-standards §8.4)
+            - pkg: go.uber.org/mock
+              desc: prefer hand-written fakes (go-standards §8.4)
+            - pkg: math/rand$
+              desc: use math/rand/v2 (samber review)
+            - pkg: go.uber.org/dig
+              desc: manual constructors and functional options (go-standards §16, D20)
+            - pkg: go.uber.org/fx
+              desc: manual constructors and functional options (go-standards §16, D20)
+            - pkg: github.com/samber/lo
+              desc: stdlib slices/maps (go-standards §10)
+            - pkg: github.com/samber/mo
+              desc: use (T, error) (go-standards §4.4)
+            - pkg: github.com/samber/ro
+              desc: stdlib iterators and channels (go-standards §10)
+            - pkg: github.com/samber/oops
+              desc: fmt.Errorf with %w (go-standards §4.4)
+            - pkg: github.com/pkg/errors
+              desc: fmt.Errorf with %w and errors.Is/As (go-standards §4.4)
+            - pkg: go.uber.org/automaxprocs
+              desc: GOMAXPROCS is cgroup-aware since Go 1.25
+            - pkg: golang.org/x/crypto/sha3
+              desc: crypto/sha3 is in the stdlib since Go 1.24
+            - pkg: golang.org/x/crypto/hkdf
+              desc: crypto/hkdf is in the stdlib since Go 1.24
+            - pkg: golang.org/x/crypto/pbkdf2
+              desc: crypto/pbkdf2 is in the stdlib since Go 1.24
+            - pkg: github.com/hashicorp/go-multierror
+              desc: use errors.Join (go-standards §15.3)
+            - pkg: go.uber.org/multierr
+              desc: use errors.Join (go-standards §15.3)
+        library-no-reflect:
+          files:
+            - "!$test"
+            - "!**/cmd/**"
+          deny:
+            - pkg: reflect
+              desc: no reflection-driven config injection (go-standards §5.4)
+        cli-config-in-cmd-only:
+          files:
+            - "!$test"
+            - "!**/cmd/**"
+          deny:
+            - pkg: github.com/spf13/viper
+              desc: config is loaded in cmd/ and passed down (go-standards §6, D13)
+            - pkg: github.com/spf13/cobra
+              desc: commands live in cmd/ (go-standards §6)
+        # UP-68 (GD#flags): flags are defined only in package main; examples/ holds package main programs (D24).
+        flags-in-main-only:
+          files:
+            - "!$test"
+            - "!**/cmd/**"
+            - "!**/examples/**"
+          deny:
+            - pkg: flag$
+              desc: flags are defined only in package main (GD#flags)
+            - pkg: github.com/spf13/pflag
+              desc: flags are defined only in package main (GD#flags)
+
+    # go-standards §7, §10, §15.1; Effective Go (D37). analyze-types resolves import aliases.
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^http\.DefaultClient$
+          msg: build an *http.Client with timeouts (go-standards §15.1)
+        - pattern: ^http\.(Get|Head|Post|PostForm)$
+          msg: uses http.DefaultClient (go-standards §15.1)
+        - pattern: ^slog\.(Info|Warn|Error)(Context)?$
+          msg: library code must not log at Info+ (go-standards §7)
+        - pattern: ^slog\.Logger\.(Info|Warn|Error)(Context)?$
+          msg: library code must not log at Info+ (go-standards §7)
+        - pattern: ^viper\.(AddConfigPath|AddRemoteProvider|AddSecureRemoteProvider|AllKeys|AllowEmptyEnv|AllSettings|AutomaticEnv|BindEnv|BindFlagValue|BindFlagValues|BindPFlag|BindPFlags|ConfigFileUsed|Debug|DebugTo|Get|GetBool|GetDuration|GetEnvPrefix|GetFloat64|GetInt|GetInt32|GetInt64|GetIntSlice|GetSizeInBytes|GetString|GetStringMap|GetStringMapString|GetStringMapStringSlice|GetStringSlice|GetTime|GetUint|GetUint16|GetUint32|GetUint64|GetUint8|GetViper|InConfig|IsSet|MergeConfig|MergeConfigMap|MergeInConfig|MustBindEnv|OnConfigChange|ReadConfig|ReadInConfig|ReadRemoteConfig|RegisterAlias|Reset|SafeWriteConfig|SafeWriteConfigAs|Set|SetConfigFile|SetConfigName|SetConfigPermissions|SetConfigType|SetDefault|SetEnvKeyReplacer|SetEnvPrefix|SetFs|SetOptions|SetTypeByDefaultValue|Sub|Unmarshal|UnmarshalExact|UnmarshalKey|WatchConfig|WatchRemoteConfig|WriteConfig|WriteConfigAs|WriteConfigTo)$
+          msg: use a viper instance (viper.NewWithOptions), not global viper state (go-standards §10, D13)
+        - pattern: ^runtime\.NumCPU$
+          msg: "use runtime.GOMAXPROCS(0) (Effective Go #parallel)"
+        - pattern: ^os\.Is(NotExist|Exist|Permission|Timeout)$
+          msg: "use errors.Is(err, fs.ErrNotExist) etc. (Effective Go #blank_assign)"
+        - pattern: ^http\.(Handle|HandleFunc)$
+          msg: "use an explicit http.ServeMux (Effective Go #web_server)"
+        # UP-64 (U#use-gouberorgatomic): modernize atomictypes skips exported fields; this catches the calls.
+        - pattern: ^atomic\.(Add|And|Or|Load|Store|Swap|CompareAndSwap)(Int32|Int64|Uint32|Uint64|Uintptr)$
+          msg: use the typed atomics such as atomic.Int64 (U#use-gouberorgatomic)
+
+    # UP-21 (GB#protocol-buffer-messages-and-stubs): proto packages keep their pb suffix as the alias.
+    importas:
+      alias:
+        - pkg: ^(.*/)?(\w+pb)$
+          alias: ${2}
+
+    # UP-57 (U#zero-value-mutexes-are-valid): no embedded mutexes; the default empty-line check covers UP-76.
+    embeddedstructfieldcheck:
+      forbid-mutex: true
+
+    # UP-109 (U#prefer-strconv-over-fmt); errorf is off because verb-free fmt.Errorf is allowed (C08).
+    perfsprint:
+      errorf: false
+
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters:
+          - gocyclo
+          - dupl
+          - gosec
+          - errcheck
+          - unparam
+          - prealloc
+      # deviation: binaries hold the version/commit/date vars injected by -ldflags (go-standards §9.2).
+      - path: (^|/)cmd/
+        linters:
+          - gochecknoglobals
+      # deviation: binaries may log at any level (go-standards §7).
+      - path: (^|/)cmd/
+        linters:
+          - forbidigo
+        text: must not log at Info
+      # deviation: tests may use package-level fixtures and banned helpers.
+      - path: _test\.go
+        linters:
+          - forbidigo
+          - gochecknoglobals
+      # deviation: godoclint require-doc flags TestXxx functions (design §8).
+      - path: _test\.go
+        linters:
+          - godoclint
+      # deviation: dot imports stay allowed in tests (design §5); text pins it to that rule only.
+      - path: _test\.go
+        linters:
+          - revive
+        text: "^dot-imports: "
+      # deviation: argument-limit targets APIs; wide test helpers are not flagged (UP-83, Phase 3 D82).
+      - path: _test\.go
+        linters:
+          - revive
+        text: "^argument-limit: "
+      # deviation: var Analyzer is the go/analysis idiom; inert in consumer repos (D27).
+      - path: ^analyzers/
+        linters:
+          - gochecknoglobals
+        text: ^Analyzer is a global variable
+      # deviation: version vars live in main outside cmd/ too; matched by text, so commit and date pass in any package (go-standards §9.2; Phase 3 D76, D129).
+      - linters:
+          - gochecknoglobals
+        text: ^(commit|date) is a global variable$
+      # booty: global viper is the application's configuration mechanism: cmd/ and pkg/config
+      # bind flags and environment into it and packages read it where they need a value. Passing
+      # config down as parameters is tracked in #91 (maintainer decision 2026-10-11: no big-bang
+      # refactor, move a package when a change touches it). Remove these two rules with #91.
+      - path: ^(cmd|pkg)/
+        linters:
+          - forbidigo
+        text: use a viper instance
+      - path: ^pkg/
+        linters:
+          - depguard
+        text: cli-config-in-cmd-only
+      # booty: pkg/ is app-internal (#94), not a library other projects import, so go-standards
+      # §7 "library code must not log at Info+" does not apply: these are the server's own
+      # operator-facing events, and returning them as errors instead would change behaviour.
+      - path: ^pkg/
+        linters:
+          - forbidigo
+        text: must not log at Info
+      # booty: every package logs through the process logger that cmd/ installs with
+      # slog.SetDefault; injecting a *slog.Logger into each package (go-standards §7) is the same
+      # debt class as #91 (a value read from a process global instead of passed in) and is not
+      # tracked separately yet. The attribute-key and *Context checks stay on.
+      - path: ^(cmd|pkg)/
+        linters:
+          - sloglint
+        text: default logger should not be used
+      # booty: flags are the public CLI and environment surface (--dataDir, --serverIP, ...) and
+      # every one is camelCase, so viper keys, docs and deployments all use that spelling.
+      # Renaming them to kebab-case (go-standards §6) is a breaking change for operators.
+      - path: ^cmd/
+        linters:
+          - tricorder
+        text: "^flagname: "
+    # deviation: examples$ is linted (design D24; go-standards §8.3 "a broken example is a broken release").
+    paths:
+      - third_party$
+      - builtin$
+
 issues:
-  # Maximum count of issues with the same text.
-  # Set to 0 to disable.
-  # Default: 3
-  max-same-issues: 50
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false
 
 formatters:
   enable:
-    - goimports # checks if the code and import statements are formatted according to the 'goimports' command
-    - golines # checks if code is formatted, and fixes long lines
-
-    ## you may want to enable
-    #- gci # checks if code and import statements are formatted, with additional rules
-    #- gofmt # checks if the code is formatted according to 'gofmt' command
-    #- gofumpt # enforces a stricter format than 'gofmt', while being backwards compatible
-    #- swaggo # formats swaggo comments
-
-  # All settings can be found here https://github.com/golangci/golangci-lint/blob/HEAD/.golangci.reference.yml
+    - gofmt
+    - goimports
   settings:
     goimports:
-      # A list of prefixes, which, if set, checks import paths
-      # with the given prefixes are grouped after 3rd-party packages.
-      # Default: []
+      # booty: this module (the baseline asks consumers to set it).
       local-prefixes:
         - github.com/jeefy/booty
-
-    golines:
-      # Target maximum line length.
-      # Default: 100
-      max-len: 120
-
-linters:
-  enable:
-    - asasalint # checks for pass []any as any in variadic func(...any)
-    - asciicheck # checks that your code does not contain non-ASCII identifiers
-    - bidichk # checks for dangerous unicode character sequences
-    - bodyclose # checks whether HTTP response body is closed successfully
-    - canonicalheader # checks whether net/http.Header uses canonical header
-    - clickhouselint # detects common mistakes with the ClickHouse native Go driver API
-    - copyloopvar # detects places where loop variables are copied (Go 1.22+)
-    - cyclop # checks function and package cyclomatic complexity
-    - depguard # checks if package imports are in a list of acceptable packages
-    - dupl # tool for code clone detection
-    - durationcheck # checks for two durations multiplied together
-    - embeddedstructfieldcheck # checks embedded types in structs
-    - errcheck # checking for unchecked errors, these unchecked errors can be critical bugs in some cases
-    - errname # checks that sentinel errors are prefixed with the Err and error types are suffixed with the Error
-    - errorlint # finds code that will cause problems with the error wrapping scheme introduced in Go 1.13
-    - exhaustive # checks exhaustiveness of enum switch statements
-    - exptostd # detects functions from golang.org/x/exp/ that can be replaced by std functions
-    - fatcontext # detects nested contexts in loops
-    - forbidigo # forbids identifiers
-    - funcorder # checks the order of functions, methods, and constructors
-    - funlen # tool for detection of long functions
-    - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
-    - gochecknoglobals # checks that no global variables exist
-    - gochecknoinits # checks that no init functions are present in Go code
-    - gochecksumtype # checks exhaustiveness on Go "sum types"
-    - gocognit # computes and checks the cognitive complexity of functions
-    - goconst # finds repeated strings that could be replaced by a constant
-    - gocritic # provides diagnostics that check for bugs, performance and style issues
-    - gocyclo # computes and checks the cyclomatic complexity of functions
-    - godoclint # checks Golang's documentation practice
-    - godot # checks if comments end in a period
-    - gomoddirectives # manages the use of 'replace', 'retract', and 'excludes' directives in go.mod
-    - goprintffuncname # checks that printf-like functions are named with f at the end
-    - gosec # inspects source code for security problems
-    - govet # reports suspicious constructs, such as Printf calls whose arguments do not align with the format string
-    - iface # checks the incorrect use of interfaces, helping developers avoid interface pollution
-    - ineffassign # detects when assignments to existing variables are not used
-    - intrange # finds places where for loops could make use of an integer range
-    - iotamixing # checks if iotas are being used in const blocks with other non-iota declarations
-    - loggercheck # checks key value pairs for common logger libraries (kitlog,klog,logr,zap)
-    - makezero # finds slice declarations with non-zero initial length
-    - mirror # reports wrong mirror patterns of bytes/strings usage
-    - mnd # detects magic numbers
-    - modernize # suggests simplifications to Go code, using modern language and library features
-    - musttag # enforces field tags in (un)marshaled structs
-    - nakedret # finds naked returns in functions greater than a specified function length
-    - nestif # reports deeply nested if statements
-    - nilerr # finds the code that returns nil even if it checks that the error is not nil
-    - nilnesserr # reports that it checks for err != nil, but it returns a different nil value error (powered by nilness and nilerr)
-    - nilnil # checks that there is no simultaneous return of nil error and an invalid value
-    - noctx # finds sending http request without context.Context
-    - nolintlint # reports ill-formed or insufficient nolint directives
-    - nonamedreturns # reports all named returns
-    - nosprintfhostport # checks for misuse of Sprintf to construct a host with port in a URL
-    #- paralleltest # detects missing usage of t.Parallel() method in your Go test  # booty: disabled, booty tests share viper's package-global state and cannot run in parallel (maintainer decision 2026-10-11)
-    - perfsprint # checks that fmt.Sprintf can be replaced with a faster alternative
-    - predeclared # finds code that shadows one of Go's predeclared identifiers
-    - promlinter # checks Prometheus metrics naming via promlint
-    - protogetter # reports direct reads from proto message fields when getters should be used
-    - reassign # checks that package variables are not reassigned
-    - recvcheck # checks for receiver type consistency
-    - revive # fast, configurable, extensible, flexible, and beautiful linter for Go, drop-in replacement of golint
-    - rowserrcheck # checks whether Err of rows is checked successfully
-    - sloglint # ensure consistent code style when using log/slog
-    - spancheck # checks for mistakes with OpenTelemetry/Census spans
-    - sqlclosecheck # checks that sql.Rows and sql.Stmt are closed
-    - staticcheck # is a go vet on steroids, applying a ton of static analysis checks
-    - testableexamples # checks if examples are testable (have an expected output)
-    - testifylint # checks usage of github.com/stretchr/testify
-    #- testpackage # makes you use a separate _test package  # booty: disabled, booty tests are white-box and call unexported helpers (maintainer decision 2026-10-11)
-    - tparallel # detects inappropriate usage of t.Parallel() method in your Go test codes
-    - unconvert # removes unnecessary type conversions
-    - unparam # reports unused function parameters
-    - unqueryvet # detects SELECT * in SQL queries and SQL builders, encouraging explicit column selection
-    - unused # checks for unused constants, variables, functions and types
-    - usestdlibvars # detects the possibility to use variables/constants from the Go standard library
-    - usetesting # reports uses of functions with replacement inside the testing package
-    - wastedassign # finds wasted assignment statements
-    - whitespace # detects leading and trailing whitespace
-
-    ## you may want to enable
-    #- arangolint # opinionated best practices for arangodb client
-    #- decorder # checks declaration order and count of types, constants, variables and functions
-    #- exhaustruct_v5 # [highly recommend to enable] checks if all structure fields are initialized
-    #- ginkgolinter # [if you use ginkgo/gomega] enforces standards of using ginkgo and gomega
-    #- godox # detects usage of FIXME, TODO and other keywords inside comments
-    #- goheader # checks is file header matches to pattern
-    #- inamedparam # [great idea, but too strict, need to ignore a lot of cases by default] reports interfaces with unnamed method parameters
-    #- interfacebloat # checks the number of methods inside an interface
-    #- ireturn # accept interfaces, return concrete types
-    #- noinlineerr # disallows inline error handling `if err := ...; err != nil {`
-    #- prealloc # [premature optimization, but can be used in some cases] finds slice declarations that could potentially be preallocated
-    #- tagalign # checks that struct tags are well aligned
-    #- varnamelen # [great idea, but too many false positives] checks that the length of a variable's name matches its scope
-    #- wrapcheck # checks that errors returned from external packages are wrapped
-    #- zerologlint # detects the wrong usage of zerolog that a user forgets to dispatch zerolog.Event
-
-    ## disabled
-    #- containedctx # detects struct contained context.Context field
-    #- contextcheck # [too many false positives] checks the function whether use a non-inherited context
-    #- dogsled # checks assignments with too many blank identifiers (e.g. x, _, _, _, := f())
-    #- dupword # [useless without config] checks for duplicate words in the source code
-    #- err113 # [too strict] checks the errors handling expressions
-    #- errchkjson # [don't see profit + I'm against of omitting errors like in the first example https://github.com/breml/errchkjson] checks types passed to the json encoding functions. Reports unsupported types and optionally reports occasions, where the check for the returned error can be omitted
-    #- exhaustruct # [use exhaustruct_v5 instead] checks if all structure fields are initialized
-    #- forcetypeassert # [replaced by errcheck] finds forced type assertions
-    #- gomodguard_v2: [use more powerful depguard] allow and blocklist linter for direct Go module dependencies
-    #- gosmopolitan # reports certain i18n/l10n anti-patterns in your Go codebase
-    #- grouper # analyzes expression groups
-    #- importas # enforces consistent import aliases
-    #- lll # [replaced by golines] reports long lines
-    #- maintidx # measures the maintainability index of each function
-    #- misspell # [useless] finds commonly misspelled English words in comments
-    #- nlreturn # [too strict and mostly code is not more readable] checks for a new line before return and branch statements to increase code clarity
-    #- tagliatelle # checks the struct tags
-    #- thelper # detects golang test helpers without t.Helper() call and checks the consistency of test helpers
-    #- wsl_v5 # [too strict and mostly code is not more readable] add or remove empty lines
-
-  # All settings can be found here https://github.com/golangci/golangci-lint/blob/HEAD/.golangci.reference.yml
-  settings:
-    cyclop:
-      # The maximal code complexity to report.
-      # Default: 10
-      max-complexity: 30
-      # The maximal average package complexity.
-      # If it's higher than 0.0 (float) the check is enabled.
-      # Default: 0.0
-      package-average: 10.0
-
-    depguard:
-      # Rules to apply.
-      #
-      # Variables:
-      # - File Variables
-      #   Use an exclamation mark `!` to negate a variable.
-      #   Example: `!$test` matches any file that is not a go test file.
-      #
-      #   `$all` - matches all go files
-      #   `$test` - matches all go test files
-      #
-      # - Package Variables
-      #
-      #   `$gostd` - matches all of go's standard library (Pulled from `GOROOT`)
-      #
-      # Default (applies if no custom rules are defined): Only allow $gostd in all files.
-      rules:
-        "deprecated":
-          # List of file globs that will match this list of settings to compare against.
-          # By default, if a path is relative, it is relative to the directory where the golangci-lint command is executed.
-          # The placeholder '${base-path}' is substituted with a path relative to the mode defined with `run.relative-path-mode`.
-          # The placeholder '${config-path}' is substituted with a path relative to the configuration file.
-          # Default: $all
-          files:
-            - "$all"
-          # List of packages that are not allowed.
-          # Entries can be a variable (starting with $), a string prefix, or an exact match (if ending with $).
-          # Default: []
-          deny:
-            - pkg: github.com/golang/protobuf
-              desc: Use google.golang.org/protobuf instead, see https://developers.google.com/protocol-buffers/docs/reference/go/faq#modules
-            - pkg: github.com/satori/go.uuid
-              desc: Use github.com/google/uuid instead, satori's package is not maintained
-            - pkg: github.com/gofrs/uuid$
-              desc: Use github.com/gofrs/uuid/v5 or later, it was not a go module before v5
-        "non-test files":
-          files:
-            - "!$test"
-          deny:
-            - pkg: math/rand$
-              desc: Use math/rand/v2 instead, see https://go.dev/blog/randv2
-        "non-main files":
-          files:
-            - "!**/main.go"
-          deny:
-            - pkg: log$
-              desc: Use log/slog instead, see https://go.dev/blog/slog
-
-    embeddedstructfieldcheck:
-      # Checks that sync.Mutex and sync.RWMutex are not used as embedded fields.
-      # Default: false
-      forbid-mutex: true
-
-    errcheck:
-      # Report about not checking of errors in type assertions: `a := b.(MyStruct)`.
-      # Such cases aren't reported by default.
-      # Default: false
-      check-type-assertions: true
-
-    exhaustive:
-      # Program elements to check for exhaustiveness.
-      # Default: [ switch ]
-      check:
-        - switch
-        - map
-
-    exhaustruct_v5:
-      # List of regular expressions to match type names that should be skipped from checking.
-      # Anonymous structs can be matched by '<anonymous>' alias.
-      # Has precedence over `include`.
-      # Each regular expression must match the full type name, including package path.
-      # For example, to match type `net/http.Cookie` regular expression should be `.*/http\.Cookie`,
-      # but not `http\.Cookie`.
-      # Default: []
-      ignore-patterns:
-        # std libs
-        - ^net/http.Client$
-        - ^net/http.Cookie$
-        - ^net/http.Request$
-        - ^net/http.Response$
-        - ^net/http.Server$
-        - ^net/http.Transport$
-        - ^net/url.URL$
-        - ^os/exec.Cmd$
-        - ^reflect.StructField$
-        # public libs
-        - ^github.com/Shopify/sarama.Config$
-        - ^github.com/Shopify/sarama.ProducerMessage$
-        - ^github.com/mitchellh/mapstructure.DecoderConfig$
-        - ^github.com/prometheus/client_golang/.+Opts$
-        - ^github.com/spf13/cobra.Command$
-        - ^github.com/spf13/cobra.CompletionOptions$
-        - ^github.com/stretchr/testify/mock.Mock$
-        - ^github.com/testcontainers/testcontainers-go.+Request$
-        - ^github.com/testcontainers/testcontainers-go.FromDockerfile$
-        - ^golang.org/x/tools/go/analysis.Analyzer$
-        - ^google.golang.org/protobuf/.+Options$
-        - ^gopkg.in/yaml.v3.Node$
-      # Allows empty structures in return statements.
-      # Default: false
-      allow-empty-returns: true
-      # Allow empty literals the blank identifier receives.
-      # Default: false
-      allow-empty-blank-assignments: true
-
-    funcorder:
-      # Checks if the exported methods of a structure are placed before the non-exported ones.
-      # Default: true
-      struct-method: false
-
-    funlen:
-      # Checks the number of lines in a function.
-      # If lower than 0, disable the check.
-      # Default: 60
-      lines: 100
-      # Checks the number of statements in a function.
-      # If lower than 0, disable the check.
-      # Default: 40
-      statements: 50
-
-    gochecksumtype:
-      # Presence of `default` case in switch statements satisfies exhaustiveness, if all members are not listed.
-      # Default: true
-      default-signifies-exhaustive: false
-
-    gocognit:
-      # Minimal code complexity to report.
-      # Default: 30 (but we recommend 10-20)
-      min-complexity: 20
-
-    gocritic:
-      # Settings passed to gocritic.
-      # The settings key is the name of a supported gocritic checker.
-      # The list of supported checkers can be found at https://go-critic.com/overview.
-      settings:
-        captLocal:
-          # Whether to restrict checker to params only.
-          # Default: true
-          paramsOnly: false
-        underef:
-          # Whether to skip (*x).method() calls where x is a pointer receiver.
-          # Default: true
-          skipRecvDeref: false
-
-    godoclint:
-      # List of rules to enable in addition to the default set.
-      # Default: empty
-      enable:
-        # Assert no unused link in godocs.
-        # https://github.com/godoc-lint/godoc-lint?tab=readme-ov-file#no-unused-link
-        - no-unused-link
-        # Require proper doc links to standard library declarations where applicable.
-        # https://github.com/godoc-lint/godoc-lint?tab=readme-ov-file#require-stdlib-doclink
-        - require-stdlib-doclink
-
-    govet:
-      # Enable all analyzers.
-      # Default: false
-      enable-all: true
-      # Disable analyzers by name.
-      # Run `GL_DEBUG=govet golangci-lint run --enable=govet` to see default, all available analyzers, and enabled analyzers.
-      # Default: []
-      disable:
-        - fieldalignment # too strict
-      # Settings per analyzer.
-      settings:
-        shadow:
-          # Whether to be strict about shadowing; can be noisy.
-          # Default: false
-          strict: true
-
-    inamedparam:
-      # Skips check for interface methods with only a single parameter.
-      # Default: false
-      skip-single-param: true
-
-    mnd:
-      # List of function patterns to exclude from analysis.
-      # Values always ignored: `time.Date`,
-      # `strconv.FormatInt`, `strconv.FormatUint`, `strconv.FormatFloat`,
-      # `strconv.ParseInt`, `strconv.ParseUint`, `strconv.ParseFloat`.
-      # Default: []
-      ignored-functions:
-        - args.Error
-        - flag.Arg
-        - flag.Duration.*
-        - flag.Float.*
-        - flag.Int.*
-        - flag.Uint.*
-        - os.Chmod
-        - os.Mkdir.*
-        - os.OpenFile
-        - os.WriteFile
-        - prometheus.ExponentialBuckets.*
-        - prometheus.LinearBuckets
-
-    nakedret:
-      # Make an issue if func has more lines of code than this setting, and it has naked returns.
-      # Default: 30
-      max-func-lines: 0
-
-    nolintlint:
-      # Exclude following linters from requiring an explanation.
-      # Default: []
-      allow-no-explanation: [ funlen, gocognit, golines ]
-      # Enable to require an explanation of nonzero length after each nolint directive.
-      # Default: false
-      require-explanation: true
-      # Enable to require nolint directives to mention the specific linter being suppressed.
-      # Default: false
-      require-specific: true
-
-    perfsprint:
-      # Optimizes into strings concatenation.
-      # Default: true
-      strconcat: false
-      # Enable/disable optimization of error formatting.
-      # Default: true
-      error-format: false # https://github.com/catenacyber/perfsprint/issues/62
-
-    reassign:
-      # Patterns for global variable names that are checked for reassignment.
-      # See https://github.com/curioswitch/go-reassign#usage
-      # Default: ["EOF", "Err.*"]
-      patterns:
-        - ".*"
-
-    rowserrcheck:
-      # database/sql is always checked.
-      # Default: []
-      packages:
-        - github.com/jmoiron/sqlx
-
-    sloglint:
-      # Report the use of global loggers.
-      # https://github.com/go-simpler/sloglint#no-global-logger
-      # Values: "all", "default"
-      # Default: "" (disabled)
-      no-global: all
-      # Report the use of functions without a context.Context.
-      # https://github.com/go-simpler/sloglint#context-only
-      # Values: "all", "scope"
-      # Default: "" (disabled)
-      context: scope
-
-    staticcheck:
-      # SAxxxx checks in https://staticcheck.dev/docs/configuration/options/#checks
-      # Example (to disable some checks): [ "all", "-SA1000", "-SA1001"]
-      # Default: ["all", "-ST1000", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
-      checks:
-        - all
-        # Incorrect or missing package comment.
-        # https://staticcheck.dev/docs/checks/#ST1000
-        - -ST1000
-        # Use consistent method receiver names.
-        # https://staticcheck.dev/docs/checks/#ST1016
-        - -ST1016
-        # Omit embedded fields from selector expression.
-        # https://staticcheck.dev/docs/checks/#QF1008
-        - -QF1008
-
-    usetesting:
-      # Enable/disable `os.TempDir()` detections.
-      # Default: false
-      os-temp-dir: true
-
   exclusions:
-    # Log a warning if an exclusion rule is unused.
-    # Default: false
-    warn-unused: true
-    # Predefined exclusion rules.
-    # Default: []
-    presets:
-      - std-error-handling
-      - common-false-positives
-    # Excluding configuration per-path, per-linter, per-text and per-source.
-    rules:
-      - source: 'TODO'
-        linters: [ godot ]
-      - text: 'should have a package comment'
-        linters: [ revive ]
-      - text: 'exported \S+ \S+ should have comment( \(or a comment on this block\))? or be unexported'
-        linters: [ revive ]
-      - text: 'package comment should be of the form ".+"'
-        source: '// ?(nolint|TODO)'
-        linters: [ revive ]
-      - text: 'comment on exported \S+ \S+ should be of the form ".+"'
-        source: '// ?(nolint|TODO)'
-        linters: [ revive, staticcheck ]
-      - path: '_test\.go'
-        linters:
-          - bodyclose
-          - dupl
-          - errcheck
-          - funlen
-          - goconst
-          - gosec
-          - noctx
-          - wrapcheck
+    generated: lax
+    # deviation: examples$ is formatted too (design D24).
+    paths:
+      - third_party$
+      - builtin$

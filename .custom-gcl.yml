@@ -1,0 +1,19 @@
+# Template for the golangci-lint build that carries the go-tricorder plugin (the stock
+# golangci-lint cannot load .golangci.yml: `plugin "tricorder" not found`). Do not run
+# `golangci-lint custom` on this file directly; `task lint` and `task lint:new` render it to
+# bin/custom-gcl-build/.custom-gcl.yml (gitignored) with @TRICORDER_DIR@ replaced by the absolute
+# path of your go-tricorder checkout (env TRICORDER_DIR, default ../go-tricorder), then build
+# bin/custom-gcl from it.
+#
+# go-tricorder has no published tag yet, hence `path:`. Once v0.1.0 is published, replace the
+# `path:` line with `version: v0.1.0`, and drop the TRICORDER_DIR variable, the sed step and the
+# precondition from taskfile.yml (the build then renders nothing and `golangci-lint custom`
+# can read this file as it is).
+# Keep `version:` in step with go-tricorder's golangci-lint pin (its config/custom-gcl.yml).
+version: v2.14.0
+name: custom-gcl
+destination: ..
+plugins:
+  - module: github.com/jacaudi/go-tricorder
+    import: github.com/jacaudi/go-tricorder/plugin
+    path: @TRICORDER_DIR@
