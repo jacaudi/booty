@@ -611,6 +611,32 @@ func TestStartHTTPReturnsABindError(t *testing.T) {
 	}
 }
 
+// TestStartHTTPBoundsSlowAndIdleConnections: the boot routes are open to the
+// LAN, so a client that trickles its headers or parks a keep-alive connection
+// must be cut off well before the 900 s body timeouts (#122).
+func TestStartHTTPBoundsSlowAndIdleConnections(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set(config.DataDir, t.TempDir())
+	viper.Set(config.HttpPort, 0)
+
+	srv, err := StartHTTP(APIDeps{NoAuth: true}, make(chan error, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	if got := srv.ReadHeaderTimeout; got <= 0 || got > 30*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want a short positive bound (<= 30s)", got)
+	}
+	if got := srv.IdleTimeout; got <= 0 || got > 5*time.Minute {
+		t.Errorf("IdleTimeout = %v, want a positive bound (<= 5m)", got)
+	}
+	if got := srv.ReadTimeout; got < 900*time.Second {
+		t.Errorf("ReadTimeout = %v, want the long artifact-download bound kept", got)
+	}
+}
+
 // TestStartHTTPFailsWhenDataDirCannotBeOpened: /data/ serves through an
 // [os.Root] opened at startup, so a missing dataDir is a startup error.
 func TestStartHTTPFailsWhenDataDirCannotBeOpened(t *testing.T) {
