@@ -9,7 +9,8 @@ data/
 # included), EXCEPT the local-only working areas: generated reports and
 # prompt scratch.
 docs/reports/
-docs/prompts/# Runtime state written when booty runs with --dataDir=. (never commit)
+docs/prompts/
+# Runtime state written when booty runs with --dataDir=. (never commit)
 api-token
 booty.db
 booty.db-*

@@ -387,6 +387,8 @@ Plan files under `docs/plans/2026-10-11-upstream-import/`, each phase green on
 - `hardware.trackUnknown` (`pkg/hardware/mac.go:550`) keeps unknown MACs with no size cap.
   `GET /booty.ipxe?mac=<random>` (item 7) is a new unauthenticated way to grow it;
   `/ignition.json?mac=` already was. Capping it is follow-up work.
+  - Update (2026-10-11, final fix wave): the list is now capped at 1024 entries
+    (`maxUnknownHosts`); the earliest-tracked MAC is evicted first.
 - booty's proxyDHCP broadcasts from a socket bound to `0.0.0.0`. On a host with several
   interfaces, the reply may leave through the default-route interface. Plan phase 5 measures this
   (`NOROUTE=1`); fixing it belongs with `--proxyDHCPListen` / routed boot (#71).
@@ -423,7 +425,7 @@ Plan files under `docs/plans/2026-10-11-upstream-import/`, each phase green on
 
 1. `/machineconfig` CA exposure → item 0b interim fix in this import.
 2. `--tftpBlockSize` dropped (it would be a no-op).
-3. iPXE clients get `siaddr` + `booty.ipxe` on the OFFER; parity with upstream's 9 goldens kept.
+3. iPXE clients get `siaddr` + `booty.ipxe` on the OFFER; parity with upstream's 9 goldens kept. (superseded for the type byte by decision 12)
 4. Full health detail at `GET /api/v1/hosts/{mac}/health`.
 5. `--proxyDHCPRelay` opt-in with `replyDestination`.
 6. jsonparser bumped to v1.6.1.
