@@ -296,6 +296,7 @@ task build          # → bin/booty (static, CGO_ENABLED=0)
 task run            # build the web UI and run against ./data
 task image          # build the container image
 task image:buildx   # multi-arch (linux/amd64, linux/arm64) image
+task image:smoke    # build and smoke-test the image locally
 ```
 
 Install go-task: `go install github.com/go-task/task/v3/cmd/task@v3.54.0`

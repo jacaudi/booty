@@ -23,6 +23,7 @@ Install it with `GOBIN=$HOME/go/bin go install github.com/go-task/task/v3/cmd/ta
 | `task ipxe` | rebuild the embedded iPXE binaries in `boot/` (container, or `IPXE_NATIVE=1`) |
 | `task check:ipxe` | verify the `boot/` binaries against `SHA256SUMS` |
 | `task image` | build the container image (`task image:buildx` for multi-arch) |
+| `task image:smoke` | build the image for this machine and smoke-test it: binary arch matches the image, booty starts, `/healthz`, `/version.json` and `/ui/` answer |
 
 `task build` does not depend on `ipxe`, so it works on a fresh clone without Docker.
 
