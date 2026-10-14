@@ -9,16 +9,18 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/spf13/viper"
+
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/web"
-	"github.com/spf13/viper"
 )
 
 // baseMux builds the plain (non-Huma) HTTP surface: the boot-config
@@ -34,8 +36,9 @@ import (
 // DELETE /api/v1/hosts/{mac}, GET /api/v1/hosts's unknown field, GET
 // /api/v1/info).
 //
-// dataRoot is the [os.Root] on dataDir that /data/ serves through.
-func baseMux(deps APIDeps, dataRoot *os.Root) *http.ServeMux {
+// dataRoot is the [os.Root] on dataDir that /data/ serves through. It fails
+// only when the embedded UI cannot be loaded.
+func baseMux(deps APIDeps, dataRoot *os.Root) (*http.ServeMux, error) {
 	myHandler := http.NewServeMux()
 
 	// All URLs will be handled by this function
@@ -56,12 +59,11 @@ func baseMux(deps APIDeps, dataRoot *os.Root) *http.ServeMux {
 	myHandler.Handle("/data/", http.StripPrefix("/data/", dataFileHandler(dataRoot)))
 	uiFS, err := web.DistFS()
 	if err != nil {
-		slog.Error("ui embed", "err", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("http: ui embed: %w", err)
 	}
 	myHandler.Handle("/ui/", http.StripPrefix("/ui/", uiHandler(uiFS)))
 
-	return myHandler
+	return myHandler, nil
 }
 
 // Server is the running HTTP server. Its Shutdown and Close also close the
@@ -84,11 +86,12 @@ func (s *Server) Close() error {
 	return errors.Join(s.Server.Close(), s.dataRoot.Close())
 }
 
-// StartHTTP starts the HTTP server in a background goroutine and returns it so
-// the caller can Shutdown() it during graceful shutdown. Signal handling and
-// the ordered shutdown live with the caller; this function only starts serving.
-// It opens the [os.Root] on dataDir that /data/ serves through; failing to open
-// it is a startup error.
+// StartHTTP binds the HTTP port, starts serving in a background goroutine and
+// returns the server so the caller can Shutdown() it during graceful shutdown.
+// Signal handling and the ordered shutdown live with the caller; this function
+// only starts serving. A bind failure, an unopenable dataDir or a missing UI
+// embed is a startup error; an error after serving starts is sent on errCh,
+// as tftp.Start does. ErrServerClosed (a normal shutdown) is not sent.
 //
 // It refuses to start when deps.Auth is nil and deps.NoAuth is false: that
 // combination means no credential was wired at all, and authMiddleware passes
@@ -96,7 +99,7 @@ func (s *Server) Close() error {
 // working) -- so this refusal is the only place a silent-open deployment is
 // caught. Returning an error rather than calling os.Exit keeps that refusal
 // testable.
-func StartHTTP(deps APIDeps) (*Server, error) {
+func StartHTTP(deps APIDeps, errCh chan<- error) (*Server, error) {
 	if deps.Auth == nil && !deps.NoAuth {
 		return nil, errors.New("http: no Auth token store and --noAuth not set; refusing to start unauthenticated")
 	}
@@ -109,7 +112,10 @@ func StartHTTP(deps APIDeps) (*Server, error) {
 	port := fmt.Sprintf(":%d", viper.GetInt(config.HttpPort))
 	slog.Info("starting HTTP server", "addr", port)
 
-	myHandler := baseMux(deps, dataRoot)
+	myHandler, err := baseMux(deps, dataRoot)
+	if err != nil {
+		return nil, errors.Join(err, dataRoot.Close())
+	}
 
 	// Mount the typed /api/v1 surface on the same mux (additive).
 	RegisterAPI(myHandler, deps)
@@ -122,13 +128,16 @@ func StartHTTP(deps APIDeps) (*Server, error) {
 		MaxHeaderBytes: 1 << 20,
 	}
 
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", port)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("http: listen on TCP%s: %w", port, err), dataRoot.Close())
+	}
 	go func() {
-		if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("listen", "err", err)
-			os.Exit(1)
+		if serveErr := s.Serve(ln); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("http: %w", serveErr)
 		}
 	}()
-	slog.Info("server started")
+	slog.Info("server started", "addr", ln.Addr().String())
 
 	return &Server{Server: s, dataRoot: dataRoot}, nil
 }
