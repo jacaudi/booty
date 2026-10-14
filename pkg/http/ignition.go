@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"text/template"
 
 	butaneConfig "github.com/coreos/butane/config"
@@ -105,7 +106,7 @@ func serveBoundIgnition(w http.ResponseWriter, r *http.Request, n *NodeReports, 
 	vars := ignitionVars(store, host)
 	out, ct, _, err := renderConfig("butane", src, vars)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "render bound ignition config", err)
+		writeError(w, http.StatusInternalServerError, "render bound ignition config", errors.New(redactJoinString(err.Error(), vars.JoinString)))
 		return true
 	}
 	w.Header().Set("Content-Type", ct)
@@ -185,27 +186,40 @@ func serveFileIgnition(w http.ResponseWriter, r *http.Request, n *NodeReports, s
 	ignCfg, report, err := butaneConfig.TranslateBytes(tpl.Bytes(), butaneCommon.TranslateBytesOptions{
 		Pretty: true,
 	})
+	// Log Butane's messages and positions, never the rendered template: it
+	// carries the join string, and so can Butane's text when it quotes a value.
+	join := templateData.JoinString
 	if err != nil {
-		slog.ErrorContext(r.Context(), "rendered ignition template", "template", tpl.String())
 		for _, entry := range report.Entries {
-			slog.ErrorContext(r.Context(), "ignition report entry", "entry", entry.String())
+			slog.ErrorContext(r.Context(), "ignition report entry", "entry", redactJoinString(entry.String(), join))
 		}
-		writeError(w, http.StatusInternalServerError, "error parsing coreos ignition", err)
+		writeError(w, http.StatusInternalServerError, "error parsing coreos ignition", errors.New(redactJoinString(err.Error(), join)))
 		return
 	}
 	if len(report.Entries) > 0 {
-		slog.WarnContext(r.Context(), "problems parsing coreos ignition", "report", report.String())
+		slog.WarnContext(r.Context(), "problems parsing coreos ignition", "report", redactJoinString(report.String(), join))
 		for _, entry := range report.Entries {
-			slog.WarnContext(r.Context(), "ignition report entry", "entry", entry.String())
+			slog.WarnContext(r.Context(), "ignition report entry", "entry", redactJoinString(entry.String(), join))
 		}
 		if report.IsFatal() {
-			slog.ErrorContext(r.Context(), "rendered ignition template", "template", tpl.String())
-			writeError(w, http.StatusInternalServerError, "fatal coreos ignition report", errors.New(report.String()))
+			writeError(w, http.StatusInternalServerError, "fatal coreos ignition report", errors.New(redactJoinString(report.String(), join)))
 			return
 		}
 	}
 
 	writeBody(w, withNodeReport(r.Context(), n, store, host, ignCfg))
+}
+
+// redactJoinString returns s with every occurrence of the join string
+// replaced, for logging. Butane quotes template content in its errors and
+// report entries, and ignition templates are rendered with the join string.
+// Callers log a new error built from the result rather than wrapping the
+// original, which would carry the unredacted text along with it.
+func redactJoinString(s, join string) string {
+	if join == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, join, "[redacted]")
 }
 
 // withNodeReport merges the health-report unit into an Ignition config when
