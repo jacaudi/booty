@@ -120,12 +120,17 @@ func StartHTTP(deps APIDeps, errCh chan<- error) (*Server, error) {
 	// Mount the typed /api/v1 surface on the same mux (additive).
 	RegisterAPI(myHandler, deps)
 
+	// The body timeouts stay long for large artifact downloads. The header and
+	// idle bounds stop a LAN client from holding connections open on the open
+	// boot routes by trickling headers or parking keep-alives (#122).
 	s := &http.Server{
-		Addr:           port,
-		Handler:        logRequest(withBootRoute(deps.BootFiles, myHandler)),
-		ReadTimeout:    900 * time.Second,
-		WriteTimeout:   900 * time.Second,
-		MaxHeaderBytes: 1 << 20,
+		Addr:              port,
+		Handler:           logRequest(withBootRoute(deps.BootFiles, myHandler)),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       900 * time.Second,
+		WriteTimeout:      900 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", port)
