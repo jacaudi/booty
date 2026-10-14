@@ -318,13 +318,11 @@ func init() {
 	}
 }
 
+// main exits 1 on any error. Cobra has already printed it as "Error: ...".
 func main() {
 	if err := Cmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
-	os.Exit(0)
 }
 
 // resolveServerHTTPPort returns the client-facing port to advertise in

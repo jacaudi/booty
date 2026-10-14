@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -369,4 +370,27 @@ func udpAddr(t *testing.T, a net.Addr) *net.UDPAddr {
 		t.Fatalf("address %v is %T, want *net.UDPAddr", a, a)
 	}
 	return u
+}
+
+// TestMainPrintsARuntimeErrorOnce runs main in a subprocess (this test binary,
+// re-executed) with a dataDir that does not exist, so startup fails writing
+// the API token. Cobra prints the error as "Error: ..."; main must not print
+// it a second time (#99).
+func TestMainPrintsARuntimeErrorOnce(t *testing.T) {
+	if args := os.Getenv("BOOTY_TEST_MAIN_ARGS"); args != "" {
+		os.Args = append([]string{"booty"}, strings.Fields(args)...)
+		main()
+		return
+	}
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestMainPrintsARuntimeErrorOnce$")
+	cmd.Env = append(os.Environ(), "BOOTY_TEST_MAIN_ARGS=--dataDir "+missing+" --serverIP 127.0.0.1")
+	out, err := cmd.CombinedOutput()
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("main exit = %v, want exit status 1; output:\n%s", err, out)
+	}
+	if n := strings.Count(string(out), "auth: write token"); n != 1 {
+		t.Errorf("the startup error was printed %d times, want 1; output:\n%s", n, out)
+	}
 }
