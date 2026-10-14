@@ -147,7 +147,7 @@ The maintainer's decision (2026-10-11): **new code must follow the principles; c
 touches moves toward them within that change's scope; there is no big-bang refactor.** Known
 debt, not to be copied into new code:
 
-Each item has a `type/tech-debt` issue; close the issue when the item is gone and drop its line here.
+Each item has an open issue; close the issue when the item is gone and drop its line here.
 
 - `viper.Get*` is read deep inside `pkg/cache`, `pkg/http`, `pkg/ostype`, `pkg/tftp`, `pkg/bootscript` and `pkg/hardware` (#91).
 - New exported helpers `bootscript.URLHost` and `tftp.TopLevelBootFiles` read viper directly (#92).
