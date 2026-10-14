@@ -2,9 +2,14 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/jeefy/booty/pkg/nodereport"
 )
 
 func seedHealthHost(t *testing.T, s *Store, mac string) {
@@ -111,21 +116,62 @@ func TestHostReportTokenGen(t *testing.T) {
 	}
 }
 
-func TestListHostHealth(t *testing.T) {
+func TestListHostHealthSummaries(t *testing.T) {
 	s := newTestStore(t)
-	for _, m := range []string{"aa:bb:cc:dd:ee:f0", "aa:bb:cc:dd:ee:f1"} {
-		seedHealthHost(t, s, m)
-		if err := s.UpsertHostHealth(m, "2026-01-01T00:00:00Z", []byte(`{"m":"`+m+`"}`)); err != nil {
-			t.Fatal(err)
+	full := nodereport.Health{
+		ReceivedAt: "2026-10-11T12:00:00Z", BootID: "boot-1", Running: "4152.2.0",
+		FailedUnits: []string{"a.service", "b.service"}, JournalErrors: []string{"x", "y", "z"},
+		DMI:      nodereport.DMI{Vendor: `Dell "Inc"`, Product: "Proé ✓", BIOSVersion: "1.2", ProductUUID: "uuid"},
+		Firmware: nodereport.FirmwareUEFI, Kernel: "6.12.1",
+	}
+	sparse := nodereport.Health{ReceivedAt: "2026-10-12T00:00:00Z", Running: "1.0.0"} // nil units marshal to null
+	tests := []struct {
+		name   string
+		raw    []byte // stored report; nil = host never reported
+		want   *nodereport.Summary
+		stored bool // present in the map (nil value = unreadable)
+	}{
+		{name: "full report", raw: mustJSON(t, full), want: new(full.Summary()), stored: true},
+		{name: "sparse report", raw: mustJSON(t, sparse), want: new(sparse.Summary()), stored: true},
+		{name: "empty object", raw: []byte(`{}`), want: new(nodereport.Summary{}), stored: true},
+		{name: "never reported"},
+		{name: "malformed JSON", raw: []byte(`{"running":`), stored: true},
+		{name: "non-object JSON", raw: []byte(`[1,2]`), stored: true},
+	}
+	macs := make([]string, len(tests))
+	for i, tc := range tests {
+		macs[i] = fmt.Sprintf("aa:bb:cc:dd:ee:%02x", i)
+		seedHealthHost(t, s, macs[i])
+		if tc.raw != nil {
+			if err := s.UpsertHostHealth(macs[i], "2026-01-01T00:00:00Z", tc.raw); err != nil {
+				t.Fatalf("%s: UpsertHostHealth: %v", tc.name, err)
+			}
 		}
 	}
-	got, err := s.ListHostHealth()
+
+	got, err := s.ListHostHealthSummaries()
+	if err != nil {
+		t.Fatalf("ListHostHealthSummaries: %v", err)
+	}
+	for i, tc := range tests {
+		sum, ok := got[macs[i]]
+		if ok != tc.stored {
+			t.Errorf("%s: present = %v, want %v", tc.name, ok, tc.stored)
+			continue
+		}
+		if !reflect.DeepEqual(sum, tc.want) {
+			t.Errorf("%s: summary = %+v, want %+v", tc.name, sum, tc.want)
+		}
+	}
+}
+
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || string(got["aa:bb:cc:dd:ee:f1"]) != `{"m":"aa:bb:cc:dd:ee:f1"}` {
-		t.Fatalf("got %v", got)
-	}
+	return b
 }
 
 func TestMigrate0010UpgradesV9WithHosts(t *testing.T) {
