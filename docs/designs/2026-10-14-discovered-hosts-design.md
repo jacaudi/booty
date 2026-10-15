@@ -413,6 +413,11 @@ Write every test first and watch it fail on the unfixed tree.
 
 **`open_routes_test.go`:** D15.
 
+**Existing tests that D6 changes** (they assert today's chain line and are updated to
+`ChainPath`): `pkg/bootscript/render_test.go:14,27`, `menu_test.go:45,106`,
+`tool_scripts_test.go:214,233`, `tokens_test.go:259-260`, `pkg/http/bootscript_test.go:77-81`,
+`pkg/http/api_hosts_test.go:80-89`.
+
 **Web (Vitest)**
 
 - "New machines" renders from `discovered`.
