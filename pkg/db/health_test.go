@@ -216,8 +216,8 @@ func TestMigrate0010UpgradesV9WithHosts(t *testing.T) {
 	if err = s.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&uv); err != nil {
 		t.Fatal(err)
 	}
-	if uv != 10 {
-		t.Fatalf("user_version = %d, want 10", uv)
+	if uv != 11 {
+		t.Fatalf("user_version = %d, want 11", uv)
 	}
 	h, err := s.GetHost("aa:bb:cc:dd:ee:f0")
 	if err != nil || h == nil || h.Hostname != "old" {
