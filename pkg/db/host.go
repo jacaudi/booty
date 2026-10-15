@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -72,8 +73,24 @@ func (s *Store) GetHost(mac string) (*Host, error) {
 
 // UpsertHost inserts or updates ONLY the legacy columns for h.MAC and refreshes
 // last_seen, leaving the later-slice columns (approved, boot_mode, …) untouched.
-func (s *Store) UpsertHost(h Host) error {
-	_, err := s.db.Exec(
+// It also deletes the MAC's discovered_hosts row, in the same transaction, so a
+// registered host never lingers as discovered.
+//
+// UpsertHost has no ctx parameter yet: its callers in pkg/hardware read a package-level store (#93).
+func (s *Store) UpsertHost(h Host) (err error) {
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("db: begin upsert host %s: %w", h.MAC, err)
+	}
+	defer func() {
+		// After Commit the rollback reports sql.ErrTxDone, which is not an error here.
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			err = errors.Join(err, rbErr)
+		}
+	}()
+
+	if _, err = tx.ExecContext(ctx,
 		`INSERT INTO hosts (mac, hostname, ip, booted, ignition_file, os, do_install, schematic)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(mac) DO UPDATE SET
@@ -86,9 +103,14 @@ func (s *Store) UpsertHost(h Host) error {
 		   schematic     = excluded.schematic,
 		   last_seen     = datetime('now')`,
 		h.MAC, h.Hostname, h.IP, h.Booted, h.IgnitionFile, h.OS, h.DoInstall, h.Schematic,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("db: upsert host %s: %w", h.MAC, err)
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM discovered_hosts WHERE mac = ?`, h.MAC); err != nil {
+		return fmt.Errorf("db: clear discovered host %s: %w", h.MAC, err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("db: commit upsert host %s: %w", h.MAC, err)
 	}
 	return nil
 }
