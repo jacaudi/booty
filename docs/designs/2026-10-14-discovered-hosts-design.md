@@ -95,12 +95,21 @@ The maintainer, 2026-10-14: *"I would rather approve pending than add it manuall
   loses its side effect, and `Load` no longer clears anything. In `pkg/http/api_hosts.go`, the
   comments explaining `HasHost` over `GetMacAddress` lose their poisoning rationale. Keep `HasHost`
   (it avoids a full row fetch) and reword the comments to say only that.
+  - **Tests.** Tests of the unknown list itself are deleted: `pkg/hardware/mac_test.go:121-135`
+    (TracksMiss), `:365-385`, `:387-413`, `:415-435`. Tests that use `GetData` only to inspect
+    stored hosts switch to `hardware.ListHosts` and keep their subject:
+    `normalize_test.go:95,124,198` and `mac_test.go:277`.
+  - **Stale comments to reword or delete:** `pkg/http/http.go:35-38`, `pkg/hardware/mac.go:23`,
+    `:280-287`, `:309-313`, `pkg/http/api_hosts.go:30-33`, `:279-283` and `:488-492`.
 - **D4. Storage goes in `pkg/db` and policy in `pkg/http`; nothing goes in `pkg/hardware`.**
   `pkg/hardware` reads a package-level injected store (#93 debt). New code receives `*db.Store`
   explicitly:
-  - `bootScriptHandler` gains a `store *db.Store` parameter.
-  - The per-IP limiter lives in the handler's closure, as the node-report receiver does
-    (`pkg/http/nodereport.go:122-132`).
+  - `bootScriptHandler` gains a `store *db.Store` parameter (`http.go:51` passes `deps.Store`). A
+    nil store skips recording, so existing handler tests that build it without a store
+    (`bootscript_test.go:87`) keep working.
+  - The per-IP limiter is created once per handler and captured in its closure, as `wakeLimit` is
+    (`pkg/http/api_hosts.go:110`).
+  - A `HEAD /booty.ipxe` (which `GET /booty.ipxe` also matches) never records.
 - **D5. The arch comes from iPXE's `${buildarch}` and passes an allowlist.**
   - iPXE documents its values as `i386`, `x86_64`, `arm32` and `arm64`: "the CPU architecture for
     which this version of iPXE was compiled" (https://ipxe.org/cfg/buildarch). Gate 1 also found it
@@ -131,7 +140,12 @@ The maintainer, 2026-10-14: *"I would rather approve pending than add it manuall
     `nodereport.go:146-149`.
     - An IPv4 address, or an IPv4-mapped IPv6 address, is keyed by the full IPv4 address.
     - Any other IPv6 address is keyed by its /64 prefix, so one host cannot evade the limit by
-      cycling addresses inside its /64.
+      cycling addresses inside its /64. The zone is dropped, so all link-local clients share one
+      budget. That only matters with an IPv6 `--serverIP`, and is accepted.
+    - If `netip.ParseAddr` fails on the host part, the raw host string is the key, matching
+      `nodereport.go:146-149`.
+  - **The `ip` column** stores `addr.Unmap().WithZone("").String()` for a parsed address, else the
+    raw host string.
   - **The limiter** is `nodereport.MustNewLimiter(8, 10*time.Minute, 4096, time.Now)`. Its key
     count is bounded by LRU (`pkg/nodereport/limit.go:32`). 4096 matches `limiterCapacity`
     (`pkg/http/nodereport.go:24`).
@@ -154,14 +168,17 @@ The maintainer, 2026-10-14: *"I would rather approve pending than add it manuall
   3. `POST /api/v1/hosts/{mac}/approve {configId?, roleIds?}`, unchanged.
 
   Today's dialog already does steps 2 and 3. Step 1 is the only new call.
-  - **If step 2 or 3 fails,** the machine stays as a registered, pending host in the existing Pending
-    table, where the normal Approve retries it. The error is shown.
+  - **If step 2 or 3 fails,** the UI shows the error and calls `DELETE /api/v1/hosts/{mac}` to undo
+    step 1, so the machine is not left as a registered unapproved host (#158 exposure). Its next
+    holding-loop poll (≤ 30 s) rediscovers it (D10). If that DELETE also fails, both errors are
+    shown, and the host stays in the registered Pending table, where the normal Approve retries
+    it. The view reloads in a `finally`, whatever the outcome.
   - **Rejected alternative:** a single atomic promote endpoint. It needs a new transaction, its own
     409 and 404 handling, and a second copy of the schematic, config and role validation
     (Gate 1, S6). The three-call flow uses code that is already tested.
-  - **Cost:** for the milliseconds between steps 1 and 3, the machine is a registered unapproved host
-    and so falls under #158. #158 is a separate M0 issue at priority/high, and fixing it closes that
-    window.
+  - **Cost:** between steps 1 and 3 (milliseconds on success; until the rollback DELETE on failure),
+    the machine is a registered unapproved host and so falls under #158. #158 is a separate M0
+    issue at priority/high, and fixing it closes that window.
 - **D9. Boot vocabulary and an assignable-OS guard (Gate 1 B1).**
   - **What is broken today:** `GET /api/v1/os` lists canonical names (12 OSes, including
     `fedora-coreos` and 8 tool OSes), and create-host accepts all of them (`osFamily`). Gate 1
@@ -170,7 +187,14 @@ The maintainer, 2026-10-14: *"I would rather approve pending than add it manuall
   - **Fix 1, create-host stores the boot-vocabulary name.** `pkg/cache` exports
     `CanonicalToCacheName` (rename the unexported `canonicalToCacheName`, `pkg/cache/layout.go:98`,
     and update its callers). `POST /api/v1/hosts` stores `cache.CanonicalToCacheName(os)`, so
-    `fedora-coreos` is stored as `coreos`. Validation is unchanged.
+    `fedora-coreos` is stored as `coreos`. Validation is unchanged. The rename touches 9 non-test
+    sites in 7 files (`list.go:141`, `scan.go:36`, `debiandvd.go:331,472`, `migrate.go:105`,
+    `evict.go:55,73`, `verify.go:424`, `reconcile.go:170`), the tests `evict_test.go:55` and
+    `layout_test.go:40-41,48`, and the comment at `layout.go:96`.
+    Migration 0011 also rewrites rows stored before this fix:
+    `UPDATE hosts SET os='coreos' WHERE os='fedora-coreos'` and the same for `assigned_os`.
+    `api_hosts_test.go:511`, which expects a 201 for `fedora-coreos`, still holds, and gains an
+    assertion that the stored value is `coreos`.
   - **Fix 2, approve refuses an OS that assignment cannot boot.** `bootscript` exports
     `Assignable(os string) bool`. It returns true exactly when `PXEConfig[os+".ipxe"]` exists,
     `os != "holding"` and `!isToolOS(os)`. Today that is `talos`, `flatcar`, `coreos` and `debian`.
@@ -191,6 +215,8 @@ The maintainer, 2026-10-14: *"I would rather approve pending than add it manuall
     422 for a bad MAC.
   - `DELETE /api/v1/discovered` deletes every row and returns 200 with `{"deleted": <n>}` (a 204 cannot carry a body). That is
     bulk recovery after spam.
+  - Both are registered by a new `registerDiscovered(api huma.API, deps APIDeps)` in a new file
+    `pkg/http/api_discovered.go`, called from `RegisterAPI` next to the other `register*` calls.
   - Neither route can touch `hosts`. `/api/v1/discovered/...` overlaps no existing pattern (Gate 1
     registered the shapes on a stdlib mux). `DELETE /api/v1/hosts/{mac}` is unchanged. Both routes
     sit behind the auth gate, like every `/api/v1` operation.
@@ -207,22 +233,27 @@ The maintainer, 2026-10-14: *"I would rather approve pending than add it manuall
     descending, then `mac` ascending.
   - `firstSeen` and `lastSeen` are RFC 3339 UTC strings (`2026-10-15T05:19:27Z`), converted from
     SQLite's `datetime('now')` form (`2026-10-15 05:19:27`, UTC).
-  - `discoveredFull` is true when the table holds 1024 rows. The `?approved=` filter does not apply
+  - `discoveredFull` is true when `CountDiscoveredHosts >= 1024`. The `?approved=` filter does not apply
     to `discovered`.
   - `unknown` is removed rather than retyped: a renamed field fails loudly in old clients, while a
-    retyped one fails silently. The UI is the only in-repo consumer. This is a breaking API change,
+    retyped one fails silently. Nothing in the repo reads `unknown` (the UI never did). This is a breaking API change,
     called out in the PR and in `docs/schema/API.md`.
-- **D14. The invariant wording changes.** CLAUDE.md says "Boot-path endpoints … are read-only". It
-  becomes: *"…are read-only, except that `GET /booty.ipxe` records a machine it does not know in
-  `discovered_hosts`: new rows are limited per source IP and capped at 1024 with no eviction,
-  refreshes are debounced to one write per 20 s per MAC, and a row grants nothing."* The change
-  ships in this PR.
+- **D14. The invariant wording changes.** `.claude/CLAUDE.md`'s security invariants currently say
+  "Boot-path endpoints (…) are read-only. The one open route that writes is `POST /node/report`
+  (…)". That sentence becomes: *"Two open routes write: `POST /node/report` (node health,
+  per-host HMAC token plus an ARP match), and `GET /booty.ipxe`, which records a machine it does
+  not know in `discovered_hosts`. New rows are limited per source IP and capped at 1024 with no
+  eviction, refreshes are debounced to one write per 20 s per MAC, and a row grants nothing."*
+  In the last bullet, "(`/booty.ipxe`, `/menu/`, `/boot/` have neither credential nor rate
+  limit)" becomes "(`/menu/` and `/boot/` have neither credential nor rate limit; `/booty.ipxe`
+  limits only its discovery writes)". The change ships in this PR.
 - **D15. The open-route table marks `/booty.ipxe` as mutating (Gate 1 S2).**
   - In `pkg/http/open_routes_test.go`, `"GET /booty.ipxe"` gets `mutates: true`, with a `why` that
     names the bounds in D14.
   - The expected list of mutating routes becomes `[]string{"/node/report", "GET /booty.ipxe"}`,
     sorted as the test sorts them (`slices.Sorted(maps.Keys(table))`).
-  - The test's comment "Exactly one open route may set it" becomes "two".
+  - The comments "Exactly one open route may set it" (`open_routes_test.go:30-31`) and "Exactly one
+    allowlisted route may change state" (`:171`) both say "two" and name them.
 - **D16. "Allow" becomes "Approve".** The Hosts view's button and modal title
   (`web/src/views/HostsView.tsx:161,225`) say "Allow", while Home and the API say "approve". Every
   label in that view becomes "Approve".
@@ -250,7 +281,7 @@ CREATE TABLE discovered_hosts (
 |---|---|---|
 | `TouchDiscoveredHost(ctx, mac, ip, arch string) (bool, error)` | Existence: `SELECT 1 FROM discovered_hosts WHERE mac=?`. If present: `UPDATE discovered_hosts SET last_seen=datetime('now'), ip=?, arch=CASE WHEN ?='' THEN arch ELSE ? END WHERE mac=? AND last_seen <= datetime('now','-20 seconds')` | whether the row exists (true even when the debounce skipped the write) |
 | `InsertDiscoveredHost(ctx, mac, ip, arch string, maxRows int) (bool, error)` | `INSERT INTO discovered_hosts (mac, ip, arch) SELECT ?, ?, ? WHERE (SELECT count(*) FROM discovered_hosts) < ? AND NOT EXISTS (SELECT 1 FROM hosts WHERE mac = ?) ON CONFLICT(mac) DO NOTHING` | `RowsAffected()==1`. A 0 means the table is full, the MAC is registered or a concurrent request inserted it. The caller logs the first two at Debug as "discovery refused" and cannot tell them from the race, which is harmless because the row then exists. |
-| `ListDiscoveredHosts(ctx) ([]DiscoveredHost, error)` | `SELECT … FROM discovered_hosts WHERE mac NOT IN (SELECT mac FROM hosts) ORDER BY last_seen DESC, mac ASC` | rows; empty slice, not nil |
+| `ListDiscoveredHosts(ctx) ([]DiscoveredHost, error)` | `SELECT … FROM discovered_hosts d WHERE NOT EXISTS (SELECT 1 FROM hosts h WHERE h.mac = d.mac) ORDER BY last_seen DESC, mac ASC` | rows; empty slice, not nil |
 | `CountDiscoveredHosts(ctx) (int, error)` | `SELECT count(*) FROM discovered_hosts` | the count, for `discoveredFull` |
 | `DeleteDiscoveredHost(ctx, mac) (bool, error)` | `DELETE FROM discovered_hosts WHERE mac=?` | `RowsAffected()==1` |
 | `DeleteAllDiscoveredHosts(ctx) (int64, error)` | `DELETE FROM discovered_hosts` | rows deleted |
@@ -309,8 +340,10 @@ chain http://[[server]]/booty.ipxe?mac=${mac}&arch=${buildarch} || shell
 - **The Approve dialog for a discovered machine** is the existing modal with a required **OS**
   select first, populated per D9's third fix.
   - Selecting `talos` reveals the existing schematic field. Selecting another OS hides it.
-  - The Config list is filtered by the selected OS's family with the rule the view already applies
-    (`familyAllowsKind`, `HostsView.tsx:120-123`).
+  - The Config list is filtered by the selected OS with the helper the view already uses for a
+    registered host, `kindsForHostOS` (`web/src/api/configKinds.ts:88`), keyed on the form's
+    selected value (`Form.useWatch('os', form)`) instead of `allowing?.os`. Changing the OS clears
+    `configId`.
   - Submit runs the D8 sequence.
   - The registered-host dialog is unchanged apart from D16.
 - **Home:**
@@ -318,6 +351,9 @@ chain http://[[server]]/booty.ipxe?mac=${mac}&arch=${buildarch} || shell
     counts registered pending hosts plus discovered machines.
   - Needs-attention lists discovered machines (MAC and arch) with an **Approve** link to `/hosts`,
     because approving needs an OS choice. Registered pending hosts keep their inline Approve.
+  - The fresh-install "Get started" card (`web/src/views/HomeView.tsx:43-44`, `fresh` = every count
+    is 0) also requires `discovered.length === 0`. Otherwise a machine booted before the first
+    catalog download would be hidden behind it.
 - No emoji. Use AntD components and tokens (the project's UI rules).
 
 ## 7. Testing
@@ -386,7 +422,8 @@ Write every test first and watch it fail on the unfixed tree.
   Pending table.
 - Dismiss and Dismiss all confirm, then call DELETE.
 - The full-table Alert renders when `discoveredFull` is true.
-- The Home subtitle count includes discovered machines.
+- The Home subtitle count includes discovered machines, and the "Get started" card is not shown while `discovered` is non-empty.
+- A failed approve step 2 or 3 calls `DELETE /api/v1/hosts/{mac}` and then reloads.
 - No "Allow" text remains in the Hosts view.
 
 **Acceptance (the M0 exit test, run before the PR):** the QEMU user-network lab.
@@ -397,6 +434,8 @@ Write every test first and watch it fail on the unfixed tree.
   - Put booty's TFTP stub, fetched with `curl tftp://127.0.0.1:16969/booty.ipxe`, in a directory.
   - Boot a BIOS guest with `-netdev user,tftp=<dir>,bootfile=booty.ipxe` and `-m 3072`.
   - Write a minimal Flatcar Butane to `<dataDir>/config/ignition.yaml`.
+  - Before step 3, wait until `GET /api/v1/cache` lists a verified `flatcar` entry: the default
+    catalog downloads it on a fresh dataDir (`pkg/cache/catalog.go:219-226`).
 - Pass criteria:
   1. The VM appears under Pending → New machines with arch `amd64`.
   2. After `kill -TERM` and a restart of booty, it is still there.
@@ -465,3 +504,12 @@ Write every test first and watch it fail on the unfixed tree.
     - 8, `?approved=` and the Home tile. D13 and §6.
     - 9, the log-flood reasoning. Corrected in D7.
     - 10, dead `GetData` and `BootyData`. D3.
+- **Gate 1, second pass (no blocking):**
+  - S1, a fresh-install Home hid a waiting machine. Fixed in §6 (Home).
+  - S2, the D8 window on failure. Fixed by the rollback DELETE in D8.
+  - S3, D3 dropped coverage. Fixed by D3's test split.
+  - Minor 1-13 folded in: the `fedora-coreos` row rewrite in 0011 (D9), `NOT EXISTS` in List (§4),
+    HEAD and nil store (D4), link-local and the `ip` column (D7), citations (D4, §6), reload in
+    `finally` (D8), both open-route comments (D15), the stale-comment list (D3), the D6 test list
+    (§7), the rename sites (D9), `>= 1024` (D13), the registrar file (D11), the consumer wording
+    (D13), and waiting for the Flatcar cache (§7).
