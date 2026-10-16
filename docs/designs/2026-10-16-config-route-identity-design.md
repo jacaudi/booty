@@ -575,11 +575,11 @@ Fixtures:
 | T10 | `TestMemberNeedsTicketAndARP` | Member + matching ARP + **no ticket** → 404 | main: serves the frozen config |
 | T10b | (same test, rows needing a ticket) | Member + ticket + matching ARP → frozen config. Member + ticket + ARP mismatch → 403 | acceptance control; mutation: drop the member ARP check → the 403 row fails |
 | T11 | `TestConfigLogsNeverCarryTicket` | Capture `slog`; request each route with `ticket=SENTINEL-TICKET` for an approved host → no record contains `SENTINEL-TICKET` | main: the handler logs `r.RequestURI`, which contains it |
-| T11b | `TestConfigRefusalIsLogged` | No ticket, and an expired ticket → one Warn record "config refused: no valid boot ticket" with `family`, `mac` and `err` | mutation: remove the log line |
+| T11b | `TestConfigRefusalIsLogged` | No ticket, and a ticket signed under another key → one Warn record "config refused: no valid boot ticket" with `family`, `mac` and `err` (`no ticket` / `invalid ticket`). Expiry's reason text is covered by T5, because a route test cannot age a ticket without running SQLite inside `synctest` | mutation: remove the log line |
 | T12 | `TestIgnitionARPFallback` | No `?mac=`; injected ARP resolves the approved host; valid ticket → served | mutation: ignore the injected `arp` (call `arpLookup`) → fails |
 | T13 | `TestStartHTTPRefusesNilTickets` | `StartHTTP(APIDeps{Store: s, Auth: store, Tickets: nil})` → error; also under `NoAuth: true` | mutation: remove the refusal |
 | T13b | `TestTFTPStartRefusesNilTickets` | `tftp.Start(Config{Tickets: nil, …})` → error | mutation: remove the refusal |
-| T14 | `TestLoadOrCreate`, `TestLoadOrCreateLeavesNoTemp` | Moved from `pkg/nodereport/token_test.go:50,93` to `pkg/keyfile`. The temp-prefix check uses `"." + filepath.Base(path) + "-"` | moved; still pass. Mutation: hard-code a different prefix → the no-temp test fails |
+| T14 | `TestLoadOrCreate`, `TestLoadOrCreateLeavesNoTemp` | Moved from `pkg/nodereport/token_test.go:50,93` to `pkg/keyfile`. The temp-prefix check uses `"." + filepath.Base(path) + "-"` | moved; still pass. Mutation: delete the deferred temp-file `os.Remove` in `writeKey` → the no-temp test fails |
 | T15 | `TestRunFailsOnBadBootTicketKey` (`cmd`) | A directory at `<dataDir>/boot-ticket-key` → `run` returns an error containing `boot tickets:`, and nothing listens | pattern: `cmd/main_test.go:350` |
 
 **Existing tests that change** (the plan lists every call site):
