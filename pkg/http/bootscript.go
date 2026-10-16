@@ -15,7 +15,7 @@ import (
 
 // bootScriptHandler serves the per-host booty.ipxe script (holding, assigned
 // OS or menu). The host is identified by ?mac=, with ARP as the fallback. A GET
-// from a MAC that is not registered is also recorded in discovered_hosts when
+// from a MAC that is not registered is also recorded as a discovered host when
 // store is non-nil; recording never changes the script served.
 func bootScriptHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 	var d *discoverer

@@ -34,7 +34,7 @@ import (
 //
 // /hosts, /register, /unregister, /booty.json and /info were retired here:
 // they are superseded by the gated /api/v1 surface (POST /api/v1/hosts,
-// DELETE /api/v1/hosts/{mac}, GET /api/v1/hosts's unknown field, GET
+// DELETE /api/v1/hosts/{mac}, GET /api/v1/hosts's discovered field, GET
 // /api/v1/info).
 //
 // dataRoot is the [os.Root] on dataDir that /data/ serves through. It fails

@@ -24,15 +24,37 @@ type hostView struct {
 	Health *nodereport.Summary `json:"health,omitempty"`
 }
 
+// discoveredView is a machine that fetched booty.ipxe without being a
+// registered host. Times are RFC 3339 UTC.
+type discoveredView struct {
+	MAC       string `json:"mac"`
+	Arch      string `json:"arch"`
+	IP        string `json:"ip"`
+	FirstSeen string `json:"firstSeen"`
+	LastSeen  string `json:"lastSeen"`
+}
+
 type listHostsOutput struct {
 	Body struct {
 		Hosts []hostView `json:"hosts"`
-		// Unknown carries MACs booty has seen but that are not registered.
-		// Retiring GET /booty.json removes the only other surface for
-		// them, so this field is what makes that supersession real rather
-		// than a loss of visibility into unregistered hosts.
-		Unknown []string `json:"unknown"`
+		// Discovered lists machines that reached the boot path but are not
+		// registered. It is never nil: a nil slice marshals to JSON null, and the
+		// UI flatMaps array fields, so a null would reach the views as an element.
+		Discovered []discoveredView `json:"discovered"`
+		// DiscoveredFull is true once the discovered table is at its cap, so the
+		// operator knows new machines are no longer being recorded.
+		DiscoveredFull bool `json:"discoveredFull"`
 	}
+}
+
+// rfc3339 converts a SQLite datetime (UTC) to RFC 3339. A value it cannot
+// parse is returned unchanged.
+func rfc3339(s string) string {
+	t, err := time.Parse(time.DateTime, s)
+	if err != nil {
+		return s
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // validateHostConfigRoles checks an optional config/role binding WITHOUT
@@ -146,13 +168,22 @@ func registerHosts(api huma.API, deps APIDeps) {
 			}
 			out.Body.Hosts = append(out.Body.Hosts, hostView{Host: h, Health: sum})
 		}
-		// []string{} and NOT nil: a nil slice marshals to JSON null, and the
-		// UI flatMaps array fields — a null survives as an element and reaches
-		// the views. Same footgun as authoringKindsForFamily in render.go.
-		out.Body.Unknown = hardware.ListUnknownHosts()
-		if out.Body.Unknown == nil {
-			out.Body.Unknown = []string{}
+		rows, err := deps.Store.ListDiscoveredHosts(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("list discovered hosts", err)
 		}
+		n, err := deps.Store.CountDiscoveredHosts(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("count discovered hosts", err)
+		}
+		out.Body.Discovered = make([]discoveredView, 0, len(rows))
+		for _, r := range rows {
+			out.Body.Discovered = append(out.Body.Discovered, discoveredView{
+				MAC: r.MAC, Arch: r.Arch, IP: r.IP,
+				FirstSeen: rfc3339(r.FirstSeen), LastSeen: rfc3339(r.LastSeen),
+			})
+		}
+		out.Body.DiscoveredFull = n >= maxDiscoveredHosts
 		return out, nil
 	})
 
@@ -276,11 +307,8 @@ func registerHosts(api huma.API, deps APIDeps) {
 			RoleIDs  *[]int64 `json:"roleIds,omitempty"`
 		}
 	}) (*struct{ Body *hardware.Host }, error) {
-		// HasHost, not GetMacAddress, so a mistyped/absent MAC does not
-		// permanently pollute ListUnknownHosts via GetMacAddress's miss-side
-		// trackUnknown call. h is then fetched below only once the host is
-		// known to exist, which hits the found path (clearUnknown), not the
-		// miss path.
+		// HasHost, not GetMacAddress: it avoids a full row fetch. h is fetched
+		// below only once the host is known to exist.
 		exists, err := hardware.HasHost(in.MAC)
 		if err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
@@ -487,9 +515,7 @@ func registerHosts(api huma.API, deps APIDeps) {
 	}) (*struct{}, error) {
 		// RemoveMacAddress is idempotent, so check existence first to give a
 		// truthful 404 rather than a 204 for a MAC that was never there.
-		// HasHost, not GetMacAddress: see the identical comment on approve-host
-		// -- a mistyped MAC here must not permanently add itself to
-		// ListUnknownHosts.
+		// HasHost, not GetMacAddress: it avoids a full row fetch.
 		if exists, err := hardware.HasHost(in.MAC); err != nil {
 			return nil, huma.Error422UnprocessableEntity("invalid MAC", err)
 		} else if !exists {

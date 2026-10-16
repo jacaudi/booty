@@ -3,10 +3,8 @@ package hardware
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 	"testing"
 
@@ -116,28 +114,7 @@ func TestGetMacAddress_MissingMacReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-func TestGetMacAddress_TracksMissAsUnknownHost(t *testing.T) {
-	setupTempDB(t)
-	_, _ = GetMacAddress("aa:bb:cc:dd:ee:ff")
-
-	data, err := GetData()
-	if err != nil {
-		t.Fatalf("GetData: %v", err)
-	}
-	var bd BootyData
-	if err := json.Unmarshal(data, &bd); err != nil {
-		t.Fatalf("Unmarshal GetData: %v", err)
-	}
-	if _, ok := bd.UnknownHosts["aa:bb:cc:dd:ee:ff"]; !ok {
-		t.Errorf("expected unknown MAC in UnknownHosts, got %+v", bd.UnknownHosts)
-	}
-}
-
-// TestHasHost_DoesNotTrackMissAsUnknownHost is the regression guard for the
-// delete-host phantom-unknown bug: a plain existence check must not call
-// trackUnknown, or a mistyped MAC (404) permanently pollutes the operator's
-// Hosts view via ListUnknownHosts.
-func TestHasHost_DoesNotTrackMissAsUnknownHost(t *testing.T) {
+func TestHasHost_AbsentIsFalseNil(t *testing.T) {
 	setupTempDB(t)
 	exists, err := HasHost("aa:bb:cc:dd:ee:ff")
 	if err != nil {
@@ -145,9 +122,6 @@ func TestHasHost_DoesNotTrackMissAsUnknownHost(t *testing.T) {
 	}
 	if exists {
 		t.Fatal("HasHost: exists = true, want false")
-	}
-	if got := ListUnknownHosts(); len(got) != 0 {
-		t.Fatalf("HasHost must not track a miss as unknown, got %v", got)
 	}
 }
 
@@ -274,8 +248,8 @@ func TestLoad_ConcurrentWithDBOpsIsRaceClean(t *testing.T) {
 					if _, err := GetMacAddress(mac); err != nil && !errors.Is(err, ErrNotFound) {
 						t.Errorf("GetMacAddress unexpected error concurrent with Load: %v", err)
 					}
-					if _, err := GetData(); err != nil {
-						t.Errorf("GetData concurrent with Load: %v", err)
+					if _, err := ListHosts(); err != nil {
+						t.Errorf("ListHosts concurrent with Load: %v", err)
 					}
 				}
 			}
@@ -358,78 +332,5 @@ func TestApproveRevokeRoundtrip(t *testing.T) {
 	hosts, err := ListHosts()
 	if err != nil || len(hosts) != 1 {
 		t.Fatalf("ListHosts = (%d,%v), want (1,nil)", len(hosts), err)
-	}
-}
-
-func TestGetData_IncludesRegisteredAndUnknown(t *testing.T) {
-	setupTempDB(t)
-	if err := WriteMacAddress("aa:bb:cc:dd:ee:ff", Host{MAC: "aa:bb:cc:dd:ee:ff", Hostname: "node-01"}); err != nil {
-		t.Fatalf("WriteMacAddress: %v", err)
-	}
-	_, _ = GetMacAddress("11:22:33:44:55:66") // miss → tracked unknown
-
-	data, err := GetData()
-	if err != nil {
-		t.Fatalf("GetData: %v", err)
-	}
-	var bd BootyData
-	if err := json.Unmarshal(data, &bd); err != nil {
-		t.Fatalf("Unmarshal GetData: %v", err)
-	}
-	if _, ok := bd.Hosts["aa:bb:cc:dd:ee:ff"]; !ok {
-		t.Errorf("registered host missing from GetData; got %+v", bd.Hosts)
-	}
-	if _, ok := bd.UnknownHosts["11:22:33:44:55:66"]; !ok {
-		t.Errorf("unknown host missing from GetData; got %+v", bd.UnknownHosts)
-	}
-}
-
-func TestListUnknownHostsReturnsSeenButUnregisteredMACs(t *testing.T) {
-	setupTempDB(t)
-
-	// A miss on GetMacAddress is what records an unknown host (mac.go:282).
-	if _, err := GetMacAddress("aa:bb:cc:00:00:aa"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("precondition: want ErrNotFound, got %v", err)
-	}
-	if _, err := GetMacAddress("aa:bb:cc:00:00:bb"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("precondition: want ErrNotFound, got %v", err)
-	}
-
-	got := ListUnknownHosts()
-	if len(got) != 2 {
-		t.Fatalf("ListUnknownHosts() = %v, want 2 entries", got)
-	}
-	if got[0] > got[1] {
-		t.Fatalf("ListUnknownHosts() must be sorted for a stable API response, got %v", got)
-	}
-
-	// Registering one clears it (mac.go clearUnknown).
-	if err := WriteMacAddress("aa:bb:cc:00:00:aa", Host{MAC: "aa:bb:cc:00:00:aa", OS: "flatcar"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := ListUnknownHosts(); len(got) != 1 {
-		t.Fatalf("after registering one, ListUnknownHosts() = %v, want 1 entry", got)
-	}
-}
-
-func TestUnknownHostsCapped(t *testing.T) {
-	setupTempDB(t)
-	mac := func(i int) string { return fmt.Sprintf("aa:bb:cc:%02x:%02x:%02x", i>>16&0xff, i>>8&0xff, i&0xff) }
-	for i := range maxUnknownHosts + 10 {
-		trackUnknown(mac(i))
-	}
-	got := ListUnknownHosts()
-	if len(got) != maxUnknownHosts {
-		t.Fatalf("len(ListUnknownHosts()) = %d, want %d", len(got), maxUnknownHosts)
-	}
-	for i := range 10 {
-		if slices.Contains(got, mac(i)) {
-			t.Errorf("earliest-tracked %s still listed", mac(i))
-		}
-	}
-	// Re-tracking a listed MAC neither grows the list nor evicts anything.
-	trackUnknown(mac(10))
-	if got = ListUnknownHosts(); len(got) != maxUnknownHosts || !slices.Contains(got, mac(11)) {
-		t.Fatalf("re-track changed the list: len %d, has %s = %v", len(got), mac(11), slices.Contains(got, mac(11)))
 	}
 }

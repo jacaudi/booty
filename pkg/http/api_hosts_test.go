@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2/humatest"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/jeefy/booty/pkg/nodereport"
@@ -71,22 +74,6 @@ func TestDeleteHostRemovesTheHost(t *testing.T) {
 	}
 	if resp := api.Delete("/api/v1/hosts/aa:bb:cc:dd:ee:99"); resp.Code != 404 {
 		t.Fatalf("DELETE absent host = %d, want 404", resp.Code)
-	}
-}
-
-// TestDeleteHostAbsentMACDoesNotPolluteUnknownHosts is the regression guard
-// for the phantom-machine bug: DELETE on an absent MAC used to call
-// hardware.GetMacAddress purely as an existence check, whose miss path calls
-// trackUnknown -- so one mistyped MAC would permanently appear in the
-// operator's Hosts view (unknown array) until a later exact-match lookup or
-// a restart. A 404 must never have that side effect.
-func TestDeleteHostAbsentMACDoesNotPolluteUnknownHosts(t *testing.T) {
-	api := newTestAPI(t, hostsTestSetup(t))
-	if resp := api.Delete("/api/v1/hosts/de:ad:be:ef:00:01"); resp.Code != 404 {
-		t.Fatalf("DELETE absent host = %d, want 404", resp.Code)
-	}
-	if got := hardware.ListUnknownHosts(); len(got) != 0 {
-		t.Fatalf("a 404 from delete-host must not add the MAC to ListUnknownHosts, got %v", got)
 	}
 }
 
@@ -566,57 +553,134 @@ func TestCreateHostRejectsAnIgnitionFileField(t *testing.T) {
 	}
 }
 
-// TestListHostsIncludesUnknownHosts guards the guarantee that GET /api/v1/hosts
-// genuinely supersedes the retired GET /booty.json. Unknown hosts live only in
-// an in-memory map (hardware/mac.go:50, trackUnknown at :509) and nothing ever
-// writes them to the DB, so ListHosts alone cannot surface them.
-func TestListHostsIncludesUnknownHosts(t *testing.T) {
-	api := newTestAPI(t, hostsTestSetup(t))
-	const known = "aa:bb:cc:dd:ee:05"
-	if err := hardware.WriteMacAddress(known, hardware.Host{MAC: known, OS: "flatcar"}); err != nil {
-		t.Fatal(err)
-	}
-	// A lookup miss is what records an unknown host.
-	if _, err := hardware.GetMacAddress("aa:bb:cc:dd:ee:06"); err == nil {
-		t.Fatal("precondition: that MAC must not be registered")
-	}
-
+// listBody decodes GET /api/v1/hosts into raw fields so a test can see the
+// exact JSON each key carries.
+func listBody(t *testing.T, api humatest.TestAPI) map[string]json.RawMessage {
+	t.Helper()
 	resp := api.Get("/api/v1/hosts")
 	if resp.Code != 200 {
-		t.Fatalf("list = %d, want 200", resp.Code)
+		t.Fatalf("list = %d, want 200: %s", resp.Code, resp.Body.String())
 	}
-	body := resp.Body.String()
-	if !strings.Contains(body, known) {
-		t.Errorf("registered host missing from the listing: %s", body)
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(resp.Body.Bytes(), &m); err != nil {
+		t.Fatalf("decode list: %v", err)
 	}
-	if !strings.Contains(body, "aa:bb:cc:dd:ee:06") {
-		t.Errorf("unknown host missing from the listing: %s", body)
+	return m
+}
+
+func TestListHostsHasDiscoveredNotUnknown(t *testing.T) {
+	s := servingStore(t)
+	api := newTestAPI(t, APIDeps{Store: s})
+
+	m := listBody(t, api)
+	if got := string(m["discovered"]); got != "[]" {
+		t.Errorf(`"discovered" = %s, want []`, got)
 	}
-	if !strings.Contains(body, `"unknown"`) {
-		t.Errorf("the listing must carry an \"unknown\" field: %s", body)
+	if got := string(m["discoveredFull"]); got != "false" {
+		t.Errorf(`"discoveredFull" = %s, want false`, got)
+	}
+	if _, ok := m["unknown"]; ok {
+		t.Error(`the listing must not carry an "unknown" key`)
 	}
 }
 
-// TestListHostsUnknownIsEmptyArrayNotNull guards the nil-slice footgun
-// api_hosts.go's list-hosts handler works around: hardware.ListUnknownHosts
-// calls slices.Sorted over a possibly-empty map, which returns a nil slice,
-// and a nil slice marshals to JSON null -- which the UI's flatMap would then
-// surface AS AN ELEMENT of the unknown list, not as an empty list. With no
-// unknown hosts recorded, the listing must carry "unknown":[], never
-// "unknown":null.
-func TestListHostsUnknownIsEmptyArrayNotNull(t *testing.T) {
-	api := newTestAPI(t, hostsTestSetup(t))
+func TestListHostsDiscoveredShape(t *testing.T) {
+	s := servingStore(t)
+	api := newTestAPI(t, APIDeps{Store: s})
+	const mac, ip, arch = "aa:bb:cc:dd:ee:01", "10.0.0.7", "amd64"
+	if _, err := s.InsertDiscoveredHost(t.Context(), mac, ip, arch, maxDiscoveredHosts); err != nil {
+		t.Fatal(err)
+	}
 
-	resp := api.Get("/api/v1/hosts")
+	var got []struct {
+		MAC       string `json:"mac"`
+		Arch      string `json:"arch"`
+		IP        string `json:"ip"`
+		FirstSeen string `json:"firstSeen"`
+		LastSeen  string `json:"lastSeen"`
+	}
+	if err := json.Unmarshal(listBody(t, api)["discovered"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("discovered = %+v, want one row", got)
+	}
+	if got[0].MAC != mac || got[0].Arch != arch || got[0].IP != ip {
+		t.Errorf("discovered[0] = %+v, want mac=%s arch=%s ip=%s", got[0], mac, arch, ip)
+	}
+	rfc3339UTC := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`)
+	for name, v := range map[string]string{"firstSeen": got[0].FirstSeen, "lastSeen": got[0].LastSeen} {
+		if !rfc3339UTC.MatchString(v) {
+			t.Errorf("%s = %q, want RFC 3339 UTC", name, v)
+		}
+	}
+}
+
+func TestListHostsDiscoveredFull(t *testing.T) {
+	s := servingStore(t)
+	api := newTestAPI(t, APIDeps{Store: s})
+	for i := range maxDiscoveredHosts {
+		mac := fmt.Sprintf("02:00:00:00:%02x:%02x", i>>8, i&0xff)
+		if _, err := s.InsertDiscoveredHost(t.Context(), mac, "10.0.0.7", "", maxDiscoveredHosts); err != nil {
+			t.Errorf("insert %s: %v", mac, err)
+			continue
+		}
+	}
+
+	if got := string(listBody(t, api)["discoveredFull"]); got != "true" {
+		t.Errorf(`"discoveredFull" = %s after %d inserts, want true`, got, maxDiscoveredHosts)
+	}
+}
+
+func TestListHostsApprovedFilterIgnoresDiscovered(t *testing.T) {
+	s := servingStore(t)
+	api := newTestAPI(t, APIDeps{Store: s})
+	if _, err := s.InsertDiscoveredHost(t.Context(), "aa:bb:cc:dd:ee:02", "10.0.0.7", "amd64", maxDiscoveredHosts); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := api.Get("/api/v1/hosts?approved=true")
 	if resp.Code != 200 {
-		t.Fatalf("list = %d, want 200", resp.Code)
+		t.Fatalf("list = %d, want 200: %s", resp.Code, resp.Body.String())
 	}
-	body := resp.Body.String()
-	if !strings.Contains(body, `"unknown":[]`) {
-		t.Errorf(`listing with no unknown hosts must carry "unknown":[], got: %s`, body)
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(resp.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(body, `"unknown":null`) {
-		t.Errorf(`listing must never carry "unknown":null: %s`, body)
+	var got []struct {
+		MAC string `json:"mac"`
+	}
+	if err := json.Unmarshal(m["discovered"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("approved=true discovered = %+v, want the one discovered row", got)
+	}
+}
+
+// TestApiOpsForUnknownMACDoNotRecord pins that only GET /booty.ipxe writes
+// discovered hosts: an operator naming an unregistered MAC gets a 404 or 422
+// and leaves no row behind.
+func TestApiOpsForUnknownMACDoNotRecord(t *testing.T) {
+	s := servingStore(t)
+	api := newTestAPI(t, APIDeps{Store: s, Trigger: func() {}})
+	const mac = "aa:bb:cc:dd:ee:d1"
+
+	for name, resp := range map[string]*httptest.ResponseRecorder{
+		"approve":   api.Post("/api/v1/hosts/"+mac+"/approve", map[string]any{}),
+		"delete":    api.Delete("/api/v1/hosts/" + mac),
+		"schematic": api.Post("/api/v1/hosts/"+mac+"/schematic", map[string]any{"schematic": "x"}),
+	} {
+		if resp.Code != 404 && resp.Code != 422 {
+			t.Errorf("%s = %d, want 404 or 422: %s", name, resp.Code, resp.Body.String())
+		}
+	}
+	n, err := s.CountDiscoveredHosts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("discovered rows = %d after operator calls, want 0", n)
 	}
 }
 
