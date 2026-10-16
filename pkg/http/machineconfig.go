@@ -18,10 +18,11 @@ import (
 // handleMachineConfigRequest serves a Talos machineconfig rendered from the
 // template at <dataDir>/<talosConfigFile>. UUID/Serial come from the query
 // string per request (not persisted in PR6); host fields come from the DB when
-// the MAC identifies a host. Genuine failures return 500 + short plaintext.
+// the MAC identifies a host. A caller with no approved host gets a 404 (#162),
+// and genuine failures return 500 + short plaintext.
 // It is returned as a closure over store so a DB-resolved config (precedence
 // rungs 1–2) can be tried before falling through to the existing file-based
-// path (rungs 3–4, unchanged).
+// path (rungs 3–4, reached only for an approved host).
 func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 	return machineConfigHandler(store, arpLookup)
 }
@@ -38,13 +39,19 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 
 		// Approval is the gate (#158). An unapproved cluster member gets a 403,
 		// never its frozen config and never the generic file config below, which
-		// would be worse than an error (see the member rung). Any other
-		// unapproved host gets the unknown-host answer.
+		// would be worse than an error (see the member rung). Any other caller
+		// with no approved host (unknown, unapproved, revoked or unidentified) is
+		// refused before any template is rendered (#162), so nothing in the
+		// server-default file, including the join string, can reach it.
 		if host != nil && host.NodeConfigID != nil && !host.Approved {
 			writeError(w, http.StatusForbidden, "cluster member config requires an approved host", nil)
 			return
 		}
 		host = configHost(host)
+		if host == nil {
+			writeError(w, http.StatusNotFound, "no approved host for this request", nil)
+			return
+		}
 
 		// P6 top rung: a cluster member serves its ACTIVE frozen, encrypted
 		// node config VERBATIM (materialize-and-freeze, design §5). A member
@@ -55,7 +62,7 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 		// spoofing is still possible, and members booted through a DHCP relay
 		// cannot be ARP-resolved and are refused until the authenticated-fetch
 		// design.
-		if host != nil && host.NodeConfigID != nil {
+		if host.NodeConfigID != nil {
 			if !requestFromMAC(r, host.MAC, arp) {
 				writeError(w, http.StatusForbidden,
 					"cluster member config requires the request to come from the member", nil)
@@ -65,7 +72,7 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 			return
 		}
 
-		if host != nil && serveBoundMachineConfig(w, r, store, host, hostname) {
+		if serveBoundMachineConfig(w, r, store, host, hostname) {
 			return
 		}
 		serveFileMachineConfig(w, r, host, hostname)
@@ -121,7 +128,7 @@ func serveBoundMachineConfig(w http.ResponseWriter, r *http.Request, store *db.S
 }
 
 // serveFileMachineConfig renders the <dataDir>/<talosConfigFile> template (rungs
-// 3–4). host is nil for an unidentified client.
+// 3–4) for an approved host.
 func serveFileMachineConfig(w http.ResponseWriter, r *http.Request, host *hardware.Host, hostname string) {
 	schematic := viper.GetString(config.TalosSchematic)
 	templateData := struct {
@@ -136,6 +143,8 @@ func serveFileMachineConfig(w http.ResponseWriter, r *http.Request, host *hardwa
 		Schematic      string
 	}{
 		Hostname:       hostname,
+		MAC:            host.MAC,
+		IP:             host.IP,
 		UUID:           r.URL.Query().Get("uuid"),
 		Serial:         r.URL.Query().Get("serial"),
 		ServerIP:       viper.GetString(config.ServerIP),
@@ -143,18 +152,11 @@ func serveFileMachineConfig(w http.ResponseWriter, r *http.Request, host *hardwa
 		JoinString:     viper.GetString(config.JoinString),
 		Schematic:      schematic,
 	}
-	// Unlike ignition's reboot-on-unknown, Talos legitimately fetches its config
-	// before it exists in the DB (identity comes from the query uuid/serial/hostname
-	// at first boot), so render a host-less config rather than forcing a reboot.
-	if host != nil {
-		if host.Hostname != "" {
-			templateData.Hostname = hardware.StripControl(host.Hostname)
-		}
-		templateData.MAC = host.MAC
-		templateData.IP = host.IP
-		if host.Schematic != "" {
-			templateData.Schematic = host.Schematic
-		}
+	if host.Hostname != "" {
+		templateData.Hostname = hardware.StripControl(host.Hostname)
+	}
+	if host.Schematic != "" {
+		templateData.Schematic = host.Schematic
 	}
 
 	path, err := resolveWithinDataDir(viper.GetString(config.TalosConfigFile))

@@ -108,14 +108,20 @@ func TestIgnitionBoundConfigServed(t *testing.T) {
 	}
 }
 
-// TestPreseedServesServerDefaultFile: an unbound debian host gets the
-// --preseedFile server default (the new serving rung-4).
+// TestPreseedServesServerDefaultFile: an approved but unbound debian host gets
+// the --preseedFile server default (the new serving rung-4). A caller with no
+// approved host gets a 404 instead (#162).
 func TestPreseedServesServerDefaultFile(t *testing.T) {
 	s := servingStore(t)
 	viper.Set(config.PreseedFile, "config/preseed.cfg")
 	writeFile(t, "config/preseed.cfg", "d-i mirror/host string {{ .ServerIP }}")
+	const mac = "aa:bb:cc:dd:ee:61"
+	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian"}); err != nil {
+		t.Fatal(err)
+	}
+	approveHost(t, mac)
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/preseed", nil)
+	req := httptest.NewRequest(http.MethodGet, "/preseed?mac="+mac, nil)
 	handlePreseedRequest(s)(rr, req)
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "10.0.0.1") {
 		t.Fatalf("preseed default file: %d %s", rr.Code, rr.Body.String())
