@@ -40,7 +40,7 @@ config file.
 | `--proxyDHCPBootfileUEFI` | `ipxe.efi` | UEFI (x86-64) iPXE binary named in the proxyDHCP ACK (embedded: `undionly.kpxe`, `ipxe.efi`, `snponly.efi`; other names are served from `--dataDir`). |
 | `--proxyDHCPBootfileARM64` | `ipxe-arm64.efi` | ARM64 iPXE binary named in the proxyDHCP ACK (not embedded; stage it in `--dataDir`). |
 | `--proxyDHCPRelay` | `false` | Answer relayed PXE requests by replying to the relay agent (giaddr). Talos cluster members behind a relay are refused their config until authenticated fetch exists. |
-| `--preseedFile` | `config/preseed.cfg` | Debian preseed template, relative to `--dataDir` — the rung-4 server-default fallback for hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
+| `--preseedFile` | `config/preseed.cfg` | Debian preseed template, relative to `--dataDir` — the rung-4 server-default fallback for approved hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
 | `--configRevisionsKeep` | `10` | Number of newest config revisions to retain per config, applied after every `PUT /configs/{id}`. The currently-active revision is always kept, even if it falls outside the newest-N window. |
 | `--apiToken` | `""` (unset — auto-generated on first run) | Explicit API token (also settable via `BOOTY_API_TOKEN`, see [below](#environment-variables)); overrides `<dataDir>/api-token` and is **never persisted** to disk. Prefer the environment variable over the flag: a flag value is visible in `ps` and `docker inspect`. See [Authentication](#authentication). |
 | `--noAuth` | `false` | Disable **all** `/api/v1` authentication — every management operation becomes reachable with no credential. Trusted-network debugging only; never set this on a network you don't fully control. See [Authentication](#authentication). |
@@ -129,7 +129,10 @@ to `POST /node/report`. booty keeps the latest report per host and shows it on t
 Each boot-facing handler (`/ignition.json`, `/machineconfig`, `/preseed`) resolves a host's config
 in a fixed 4-rung precedence, falling through to the next rung on any miss. This applies only to an
 **approved** host: the config routes answer an unapproved host (never approved, or revoked) exactly
-as they answer an unknown one, and an unapproved cluster member gets `403`.
+as they answer an unknown one, and an unapproved cluster member gets `403`. For `/machineconfig` and
+`/preseed` that answer is `404` with no template rendered, so rung 4 never runs for a caller with no
+approved host (it would put the join string in front of anyone on the LAN). `/ignition.json` still
+answers such a caller with the reboot config.
 
 1. **Host `config_id`** — an explicit per-host binding (`POST /hosts/{mac}/approve` or `/bind`, see
    [schema/API.md](schema/API.md)). A bound config whose `kind` mismatches the host's OS family (or
@@ -139,7 +142,7 @@ as they answer an unknown one, and an unapproved cluster member gets `403`.
    with a non-null `default_config_id` whose kind matches the family wins.
 3. **Legacy `hosts.ignition_file`** — a per-host Ignition template override (ignition family only;
    predates P4). Debian and Talos have no per-host file column, so this rung does not apply to them.
-4. **Server-default file** — `--ignitionFile` (env `IGNITION_FILE`, default `config/ignition.yaml`)
+4. **Server-default file** (approved hosts only) — `--ignitionFile` (env `IGNITION_FILE`, default `config/ignition.yaml`)
    for the ignition family (Flatcar/CoreOS), `--talosConfigFile` (default
    `config/machineconfig.yaml`) for Talos, `--preseedFile` (default `config/preseed.cfg`) for
    Debian.

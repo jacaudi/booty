@@ -139,7 +139,9 @@ In priority order (milestones M0–M7 that deliver these: `docs/roadmap.md`):
   - Every state-changing endpoint lives under `/api/v1`, behind the auth gate.
   - Boot-path endpoints (`/ignition.json`, `/machineconfig`, `/preseed`, `/menu/`, `/boot/*`,
     `/data/*`) are read-only. The three config routes serve a host only once it is approved: an
-    unapproved host gets the unknown-host answer, and an unapproved cluster member gets 403.
+    unapproved host gets the unknown-host answer (the reboot config from `/ignition.json`, a 404
+    with no template rendered from `/machineconfig` and `/preseed`), and an unapproved cluster
+    member gets 403.
     Two open routes write: `POST /node/report` (node health, per-host
     HMAC token plus an ARP match), and `GET /booty.ipxe`, which records a machine it does not
     know in `discovered_hosts`. New rows are limited per source IP and capped at 1024 with no
@@ -217,7 +219,8 @@ Each item has an open issue; close the issue when the item is gone and drop its 
    fallback.
 3. The OS kernel/initrd come from `/data/cache/...` over HTTP. The config comes from
    `/ignition.json`, `/machineconfig` or `/preseed`, identified by `?mac=` or ARP. An unapproved
-   host gets the unknown-host answer from all three (an unapproved cluster member gets 403).
+   host gets the unknown-host answer: the reboot config from `/ignition.json`, a 404 from
+   `/machineconfig` and `/preseed` (an unapproved cluster member gets 403).
 4. Unknown or unapproved MACs get the holding script from `/booty.ipxe` and are recorded
    as discovered machines (`discovered_hosts`) and appear under Pending until approved. The reboot-loop config is `/ignition.json`'s answer for a host it cannot
    identify, not part of the iPXE path.
