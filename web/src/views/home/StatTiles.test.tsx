@@ -42,4 +42,10 @@ describe('StatTiles', () => {
     expect(screen.getByText('prod')).toBeInTheDocument()
     expect(screen.getByText(/ready to assign/i)).toBeInTheDocument()
   })
+
+  it('counts discovered machines as pending', () => {
+    const D = { mac: 'aa', arch: 'amd64', ip: '', firstSeen: 't', lastSeen: 't' }
+    renderTiles({ hosts: [], discovered: [D, { ...D, mac: 'bb' }] })
+    expect(screen.getByText('2 pending approval')).toBeInTheDocument()
+  })
 })

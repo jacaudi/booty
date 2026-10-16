@@ -2,14 +2,14 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Alert, Button, Card, List, message, Space, Typography } from 'antd'
 import { approveHost } from '../../api/client'
-import { isPending, type Host } from '../../api/types'
+import { isPending, type DiscoveredHost, type Host } from '../../api/types'
 
 // The dashboard's single "act on this now" surface: unapproved hosts (with
 // inline Approve) and cached images that failed verification. Presentational —
 // HomeView owns the fetch and passes the data + a reload callback.
-type Props = { hosts: Host[]; failedImages: number; onChange: () => void }
+type Props = { hosts: Host[]; discovered?: DiscoveredHost[]; failedImages: number; onChange: () => void }
 
-export default function NeedsAttention({ hosts, failedImages, onChange }: Props) {
+export default function NeedsAttention({ hosts, discovered = [], failedImages, onChange }: Props) {
   const pending = hosts.filter(isPending)
   const [busy, setBusy] = useState<string>()
 
@@ -26,7 +26,7 @@ export default function NeedsAttention({ hosts, failedImages, onChange }: Props)
     }
   }
 
-  const clear = pending.length === 0 && failedImages === 0
+  const clear = pending.length === 0 && discovered.length === 0 && failedImages === 0
 
   return (
     <Card title="Needs attention" style={{ height: '100%' }} extra={<Link to="/hosts">All hosts</Link>}>
@@ -40,6 +40,18 @@ export default function NeedsAttention({ hosts, failedImages, onChange }: Props)
               showIcon
               message={`${failedImages} cached image${failedImages === 1 ? '' : 's'} failed verification`}
               description={<Link to="/images">Review in OS Images</Link>}
+            />
+          )}
+          {discovered.length > 0 && (
+            <List
+              size="small"
+              header={<Typography.Text strong>New machines</Typography.Text>}
+              dataSource={discovered}
+              renderItem={(d) => (
+                <List.Item actions={[<Link key="a" to="/hosts">Approve</Link>]}>
+                  <Typography.Text>{`${d.mac} · ${d.arch || '—'}`}</Typography.Text>
+                </List.Item>
+              )}
             />
           )}
           {pending.length > 0 && (

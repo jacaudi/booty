@@ -49,3 +49,13 @@ export interface HostHealth {
 export function isPending(host: Host): boolean {
   return !host.approved
 }
+
+// Mirrors a row of GET /api/v1/hosts `discovered`: a machine that booted but has
+// no hosts row yet. Times are RFC 3339.
+export interface DiscoveredHost {
+  mac: string
+  arch: string
+  ip: string
+  firstSeen: string
+  lastSeen: string
+}

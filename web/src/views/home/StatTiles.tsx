@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Card, Col, Row, Statistic, Typography } from 'antd'
-import { isPending, type Host } from '../../api/types'
+import { isPending, type DiscoveredHost, type Host } from '../../api/types'
 import type { CacheEntry } from '../../api/cache'
 import type { Config } from '../../api/configs'
 import type { Cluster } from '../../api/clusters'
@@ -8,7 +8,7 @@ import { failedCount, humanSize } from '../../api/cacheModel'
 
 // Presentational: HomeView owns the single data fetch and passes it down, so a
 // host/cache/etc. list is fetched once for the whole dashboard, not per panel.
-type Props = { hosts: Host[]; cache: CacheEntry[]; configs: Config[]; clusters: Cluster[] }
+type Props = { hosts: Host[]; cache: CacheEntry[]; configs: Config[]; clusters: Cluster[]; discovered?: DiscoveredHost[] }
 type Tile = { title: string; value: number; sub: string; to: string; highlight?: boolean }
 
 function TileCard({ tile }: { tile: Tile }) {
@@ -25,8 +25,8 @@ function TileCard({ tile }: { tile: Tile }) {
   )
 }
 
-export default function StatTiles({ hosts, cache, configs, clusters }: Props) {
-  const pending = hosts.filter(isPending).length
+export default function StatTiles({ hosts, cache, configs, clusters, discovered = [] }: Props) {
+  const pending = hosts.filter(isPending).length + discovered.length
   const bytes = cache.reduce((sum, e) => sum + (e.size ?? 0), 0)
   const failed = failedCount(cache)
   const names = clusters.map((c) => c.name).filter(Boolean)
