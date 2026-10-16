@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AutoComplete, Badge, Button, Drawer, Form, Modal, Popconfirm, Select, Space, Tabs, Table, Typography, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { isPending, type Host, type HostHealth } from '../api/types'
-import { approveHostWith, bindSchematic, getHostHealth, listHosts, revokeHost, setMenuMode, wakeHost } from '../api/client'
+import { isPending, type DiscoveredHost, type Host, type HostHealth } from '../api/types'
+import { approveHostWith, bindSchematic, createHost, deleteHost, dismissAllDiscovered, dismissDiscovered, getHostHealth, listHostInventory, revokeHost, setMenuMode, wakeHost } from '../api/client'
 import type { Config } from '../api/configs'
 import { listConfigs } from '../api/configs'
 import type { Role } from '../api/roles'
 import { listRoles } from '../api/roles'
 import { SCHEMATIC_KIND, isBootConfigKind, kindsForHostOS } from '../api/configKinds'
-import type { FamilyKinds } from '../api/catalog'
-import { loadFamilyKinds } from '../api/catalog'
+import type { FamilyKinds, OS } from '../api/catalog'
+import { listOS, loadFamilyKinds } from '../api/catalog'
 
 export default function HostsView() {
   const [hosts, setHosts] = useState<Host[]>([])
@@ -18,8 +18,13 @@ export default function HostsView() {
 
   const [configs, setConfigs] = useState<Config[]>([])
   const [roles, setRoles] = useState<Role[]>([])
-  const [allowing, setAllowing] = useState<Host | null>(null)
-  const [allowForm] = Form.useForm()
+  const [approving, setApproving] = useState<Host | null>(null)
+  const [approveForm] = Form.useForm()
+  const [discovered, setDiscovered] = useState<DiscoveredHost[]>([])
+  const [discoveredFull, setDiscoveredFull] = useState(false)
+  const [approvingNew, setApprovingNew] = useState<DiscoveredHost | null>(null)
+  const [newForm] = Form.useForm()
+  const [osOptions, setOsOptions] = useState<OS[]>([])
   const [familyKinds, setFamilyKinds] = useState<FamilyKinds | undefined>()
 
   const [healthFor, setHealthFor] = useState<string | null>(null)
@@ -45,7 +50,10 @@ export default function HostsView() {
     setLoading(true)
     setError(null)
     try {
-      setHosts(await listHosts())
+      const inv = await listHostInventory()
+      setHosts(inv.hosts)
+      setDiscovered(inv.discovered)
+      setDiscoveredFull(inv.discoveredFull)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'failed to load hosts')
     } finally {
@@ -71,9 +79,9 @@ export default function HostsView() {
     }
   }
 
-  const openAllow = async (h: Host) => {
-    allowForm.resetFields()
-    setAllowing(h)
+  const openApprove = async (h: Host) => {
+    approveForm.resetFields()
+    setApproving(h)
     try {
       const [c, r] = await Promise.all([listConfigs(), listRoles()])
       setConfigs(c)
@@ -83,10 +91,11 @@ export default function HostsView() {
     }
   }
 
-  const submitAllow = async () => {
-    if (!allowing) return
-    const values = await allowForm.validateFields()
-    const mac = allowing.mac
+  const submitApprove = async () => {
+    if (!approving) return
+    const values = await approveForm.validateFields().catch(() => undefined)
+    if (!values) return
+    const mac = approving.mac
     try {
       if (values.schematic) {
         // Bind BEFORE approve so approve's target-param encoding picks the
@@ -96,11 +105,60 @@ export default function HostsView() {
       }
       await approveHostWith(mac, { configId: values.configId, roleIds: values.roleIds })
       message.success(`Approved ${mac}`)
-      await load()
     } catch (e) {
       message.error(e instanceof Error ? e.message : 'action failed')
+    } finally {
+      setApproving(null)
+      await load()
     }
-    setAllowing(null)
+  }
+
+  const openApproveNew = async (d: DiscoveredHost) => {
+    newForm.resetFields()
+    setApprovingNew(d)
+    try {
+      const [c, r, os] = await Promise.all([listConfigs(), listRoles(), listOS()])
+      setConfigs(c)
+      setRoles(r)
+      setOsOptions(os.filter((o) => o.family !== 'tool'))
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'failed to load configs/roles/OS list')
+    }
+  }
+
+  // Approving a discovered machine chains three calls: create the host, bind a
+  // Talos schematic, approve. A failure after the host exists rolls the host back
+  // so no registered-but-unapproved host is left behind; a failure creating it
+  // deletes nothing.
+  const submitApproveNew = async () => {
+    if (!approvingNew) return
+    // outside try, and caught: an unhandled validateFields rejection fails the vitest run (BootConfigsView.tsx:78-81)
+    const values = await newForm.validateFields().catch(() => undefined)
+    if (!values) return
+    const mac = approvingNew.mac
+    let created = false
+    try {
+      await createHost({ mac, os: values.os })
+      created = true
+      if (values.os === 'talos' && values.schematic) {
+        const byName = configs.find((c) => c.kind === SCHEMATIC_KIND && c.name === values.schematic)
+        await bindSchematic(mac, byName ? { configId: byName.id } : { schematic: values.schematic })
+      }
+      await approveHostWith(mac, { configId: values.configId, roleIds: values.roleIds })
+      message.success(`Approved ${mac}`)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : 'approve failed')
+      if (created) {
+        try {
+          await deleteHost(mac)
+        } catch (e2) {
+          message.error(e2 instanceof Error ? e2.message : 'rollback failed')
+        }
+      }
+    } finally {
+      setApprovingNew(null)
+      await load()
+    }
   }
 
   const pending = hosts.filter(isPending)
@@ -118,9 +176,20 @@ export default function HostsView() {
   // fallback the OS-agnostic union provided before this view fetched the
   // server's family→kind mapping.
   const allowedKinds = useMemo(
-    () => (familyKinds ? kindsForHostOS(allowing?.os, familyKinds) : undefined),
-    [allowing?.os, familyKinds],
+    () => (familyKinds ? kindsForHostOS(approving?.os, familyKinds) : undefined),
+    [approving?.os, familyKinds],
   )
+
+  const selectedOS: string | undefined = Form.useWatch('os', newForm)
+  const newAllowedKinds = useMemo(
+    () => (familyKinds ? kindsForHostOS(selectedOS, familyKinds) : undefined),
+    [selectedOS, familyKinds],
+  )
+  const configOptions = (kinds: string[] | undefined) =>
+    configs
+      .filter((c) => isBootConfigKind(c.kind) && (kinds === undefined || kinds.includes(c.kind)))
+      .map((c) => ({ value: c.id, label: c.name }))
+  const schematicOptions = configs.filter((c) => c.kind === SCHEMATIC_KIND).map((c) => ({ value: c.name, label: c.name }))
 
   const baseCols: ColumnsType<Host> = [
     { title: 'MAC', dataIndex: 'mac', key: 'mac' },
@@ -153,12 +222,12 @@ export default function HostsView() {
       key: 'actions',
       render: (_, h) => (
         <Space>
-          {/* Hidden (not just disabled) while its own Allow modal is open: an
+          {/* Hidden (not just disabled) while its own Approve modal is open: an
               accessible-but-disabled button would still satisfy role/name
               queries and collide with the modal's OK button. */}
-          {allowing?.mac !== h.mac && (
-            <Button type="primary" size="small" onClick={() => openAllow(h)}>
-              Allow
+          {approving?.mac !== h.mac && (
+            <Button type="primary" size="small" onClick={() => openApprove(h)}>
+              Approve
             </Button>
           )}
           <Button size="small" onClick={() => act(setMenuMode, h.mac, `Boot menu for ${h.mac}`)}>
@@ -170,6 +239,33 @@ export default function HostsView() {
             onConfirm={() => act(wakeHost, h.mac, `Wake-on-LAN sent to ${h.mac}`)}
           >
             <Button size="small">Wake</Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ]
+
+  const discoveredCols: ColumnsType<DiscoveredHost> = [
+    { title: 'MAC', dataIndex: 'mac', key: 'mac' },
+    { title: 'Arch', key: 'arch', render: (_, d) => d.arch || '—' },
+    { title: 'IP', dataIndex: 'ip', key: 'ip' },
+    { title: 'First seen', key: 'firstSeen', render: (_, d) => new Date(d.firstSeen).toLocaleString() },
+    { title: 'Last seen', key: 'lastSeen', render: (_, d) => new Date(d.lastSeen).toLocaleString() },
+    {
+      title: 'Actions',
+      key: 'actions',
+      render: (_, d) => (
+        <Space>
+          {approvingNew?.mac !== d.mac && (
+            <Button type="primary" size="small" onClick={() => openApproveNew(d)}>
+              Approve
+            </Button>
+          )}
+          <Popconfirm
+            title={`Dismiss ${d.mac}?`}
+            onConfirm={() => act(dismissDiscovered, d.mac, `Dismissed ${d.mac}`)}
+          >
+            <Button size="small">Dismiss</Button>
           </Popconfirm>
         </Space>
       ),
@@ -211,8 +307,36 @@ export default function HostsView() {
         items={[
           {
             key: 'pending',
-            label: <Badge count={pending.length} offset={[12, -2]} size="small">Pending</Badge>,
-            children: <Table rowKey="mac" loading={loading} columns={pendingCols} dataSource={pending} pagination={false} />,
+            label: <Badge count={pending.length + discovered.length} offset={[12, -2]} size="small">Pending</Badge>,
+            children: (
+              <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                {(discovered.length > 0 || discoveredFull) && (
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <Space>
+                      <Typography.Title level={5} style={{ margin: 0 }}>New machines</Typography.Title>
+                      <Popconfirm
+                        title={`Dismiss all ${discovered.length} new machines?`}
+                        onConfirm={async () => {
+                          try {
+                            await dismissAllDiscovered()
+                            await load()
+                          } catch (e) {
+                            message.error(e instanceof Error ? e.message : 'dismiss failed')
+                          }
+                        }}
+                      >
+                        <Button size="small">Dismiss all</Button>
+                      </Popconfirm>
+                    </Space>
+                    {discoveredFull && (
+                      <Alert type="warning" showIcon message="The new-machine list is full (1024). booty is not recording new machines until you dismiss some." />
+                    )}
+                    <Table rowKey="mac" loading={loading} columns={discoveredCols} dataSource={discovered} pagination={false} />
+                  </Space>
+                )}
+                <Table rowKey="mac" loading={loading} columns={pendingCols} dataSource={pending} pagination={false} />
+              </Space>
+            ),
           },
           {
             key: 'approved',
@@ -222,15 +346,13 @@ export default function HostsView() {
         ]}
       />
 
-      <Modal title={`Allow ${allowing?.mac ?? ''}`} open={!!allowing} onOk={submitAllow} onCancel={() => setAllowing(null)} destroyOnHidden>
-        <Form form={allowForm} layout="vertical">
+      <Modal title={`Approve ${approving?.mac ?? ''}`} open={!!approving} onOk={submitApprove} onCancel={() => setApproving(null)} destroyOnHidden>
+        <Form form={approveForm} layout="vertical">
           <Form.Item name="configId" label="Config">
             <Select
               allowClear
               placeholder="none"
-              options={configs
-                .filter((c) => isBootConfigKind(c.kind) && (allowedKinds === undefined || allowedKinds.includes(c.kind)))
-                .map((c) => ({ value: c.id, label: c.name }))}
+              options={configOptions(allowedKinds)}
             />
           </Form.Item>
           <Form.Item name="roleIds" label="Roles">
@@ -241,15 +363,37 @@ export default function HostsView() {
               options={roles.map((r) => ({ value: r.id, label: r.name }))}
             />
           </Form.Item>
-          {allowing?.os === 'talos' && (
+          {approving?.os === 'talos' && (
             <Form.Item name="schematic" label="Talos schematic" help="pick a named schematic or paste a raw ID">
               <AutoComplete
                 allowClear
                 placeholder="vanilla"
-                options={configs
-                  .filter((c) => c.kind === SCHEMATIC_KIND)
-                  .map((c) => ({ value: c.name, label: c.name }))}
+                options={schematicOptions}
               />
+            </Form.Item>
+          )}
+        </Form>
+      </Modal>
+      <Modal title={`Approve ${approvingNew?.mac ?? ''}`} open={!!approvingNew} onOk={submitApproveNew} onCancel={() => setApprovingNew(null)} destroyOnHidden>
+        <Form
+          form={newForm}
+          layout="vertical"
+          onValuesChange={(c) => {
+            if ('os' in c) newForm.setFieldValue('configId', undefined)
+          }}
+        >
+          <Form.Item name="os" label="OS" rules={[{ required: true, message: 'Choose an OS' }]}>
+            <Select placeholder="choose an OS" options={osOptions.map((o) => ({ value: o.name, label: o.name }))} />
+          </Form.Item>
+          <Form.Item name="configId" label="Config">
+            <Select allowClear placeholder="none" options={configOptions(newAllowedKinds)} />
+          </Form.Item>
+          <Form.Item name="roleIds" label="Roles">
+            <Select mode="multiple" allowClear placeholder="none" options={roles.map((r) => ({ value: r.id, label: r.name }))} />
+          </Form.Item>
+          {selectedOS === 'talos' && (
+            <Form.Item name="schematic" label="Talos schematic" help="pick a named schematic or paste a raw ID">
+              <AutoComplete allowClear placeholder="vanilla" options={schematicOptions} />
             </Form.Item>
           )}
         </Form>

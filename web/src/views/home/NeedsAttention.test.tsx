@@ -44,4 +44,15 @@ describe('NeedsAttention', () => {
     )
     expect(screen.getByText(/nothing needs attention/i)).toBeInTheDocument()
   })
+
+  it('lists discovered machines with an Approve link', () => {
+    const D = { mac: '52:54:00:12:34:58', arch: 'amd64', ip: '', firstSeen: 't', lastSeen: 't' }
+    render(
+      <MemoryRouter>
+        <NeedsAttention hosts={[]} discovered={[D]} failedImages={0} onChange={vi.fn()} />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText(/52:54:00:12:34:58/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Approve' }).getAttribute('href')).toMatch(/\/hosts$/)
+  })
 })

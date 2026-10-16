@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { approveHost, bindSchematic, getHostHealth, rotateReportToken, listHosts, login, onUnauthorized, request, revokeHost, setMenuMode, wakeHost } from './client'
+import { approveHost, createHost, deleteHost, dismissAllDiscovered, dismissDiscovered, listHostInventory, bindSchematic, getHostHealth, rotateReportToken, listHosts, login, onUnauthorized, request, revokeHost, setMenuMode, wakeHost } from './client'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -156,5 +156,39 @@ describe('auth in the request layer', () => {
     await expect(listHosts()).rejects.toThrow()
     await expect(listHosts()).rejects.toThrow()
     expect(handler).toHaveBeenCalledTimes(2)
+  })
+
+  const stubFetch = (res: () => Response) => {
+    const fetchMock = vi.fn(async () => res())
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('listHostInventory returns hosts, discovered and discoveredFull', async () => {
+    const d = [{ mac: 'aa', arch: 'amd64', ip: '1.2.3.4', firstSeen: 't', lastSeen: 't' }]
+    const fetchMock = stubFetch(() => new Response(JSON.stringify({ hosts: [], discovered: d, discoveredFull: true })))
+    await expect(listHostInventory()).resolves.toEqual({ hosts: [], discovered: d, discoveredFull: true })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/hosts', expect.objectContaining({ credentials: 'same-origin' }))
+  })
+
+  it('listHostInventory defaults absent discovered fields', async () => {
+    stubFetch(() => new Response(JSON.stringify({})))
+    await expect(listHostInventory()).resolves.toEqual({ hosts: [], discovered: [], discoveredFull: false })
+  })
+
+  it('createHost POSTs {mac, os} to /hosts', async () => {
+    const fetchMock = stubFetch(() => new Response(JSON.stringify({ mac: 'aa' }), { status: 201 }))
+    await createHost({ mac: 'aa', os: 'flatcar' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/hosts', expect.objectContaining({ method: 'POST', body: JSON.stringify({ mac: 'aa', os: 'flatcar' }) }))
+  })
+
+  it('deleteHost, dismissDiscovered and dismissAllDiscovered send DELETE', async () => {
+    const fetchMock = stubFetch(() => new Response(null, { status: 204 }))
+    await deleteHost('aa')
+    await dismissDiscovered('aa')
+    await dismissAllDiscovered()
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/hosts/aa', expect.objectContaining({ method: 'DELETE' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/discovered/aa', expect.objectContaining({ method: 'DELETE' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/v1/discovered', expect.objectContaining({ method: 'DELETE' }))
   })
 })

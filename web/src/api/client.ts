@@ -1,4 +1,4 @@
-import type { Host, HostHealth } from './types'
+import type { DiscoveredHost, Host, HostHealth } from './types'
 
 const BASE = '/api/v1'
 
@@ -55,13 +55,34 @@ export async function listHosts(): Promise<Host[]> {
   return body?.hosts ?? []
 }
 
+export async function listHostInventory(): Promise<{ hosts: Host[]; discovered: DiscoveredHost[]; discoveredFull: boolean }> {
+  const body = await request<{ hosts?: Host[]; discovered?: DiscoveredHost[]; discoveredFull?: boolean }>('/hosts')
+  return { hosts: body?.hosts ?? [], discovered: body?.discovered ?? [], discoveredFull: body?.discoveredFull ?? false }
+}
+
+export function createHost(body: { mac: string; os: string }): Promise<Host | undefined> {
+  return request('/hosts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+}
+
+export function deleteHost(mac: string): Promise<unknown> {
+  return request(`/hosts/${mac}`, { method: 'DELETE' })
+}
+
+export function dismissDiscovered(mac: string): Promise<unknown> {
+  return request(`/discovered/${mac}`, { method: 'DELETE' })
+}
+
+export function dismissAllDiscovered(): Promise<{ deleted: number } | undefined> {
+  return request('/discovered', { method: 'DELETE' })
+}
+
 // MAC is inserted raw: colons are legal path chars and MACs contain no slashes,
 // so the single path segment round-trips without encodeURIComponent.
 export function approveHost(mac: string): Promise<unknown> {
   return request(`/hosts/${mac}/approve`, { method: 'POST' })
 }
 
-// approveHostWith is the atomic attach+allow used by the "Allow" modal (Task 12):
+// approveHostWith is the atomic attach+approve used by the "Approve" modal:
 // it lets the operator bind a config/roles to a host in the same request that approves it.
 export function approveHostWith(mac: string, body?: { configId?: number; roleIds?: number[] }): Promise<unknown> {
   return request(`/hosts/${mac}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
