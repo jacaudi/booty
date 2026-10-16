@@ -22,7 +22,7 @@ config file.
 | `--dataDir` | `/data` | Directory for all stateful data (cache, templates, host DB). |
 | `--serverIP` | `detected` | LAN IP clients use to reach booty; detected from the default route when empty (set it on multi-homed hosts) |
 | `--serverHttpPort` | `0` (falls back to `--httpPort`) | Client-facing HTTP port advertised in boot-config URLs. Unset (`0`) advertises whatever `--httpPort` listens on — the correct default for a single-process, no-proxy deploy. Set explicitly only when a proxy/LB fronts booty and the client-facing port differs from the listen port (e.g. `--serverHttpPort=80` with `--httpPort=8080`). |
-| `--joinString` | `""` | Optional `kubeadm join` string injected into rendered Ignition. |
+| `--joinString` | `""` | Optional `kubeadm join` string injected into rendered Ignition; templates for `/machineconfig` and `/preseed` can use it too (`{{ .JoinString }}`). |
 | `--flatcarArchitecture` | `amd64` | Architecture for Flatcar downloads — **feeds the default catalog only** (see below). |
 | `--flatcarChannel` | `stable` | Flatcar release channel — **feeds the default catalog only** (see below). |
 | `--coreOSArchitecture` | `x86_64` | Architecture for Fedora CoreOS downloads; also the fallback arch used when rendering a Fedora CoreOS host's boot config with no per-host arch. Fedora CoreOS is not in the default catalog (see below), so this flag does not affect it. |
@@ -31,7 +31,7 @@ config file.
 | `--talosSchematic` | `376567988ad3…b4ba` | Default Talos Image Factory schematic ID — **feeds the default catalog only** (see below). |
 | `--talosRetainMinors` | `3` | Number of newest Talos minor lines to keep cached — **feeds the default catalog only** (see below). |
 | `--catalogFile` | `""` (falls back to `<dataDir>/catalog.yaml`, then a flag-derived default) | Declarative cache-target catalog. See [schema/CATALOG.md](schema/CATALOG.md). |
-| `--talosConfigFile` | `config/machineconfig.yaml` | Talos machine-config template, relative to `--dataDir`. |
+| `--talosConfigFile` | `config/machineconfig.yaml` | Talos machine-config template, relative to `--dataDir` — the rung-4 server-default fallback for approved hosts with no DB-resolved config (see [below](#boot-config-precedence-p4)). |
 | `--talosFactoryURL` | `https://factory.talos.dev` | Talos Image Factory base URL. |
 | `--secretsKey` | `""` (unset) | Path to an age identity file (`age-keygen` output) encrypting Talos cluster secrets and frozen node configs at rest. **Fail-closed** when unset: cluster create/import/add-member/export refuse with `422`. **Fail-fast** when set but invalid: refuses startup (see [below](#talos-cluster-authoring-p6)). |
 | `--nodeReports` | `false` | Opt in to node health reports: inject a boot-time report unit into Flatcar, Fedora CoreOS and `debianconfig` Debian configs and accept reports at `POST /node/report`. See [Node reports](#node-reports). |
@@ -131,8 +131,9 @@ in a fixed 4-rung precedence, falling through to the next rung on any miss. This
 **approved** host: the config routes answer an unapproved host (never approved, or revoked) exactly
 as they answer an unknown one, and an unapproved cluster member gets `403`. For `/machineconfig` and
 `/preseed` that answer is `404` with no template rendered, so rung 4 never runs for a caller with no
-approved host (it would put the join string in front of anyone on the LAN). `/ignition.json` still
-answers such a caller with the reboot config.
+approved host. A caller that names an approved host's MAC with `?mac=` still gets that host's
+config, join string included (#164). `/ignition.json` still answers a caller with no approved host
+with the reboot config.
 
 1. **Host `config_id`** — an explicit per-host binding (`POST /hosts/{mac}/approve` or `/bind`, see
    [schema/API.md](schema/API.md)). A bound config whose `kind` mismatches the host's OS family (or
@@ -142,8 +143,8 @@ answers such a caller with the reboot config.
    with a non-null `default_config_id` whose kind matches the family wins.
 3. **Legacy `hosts.ignition_file`** — a per-host Ignition template override (ignition family only;
    predates P4). Debian and Talos have no per-host file column, so this rung does not apply to them.
-4. **Server-default file** (approved hosts only) — `--ignitionFile` (env `IGNITION_FILE`, default `config/ignition.yaml`)
-   for the ignition family (Flatcar/CoreOS), `--talosConfigFile` (default
+4. **Server-default file** (approved hosts only) — `--ignitionFile` (env `IGNITION_FILE`, default
+   `config/ignition.yaml`) for the ignition family (Flatcar/CoreOS), `--talosConfigFile` (default
    `config/machineconfig.yaml`) for Talos, `--preseedFile` (default `config/preseed.cfg`) for
    Debian.
 
