@@ -32,6 +32,16 @@ func servingStore(t *testing.T) *db.Store {
 	return s
 }
 
+// approveHost approves the registered host mac. hardware.WriteMacAddress does
+// not persist Host.Approved, and the config routes serve a host only once it is
+// approved (#158), so a fixture that expects a real config must call this.
+func approveHost(t *testing.T, mac string) {
+	t.Helper()
+	if err := hardware.Approve(mac); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // writeFile writes <dataDir>/<rel> with content.
 func writeFile(t *testing.T, rel, content string) {
 	t.Helper()
@@ -57,6 +67,7 @@ func TestIgnitionUnboundHostByteIdenticalServerIPPort(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ignition.json?mac="+mac, nil)
@@ -80,6 +91,7 @@ func TestIgnitionBoundConfigServed(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	cid, _ := s.CreateConfig("bound", "butane")
 	rid, _, _ := s.AddConfigRevision(cid,
 		base64.StdEncoding.EncodeToString([]byte("variant: fcos\nversion: 1.5.0\nstorage:\n  files:\n    - path: /etc/bound\n      contents:\n        source: http://{{ .ServerIP }}/bound\n")), "sha", nil)
@@ -122,6 +134,7 @@ func TestPreseedBoundDebianConfigServed(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian", Hostname: "deb1", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	cid, err := s.CreateConfig("dc", "debianconfig")
 	if err != nil {
 		t.Fatalf("create config: %v", err)

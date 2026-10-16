@@ -74,6 +74,7 @@ func TestDebianConfigEndToEndServe(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian", Hostname: "deb-node", Approved: true}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	approveHost(t, mac)
 	create := api.Post("/api/v1/configs", map[string]any{
 		"name": "deb-e2e", "kind": "debianconfig",
 		"source": "hostname: \"{{ .Hostname }}\"\nlocale: en_US.UTF-8\npackages: [openssh-server]\n",

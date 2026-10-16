@@ -33,7 +33,7 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 func preseedHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("preseed request", "uri", r.RequestURI)
-		host := identifyHost(r)
+		host := configHost(identifyHost(r))
 
 		if host != nil {
 			// The debian family authors `debianconfig` only (#59: raw `preseed` as
@@ -179,6 +179,15 @@ func preseedVars(store *db.Store, host *hardware.Host) TemplateVars {
 // unidentified), mirroring the ignition/machineconfig identification block.
 func identifyHost(r *http.Request) *hardware.Host {
 	return identifyHostWith(r, arpLookup)
+}
+
+// configHost is the host a config route may serve. An unapproved host gets
+// the unknown-host answer, because approval is the gate (#158).
+func configHost(h *hardware.Host) *hardware.Host {
+	if h == nil || !h.Approved {
+		return nil
+	}
+	return h
 }
 
 // identifyHostWith is identifyHost with an injectable ARP lookup. An empty

@@ -36,6 +36,16 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 		hostname := queryHostname(r, macAddress)
 		host := machineConfigHost(macAddress)
 
+		// Approval is the gate (#158). An unapproved cluster member gets a 403,
+		// never its frozen config and never the generic file config below, which
+		// would be worse than an error (see the member rung). Any other
+		// unapproved host gets the unknown-host answer.
+		if host != nil && host.NodeConfigID != nil && !host.Approved {
+			writeError(w, http.StatusForbidden, "cluster member config requires an approved host", nil)
+			return
+		}
+		host = configHost(host)
+
 		// P6 top rung: a cluster member serves its ACTIVE frozen, encrypted
 		// node config VERBATIM (materialize-and-freeze, design §5). A member
 		// whose frozen bytes cannot be loaded/decrypted gets a LOUD 500 and

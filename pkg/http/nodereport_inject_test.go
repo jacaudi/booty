@@ -30,6 +30,7 @@ func injectIgnitionHosts(t *testing.T) (s *db.Store, boundMAC, fileMAC string) {
 		if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar", Approved: true}); err != nil {
 			t.Fatal(err)
 		}
+		approveHost(t, mac)
 	}
 	cid, err := s.CreateConfig("bound-butane", "butane")
 	if err != nil {
@@ -124,6 +125,7 @@ func injectDebianHost(t *testing.T, src string) (*db.Store, string) {
 	if err := hardware.WriteMacAddress(mac, host); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	cid, err := s.CreateConfig("deb", "debianconfig")
 	if err != nil {
 		t.Fatal(err)
@@ -203,6 +205,7 @@ func TestRawPreseedNeverInjected(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	body := getBody(t, preseedHandler(s, &NodeReports{Key: nodeReportKey()}), "/preseed?mac="+mac)
 	if strings.Contains(body, "booty-health") {
 		t.Fatalf("raw preseed was injected:\n%s", body)

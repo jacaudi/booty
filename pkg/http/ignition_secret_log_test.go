@@ -60,6 +60,7 @@ func TestIgnitionFailureNeverLogsTheJoinString(t *testing.T) {
 				if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar", Approved: true}); err != nil {
 					t.Fatal(err)
 				}
+				approveHost(t, mac)
 				if bound {
 					cid, err := s.CreateConfig("leaky-butane", "butane")
 					if err != nil {

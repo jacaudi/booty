@@ -186,6 +186,7 @@ func TestIgnitionRefusesATraversingIgnitionFile(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 
 	rr := httptest.NewRecorder()
 	handleIgnitionRequest(s)(rr, httptest.NewRequest(http.MethodGet, "/ignition.json?mac="+mac, nil))
@@ -210,6 +211,7 @@ func TestIgnitionStillServesALegitimateTemplate(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 
 	rr := httptest.NewRecorder()
 	handleIgnitionRequest(s)(rr, httptest.NewRequest(http.MethodGet, "/ignition.json?mac="+mac, nil))

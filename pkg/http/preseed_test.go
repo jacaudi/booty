@@ -73,6 +73,7 @@ func TestPreseedDVDModeHostGetsMirrorAppended(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian", Hostname: "deb-dvd", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	cid, err := s.CreateConfig("dvd-preseed", "debianconfig")
 	if err != nil {
 		t.Fatalf("create config: %v", err)
@@ -141,6 +142,7 @@ func TestPreseedNetinstModeHostUnchanged(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian", Hostname: "deb-netinst", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	cid, err := s.CreateConfig("netinst-preseed", "debianconfig")
 	if err != nil {
 		t.Fatalf("create config: %v", err)

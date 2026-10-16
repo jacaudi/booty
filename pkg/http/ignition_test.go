@@ -90,6 +90,7 @@ func TestHandleIgnitionRequest_BadTemplateReturns500(t *testing.T) {
 	if err := hardware.Load(); err != nil {
 		t.Fatalf("hardware.Load: %v", err)
 	}
+	approveHost(t, "aa:bb:cc:dd:ee:ff")
 
 	req := httptest.NewRequest(http.MethodGet, "/ignition.json?mac=aa:bb:cc:dd:ee:ff", nil)
 	rec := httptest.NewRecorder()
