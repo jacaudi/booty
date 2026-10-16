@@ -242,7 +242,7 @@ Useful when debugging with a TFTP client or reading logs:
 
 | Step | What happens |
 |------|--------------|
-| 1 | Host fetches `booty.ipxe` over TFTP, a stub that chains to `http://<serverIP>[:port]/booty.ipxe?mac=${mac}`. booty identifies the host by that MAC (ARP is the fallback). |
+| 1 | Host fetches `booty.ipxe` over TFTP, a stub that chains to `http://<serverIP>[:port]/booty.ipxe?mac=${mac}&arch=${buildarch}`. booty identifies the host by that MAC (ARP is the fallback). |
 | 2 | Approved + `boot_mode='menu'` → the HTTP `/booty.ipxe?mac=` renders the menu script in place of an OS script. |
 | 3 | The chosen item chains `http://<serverIP>[:port]/menu/<os>/<schematic>/<arch>/<version>/boot.ipxe?mac=${mac}`. |
 | 4 | booty validates that synthetic path against the cache and renders that exact tuple's OS boot script. |

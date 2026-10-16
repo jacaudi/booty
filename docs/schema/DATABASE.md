@@ -34,11 +34,29 @@ A host record is created/updated via `POST /api/v1/hosts` (an upsert: `201` on c
 update) and removed via `DELETE /api/v1/hosts/{mac}` (see [API.md](API.md)). `POST /register` and
 `POST /unregister` are retired; both are superseded by these `/api/v1` operations.
 
-### Unknown hosts
+### `discovered_hosts`
 
-MACs that contact booty (via TFTP or `/ignition.json`) without a matching record are tracked
-**in memory only** (never persisted) and surfaced under the `unknown` array of `GET /api/v1/hosts`
-so the UI can prompt for registration. They disappear on restart or once registered.
+Machines that fetched `GET /booty.ipxe` without a matching `hosts` row (migration `0011`). Persisted,
+so they survive a restart; surfaced under the `discovered` array of `GET /api/v1/hosts` and
+dismissed with `DELETE /api/v1/discovered[/{mac}]`.
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `mac` | TEXT PRIMARY KEY | Normalised MAC. |
+| `arch` | TEXT NOT NULL DEFAULT `''` CHECK (`''`\|`amd64`\|`arm64`) | From the `arch` query parameter (iPXE `${buildarch}`); empty when absent or unrecognised. |
+| `ip` | TEXT NOT NULL DEFAULT `''` | Source IP of the last request. |
+| `first_seen` | TEXT | Set on insert. |
+| `last_seen` | TEXT | Refreshed on later requests. |
+
+- **Cap: 1024 rows, no eviction.** When the table reaches 1024 rows booty refuses new
+  discoveries until entries are dismissed or approved. `GET /api/v1/hosts` reports this as
+  `discoveredFull: true`.
+- **Refresh debounce:** a known row's `last_seen`, `ip` and `arch` are rewritten at most once per 20 s.
+- **`NOT EXISTS hosts` guard:** the insert is skipped when the MAC already has a `hosts` row.
+- **`UpsertHost` deletes the row** in the same transaction, so creating or approving a host removes
+  its discovered entry.
+- **Migration `0011` also rewrites** `hosts.os` and `hosts.assigned_os` values of `fedora-coreos`
+  to `coreos` (create-host now stores the boot vocabulary), so legacy rows approve after upgrade.
 
 ---
 
