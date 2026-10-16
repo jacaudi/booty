@@ -51,7 +51,7 @@ dismissed with `DELETE /api/v1/discovered[/{mac}]`.
 - **Cap: 1024 rows, no eviction.** When the table reaches 1024 rows booty refuses new
   discoveries until entries are dismissed or approved. `GET /api/v1/hosts` reports this as
   `discoveredFull: true`.
-- **Refresh debounce:** a known row's `last_seen`, `ip` and `arch` are rewritten at most once per 20 s.
+- **Refresh debounce:** a known row's `last_seen` and `ip` are rewritten at most once per 20 s; `arch` is rewritten too, except that an empty `arch` in the new request keeps the stored value.
 - **`NOT EXISTS hosts` guard:** the insert is skipped when the MAC already has a `hosts` row.
 - **`UpsertHost` deletes the row** in the same transaction, so creating or approving a host removes
   its discovered entry.
