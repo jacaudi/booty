@@ -121,7 +121,7 @@ func TestPreseedServesServerDefaultFile(t *testing.T) {
 	}
 	approveHost(t, mac)
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/preseed?mac="+mac, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/preseed?mac="+mac, http.NoBody)
 	handlePreseedRequest(s)(rr, req)
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "10.0.0.1") {
 		t.Fatalf("preseed default file: %d %s", rr.Code, rr.Body.String())
