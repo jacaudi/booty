@@ -26,6 +26,22 @@ func machineConfigTestStore(t *testing.T) *db.Store {
 	return store
 }
 
+// seedApprovedHost registers and approves mac in a fresh hardware store. The
+// machineconfig route renders its server-default file only for an approved host
+// (#162), so a test whose target is that render must name one. Call it after
+// viper.Reset and after DataDir is set.
+func seedApprovedHost(t *testing.T, mac string, h hardware.Host) {
+	t.Helper()
+	viper.Set(config.HardwareMap, "hardware.json")
+	if err := hardware.Load(); err != nil {
+		t.Fatalf("hardware.Load: %v", err)
+	}
+	if err := hardware.WriteMacAddress(mac, h); err != nil {
+		t.Fatalf("seed host: %v", err)
+	}
+	approveHost(t, mac)
+}
+
 func TestMachineConfig_RendersTemplate(t *testing.T) {
 	dir := t.TempDir()
 	tmpl := "version: v1alpha1\nmachine:\n  type: worker\n  install:\n    hostname: {{ .Hostname }}\n  serial: {{ .Serial }}\n"
@@ -39,6 +55,7 @@ func TestMachineConfig_RendersTemplate(t *testing.T) {
 	viper.Set(config.TalosConfigFile, "machineconfig.yaml")
 	viper.Set(config.ServerIP, "10.0.0.1")
 	viper.Set(config.ServerHttpPort, "80")
+	seedApprovedHost(t, "aa:bb:cc:dd:ee:ff", hardware.Host{})
 
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?serial=ABC123&mac=aa:bb:cc:dd:ee:ff", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
@@ -63,6 +80,7 @@ func TestMachineConfig_MissingTemplateIs500(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set(config.DataDir, t.TempDir())
 	viper.Set(config.TalosConfigFile, "does-not-exist.yaml")
+	seedApprovedHost(t, "aa:bb:cc:dd:ee:ff", hardware.Host{})
 
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
@@ -132,10 +150,11 @@ func TestMachineConfig_RendersHostFields(t *testing.T) {
 	}
 }
 
-// TestMachineConfig_UnidentifiedHostRendersDefault pins the deliberate Talos
-// behavior: an unidentified host (no ?mac=, ARP can't resolve) gets a host-less
-// config with the DEFAULT schematic, not ignition's reboot-on-unknown.
-func TestMachineConfig_UnidentifiedHostRendersDefault(t *testing.T) {
+// TestMachineConfig_ApprovedHostWithoutOverridesRendersDefault: an approved host
+// with no hostname or schematic of its own gets the DEFAULT schematic and an
+// empty hostname. (A caller with no approved host gets a 404 instead, #162; see
+// TestMachineConfigDefaultRefusedWithoutApprovedHost.)
+func TestMachineConfig_ApprovedHostWithoutOverridesRendersDefault(t *testing.T) {
 	dir := t.TempDir()
 	tmpl := "machine:\n  hostname: {{ .Hostname }}\n  schematic: {{ .Schematic }}\n"
 	if err := os.WriteFile(filepath.Join(dir, "machineconfig.yaml"), []byte(tmpl), 0o600); err != nil {
@@ -147,10 +166,9 @@ func TestMachineConfig_UnidentifiedHostRendersDefault(t *testing.T) {
 	viper.Set(config.DataDir, dir)
 	viper.Set(config.TalosConfigFile, "machineconfig.yaml")
 	viper.Set(config.TalosSchematic, "default-schematic")
+	seedApprovedHost(t, "aa:bb:cc:dd:ee:ff", hardware.Host{})
 
-	// No ?mac=; RemoteAddr is RFC 5737 TEST-NET-1, so ARP cannot resolve a MAC
-	// and the host stays nil.
-	req := httptest.NewRequest(http.MethodGet, "/machineconfig", nil)
+	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
 	store := machineConfigTestStore(t)
@@ -165,37 +183,7 @@ func TestMachineConfig_UnidentifiedHostRendersDefault(t *testing.T) {
 		t.Errorf("default schematic not rendered: %q", body)
 	}
 	if !strings.Contains(body, "hostname: \n") {
-		t.Errorf("expected empty hostname for unidentified host: %q", body)
-	}
-}
-
-// TestMachineConfig_UnidentifiedHostUsesHostnameQuery proves the hostname query
-// param is the fallback identity source for the unregistered first boot.
-func TestMachineConfig_UnidentifiedHostUsesHostnameQuery(t *testing.T) {
-	dir := t.TempDir()
-	tmpl := "machine:\n  hostname: {{ .Hostname }}\n"
-	if err := os.WriteFile(filepath.Join(dir, "machineconfig.yaml"), []byte(tmpl), 0o600); err != nil {
-		t.Fatalf("seed template: %v", err)
-	}
-
-	viper.Reset()
-	t.Cleanup(viper.Reset)
-	viper.Set(config.DataDir, dir)
-	viper.Set(config.TalosConfigFile, "machineconfig.yaml")
-	viper.Set(config.TalosSchematic, "default-schematic")
-
-	req := httptest.NewRequest(http.MethodGet, "/machineconfig?hostname=node-x", nil)
-	req.RemoteAddr = "192.0.2.1:12345"
-	rec := httptest.NewRecorder()
-	store := machineConfigTestStore(t)
-
-	handleMachineConfigRequest(store)(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "node-x") {
-		t.Errorf("hostname query not rendered: %q", rec.Body.String())
+		t.Errorf("expected empty hostname for a host with none: %q", body)
 	}
 }
 
@@ -259,6 +247,7 @@ func TestMachineConfig_ExecuteFailureIs500(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Set(config.DataDir, dir)
 	viper.Set(config.TalosConfigFile, "machineconfig.yaml")
+	seedApprovedHost(t, "aa:bb:cc:dd:ee:ff", hardware.Host{})
 
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
@@ -284,6 +273,7 @@ func TestMachineConfig_ValidatesHostnameQuery(t *testing.T) {
 	viper.Set(config.TalosConfigFile, "machineconfig.yaml")
 	viper.Set(config.ServerIP, "10.0.0.1")
 	viper.Set(config.ServerHttpPort, "80")
+	seedApprovedHost(t, "aa:bb:cc:dd:ee:ff", hardware.Host{})
 	store := machineConfigTestStore(t)
 
 	for _, tc := range []struct {
@@ -292,9 +282,9 @@ func TestMachineConfig_ValidatesHostnameQuery(t *testing.T) {
 		contains string
 	}{
 		// An invalid ?hostname= comes from DHCP: it is ignored, not a 400.
-		{"hostname=bad_name", http.StatusOK, "hostname: \n"},
-		{"hostname=", http.StatusOK, ""},
-		{"hostname=node-x", http.StatusOK, "node-x"},
+		{"mac=aa:bb:cc:dd:ee:ff&hostname=bad_name", http.StatusOK, "hostname: \n"},
+		{"mac=aa:bb:cc:dd:ee:ff&hostname=", http.StatusOK, ""},
+		{"mac=aa:bb:cc:dd:ee:ff&hostname=node-x", http.StatusOK, "node-x"},
 	} {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?"+tc.query, http.NoBody)
 		req.RemoteAddr = "192.0.2.1:12345"

@@ -22,7 +22,8 @@ import (
 // 1–2, kind debianconfig — the only authorable Debian kind, #59) when the
 // host is bound, else the --preseedFile server default (rung 4, served
 // verbatim via renderPreseedFile — a raw d-i template, not an authored kind).
-// Debian has no legacy per-host file column, so rung 3 does not apply.
+// Debian has no legacy per-host file column, so rung 3 does not apply. A caller
+// with no approved host gets a 404 and no template is rendered (#162).
 func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 	return preseedHandler(store, nil)
 }
@@ -34,31 +35,35 @@ func preseedHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("preseed request", "uri", r.RequestURI)
 		host := configHost(identifyHost(r))
+		if host == nil {
+			// Refused before any template is read, so nothing in the server-default
+			// file, including the join string, can reach this caller (#162).
+			writeError(w, http.StatusNotFound, "no approved host for this request", nil)
+			return
+		}
 
-		if host != nil {
-			// The debian family authors `debianconfig` only (#59: raw `preseed` as
-			// an authorable kind was retired). Dispatch renderConfig on the RESOLVED
-			// kind (M2) — the guard and the family contract are single-sourced in
-			// familyAllowsKind / authoringKindsForFamily.
-			if src, kind, ok := resolveConfig(store, host); ok && familyAllowsKind("preseed", kind) {
-				vars := preseedVars(store, host)
-				healthCmd := ""
-				if kind == kindDebianConfig {
-					if s, u, ok := n.script(r.Context(), store, host); ok {
-						healthCmd = nodereport.DebianLateCommand(s, u)
-					}
+		// The debian family authors `debianconfig` only (#59: raw `preseed` as
+		// an authorable kind was retired). Dispatch renderConfig on the RESOLVED
+		// kind (M2) — the guard and the family contract are single-sourced in
+		// familyAllowsKind / authoringKindsForFamily.
+		if src, kind, ok := resolveConfig(store, host); ok && familyAllowsKind("preseed", kind) {
+			vars := preseedVars(store, host)
+			healthCmd := ""
+			if kind == kindDebianConfig {
+				if s, u, ok := n.script(r.Context(), store, host); ok {
+					healthCmd = nodereport.DebianLateCommand(s, u)
 				}
-				out, ct, err := renderPreseed(kind, src, vars, healthCmd)
-				if err != nil {
-					// The error can quote template values, including the join string (#138).
-					writeError(w, http.StatusInternalServerError, "render bound preseed", errors.New(redactJoinString(err.Error(), vars.JoinString)))
-					return
-				}
-				out = withDVDMirror(store, host, vars.ServerIP, out)
-				w.Header().Set("Content-Type", ct)
-				writeBody(w, out)
+			}
+			out, ct, err := renderPreseed(kind, src, vars, healthCmd)
+			if err != nil {
+				// The error can quote template values, including the join string (#138).
+				writeError(w, http.StatusInternalServerError, "render bound preseed", errors.New(redactJoinString(err.Error(), vars.JoinString)))
 				return
 			}
+			out = withDVDMirror(store, host, vars.ServerIP, out)
+			w.Header().Set("Content-Type", ct)
+			writeBody(w, out)
+			return
 		}
 
 		// Rung 4: server-default file.
@@ -162,17 +167,14 @@ func debianDVDMirrorDir(store *db.Store, host *hardware.Host) (string, bool) {
 }
 
 func preseedVars(store *db.Store, host *hardware.Host) TemplateVars {
-	vars := TemplateVars{
+	return TemplateVars{
+		Hostname:   hardware.StripControl(host.Hostname),
+		MAC:        host.MAC,
+		IP:         host.IP,
+		Roles:      roleNames(store, host.MAC),
 		JoinString: viper.GetString(config.JoinString),
 		ServerIP:   fmt.Sprintf("%s:%s", viper.GetString(config.ServerIP), viper.GetString(config.ServerHttpPort)),
 	}
-	if host != nil {
-		vars.Hostname = hardware.StripControl(host.Hostname)
-		vars.MAC = host.MAC
-		vars.IP = host.IP
-		vars.Roles = roleNames(store, host.MAC)
-	}
-	return vars
 }
 
 // identifyHost resolves the requesting host by ?mac= or ARP (nil when

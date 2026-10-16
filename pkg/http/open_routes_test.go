@@ -50,8 +50,8 @@ func openRouteTable() map[string]openRoute {
 	return map[string]openRoute{
 		"/":                  {probe: "/", why: "catch-all: every unmatched path and method, including a wrong method on an /api/v1 path, is a 302 to /ui/"},
 		"GET /ignition.json": {probe: "/ignition.json", why: "boot path: Ignition config for the booting host, identified by ?mac= or ARP; read-only"},
-		"GET /machineconfig": {probe: "/machineconfig", why: "boot path: Talos machine config for the booting host; read-only"},
-		"GET /preseed":       {probe: "/preseed", why: "boot path: Debian preseed for the booting host; read-only"},
+		"GET /machineconfig": {probe: "/machineconfig", why: "boot path: Talos machine config for an approved booting host, 404 to any other caller; read-only"},
+		"GET /preseed":       {probe: "/preseed", why: "boot path: Debian preseed for an approved booting host, 404 to any other caller; read-only"},
 		"GET /booty.ipxe":    {probe: "/booty.ipxe", mutates: true, why: "boot path: the rendered iPXE script (holding, assigned or menu); also records an unknown MAC in discovered_hosts (new rows limited 8 per source IP per 10 min, capped at 1024 with no eviction, refreshes debounced to one write per 20 s per MAC; a row grants nothing)"},
 		"GET /menu/":         {probe: "/menu/x", why: "boot path: iPXE boot-menu selection script; read-only"},
 		"/node/report": {
