@@ -85,8 +85,9 @@ It does one job: get your machines netbooted into the right OS.
   machine boots the assigned OS
 ```
 
-A host booty doesn't recognize is served a reboot-loop config at step 2/4 and recorded as an
-*unknown host* until you register it.
+A host booty doesn't recognize is held at step 2 and recorded as an *unknown host* until you
+register **and approve** it. Until then `/ignition.json` serves it a reboot-loop config, and
+`/machineconfig` and `/preseed` return `404`.
 
 ---
 

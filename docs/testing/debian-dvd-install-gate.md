@@ -226,6 +226,22 @@ to; booting the installer kernel/initrd directly with the equivalent
 path without also standing up a full TFTP/iPXE/proxyDHCP chain (that chain's
 own token-rendering is already covered by Task 8's byte-golden tests).
 
+**Register and approve the guest.** `/preseed` answers `404` unless the caller
+is an approved host (#162), and the local-mirror directives are appended only
+for a `debian` host, so the guest must be registered, with `os` `debian`, and
+approved first. QEMU's default user-mode NIC MAC is `52:54:00:12:34:56` (use the
+guest's real MAC if you changed it). The API needs the token header; the token
+is in `<dataDir>/api-token`:
+
+```bash
+TOKEN=$(cat /tmp/booty-debian-dvd-lab/api-token)
+curl -sS -X POST http://localhost:8088/api/v1/hosts \
+  -H "X-Booty-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"mac":"52:54:00:12:34:56","os":"debian"}'
+curl -sS -X POST http://localhost:8088/api/v1/hosts/52:54:00:12:34:56/approve \
+  -H "X-Booty-Token: $TOKEN"
+```
+
 **Network isolation:** QEMU's default user-mode networking (SLIRP) always
 makes the host reachable at `10.0.2.2` regardless of the Mac's real WAN
 state — that's how `--serverIP 10.0.2.2` above works. To make the install
@@ -245,7 +261,7 @@ qemu-system-x86_64 \
   -accel tcg -m 2048 -smp 2 \
   -kernel /tmp/booty-debian-dvd-lab/cache/debian/12/amd64/<version>/install.amd64/linux \
   -initrd /tmp/booty-debian-dvd-lab/cache/debian/12/amd64/<version>/install.amd64/initrd.gz \
-  -append 'auto=true priority=critical preseed/url=http://10.0.2.2:8088/preseed vga=788 --- quiet' \
+  -append 'auto=true priority=critical preseed/url=http://10.0.2.2:8088/preseed?mac=52:54:00:12:34:56 vga=788 --- quiet' \
   -drive file=/tmp/booty-debian-dvd-lab-disk.qcow2,format=qcow2,if=virtio \
   -no-reboot \
   -serial file:/tmp/booty-debian-dvd-lab-serial.log \
@@ -291,7 +307,7 @@ Notes on the flags, from prior netboot-lab runs:
    fetched and confirm the three directives are present and point at the
    local tree, not a real Debian mirror hostname:
    ```bash
-   curl -sS http://localhost:8088/preseed
+   curl -sS 'http://localhost:8088/preseed?mac=52:54:00:12:34:56'
    ```
    Expect (paths per your actual `<version>`):
    ```

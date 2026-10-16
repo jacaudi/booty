@@ -152,6 +152,9 @@ In priority order (milestones M0–M7 that deliver these: `docs/roadmap.md`):
   - Secrets are never logged and never written outside their store. Rendered-config errors pass
     through `redactJoinString` (`pkg/http/ignition.go`). Known residual: a yaml type error quotes
     the first 7 characters of a mistyped scalar, which full-string redaction cannot catch.
+  - Known residual (#164): a caller that names an approved host's MAC with `?mac=` still gets
+    that host's config, and the join string if its template uses it, from any source. A
+    non-member has no ARP check, and rung 4 ignores the OS family.
   - Any new unauthenticated endpoint carries its own credential and bounded, pre-auth rate limiting.
     Boot-path routes are the exception: firmware and installers have no credential to present, so
     they stay open (`/menu/` and `/boot/` have neither credential nor
