@@ -53,7 +53,7 @@ dismissed with `DELETE /api/v1/discovered[/{mac}]`.
   `discoveredFull: true`.
 - **Refresh debounce:** a known row's `last_seen` and `ip` are rewritten at most once per 20 s; `arch` is rewritten too, except that an empty `arch` in the new request keeps the stored value.
 - **`NOT EXISTS hosts` guard:** the insert is skipped when the MAC already has a `hosts` row.
-- **`UpsertHost` deletes the row** in the same transaction, so creating or approving a host removes
+- **`UpsertHost` deletes the row** in the same transaction, so creating (or re-registering) a host removes
   its discovered entry.
 - **Migration `0011` also rewrites** `hosts.os` and `hosts.assigned_os` values of `fedora-coreos`
   to `coreos` (create-host now stores the boot vocabulary), so legacy rows approve after upgrade.

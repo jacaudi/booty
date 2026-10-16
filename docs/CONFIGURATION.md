@@ -647,8 +647,8 @@ bite — read them before upgrading a fleet, not after a boot outage:
 3. **`POST /register`, `POST /unregister`, `GET /hosts?mac=`, `GET /booty.json`, and `GET /info` are
    retired.** Their replacements are `POST /api/v1/hosts` (create/update, credentialed),
    `DELETE /api/v1/hosts/{mac}` (credentialed), `GET /api/v1/hosts` (credentialed — carries the
-   registered hosts plus an `unknown` array of seen-but-unregistered MACs, replacing `booty.json`'s
-   `unknownHosts`), and `GET /api/v1/info` (credentialed). Any external script or automation calling the
+   registered hosts plus a `discovered` array of seen-but-unregistered MACs, with `discoveredFull`
+   set when the discovered table is at its cap, replacing `booty.json`'s `unknownHosts`), and `GET /api/v1/info` (credentialed). Any external script or automation calling the
    old routes must be updated to call the new ones with an `X-Booty-Token` header or a session cookie.
 
 ## Environment variables

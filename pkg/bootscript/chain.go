@@ -13,7 +13,7 @@ const ChainPath = "/booty.ipxe?mac=${mac}&" + ArchQueryKey + "=${buildarch}"
 
 // Assignable reports whether os can be assigned to a host: it has a boot
 // template, and is neither the holding script nor a tool OS. It mirrors the
-// success condition of assignedScript (tokens.go:270-282), which refuses a tool
+// success condition of assignedScript, which refuses a tool
 // OS and has no template to render for an unknown name.
 func Assignable(os string) bool {
 	return PXEConfig[os+".ipxe"] != "" && os != "holding" && !isToolOS(os)
