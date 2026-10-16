@@ -138,7 +138,7 @@ func PartitionCached(store *db.Store) (inWindow, archived []CacheEntry) {
 	if err == nil {
 		for _, r := range rows {
 			params, _ := decodeParams(r.Params)
-			archivedSet[canonicalToCacheName(r.OS)+"\x00"+paramSegment(params)+"\x00"+r.Arch+"\x00"+r.Version] = true
+			archivedSet[CanonicalToCacheName(r.OS)+"\x00"+paramSegment(params)+"\x00"+r.Arch+"\x00"+r.Version] = true
 		}
 	}
 	for _, e := range all {

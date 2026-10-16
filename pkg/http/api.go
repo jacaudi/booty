@@ -65,6 +65,7 @@ func registerOperations(api huma.API, deps APIDeps) {
 	registerCatalog(grp)          // Task 5
 	registerTargets(grp, deps)    // Task 6
 	registerHosts(grp, deps)      // Task 7
+	registerDiscovered(grp, deps) // discovered hosts
 	registerCache(grp, deps)      // P3a
 	registerConfigs(grp, deps)    // P4 T8
 	registerRoles(grp, deps)      // P4 T9

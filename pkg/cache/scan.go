@@ -33,7 +33,7 @@ func Scan(store *db.Store) (ScanResult, error) {
 	known := map[key]bool{}
 	for _, t := range targets {
 		params, _ := decodeParams(t.Params)
-		cacheName := canonicalToCacheName(t.OS)
+		cacheName := CanonicalToCacheName(t.OS)
 		segment := paramSegment(params)
 		versions, err := store.ListTargetVersions(t.ID)
 		if err != nil {

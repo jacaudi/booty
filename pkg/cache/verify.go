@@ -421,7 +421,7 @@ func VerifyVersion(ctx context.Context, store *db.Store, id int64) (*bool, strin
 	if err != nil {
 		return nil, "", fmt.Errorf("cache: verify params: %w", err)
 	}
-	dir := cacheDir(canonicalToCacheName(row.OS), paramSegment(params), row.Arch, row.Version)
+	dir := cacheDir(CanonicalToCacheName(row.OS), paramSegment(params), row.Arch, row.Version)
 	arts, err := o.Artifacts(ctx, row.Version, row.Arch, params)
 	if err != nil {
 		// A superseded tag has no upstream artifact list to check against, so

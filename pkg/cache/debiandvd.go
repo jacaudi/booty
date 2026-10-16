@@ -328,7 +328,7 @@ func existingDVDVersion(store *db.Store, t db.Target) (version string, ok bool) 
 	if err != nil {
 		return "", false
 	}
-	cacheName := canonicalToCacheName(t.OS)
+	cacheName := CanonicalToCacheName(t.OS)
 	segment := paramSegment(params)
 	for _, v := range versions {
 		if v.Source != "manual" || !v.Cached {
@@ -469,7 +469,7 @@ func ensureDebianDVD(ctx context.Context, store *db.Store, t db.Target, version 
 	if err != nil {
 		return err
 	}
-	cacheName := canonicalToCacheName(t.OS) // "debian"
+	cacheName := CanonicalToCacheName(t.OS) // "debian"
 	segment := paramSegment(params)         // channel, e.g. "12"
 	dir := cacheDir(cacheName, segment, t.Arch, version)
 

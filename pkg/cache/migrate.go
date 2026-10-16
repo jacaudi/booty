@@ -102,7 +102,7 @@ func MigrateChannelLayout(store *db.Store) error {
 
 	// Step 2: disk rename, keyed only on directories.
 	for osName, ch := range channelByOS {
-		cacheName := canonicalToCacheName(osName)
+		cacheName := CanonicalToCacheName(osName)
 		oldDir := filepath.Join(cacheRoot(), cacheName, "-")
 		newDir := filepath.Join(cacheRoot(), cacheName, ch)
 		if _, err := os.Stat(oldDir); err != nil {

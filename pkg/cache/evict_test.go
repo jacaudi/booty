@@ -52,7 +52,7 @@ func seedCached(t *testing.T, store *db.Store, tid int64, version string, size i
 	if err != nil {
 		t.Fatalf("seedCached decodeParams: %v", err)
 	}
-	cacheName := canonicalToCacheName(tgt.OS)
+	cacheName := CanonicalToCacheName(tgt.OS)
 	segment := paramSegment(params)
 	if err := store.UpsertTargetVersion(db.TargetVersion{TargetID: tid, Version: version, Source: "discovered", Cached: true}); err != nil {
 		t.Fatal(err)

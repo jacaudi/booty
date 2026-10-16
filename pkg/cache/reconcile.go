@@ -167,7 +167,7 @@ func reconcileTarget(ctx context.Context, store *db.Store, concurrency int, t db
 		}
 	}
 
-	cacheName := canonicalToCacheName(t.OS)
+	cacheName := CanonicalToCacheName(t.OS)
 	segment := paramSegment(params)
 
 	// Prior-tick cached state, read BEFORE the desired loop's per-version upserts
