@@ -141,6 +141,7 @@ func TestConfigDefaultByARPFallback(t *testing.T) {
 		{
 			"machineconfig", "/machineconfig", "talos",
 			func(t *testing.T) {
+				t.Helper()
 				viper.Set(config.TalosConfigFile, "config/machineconfig.yaml")
 				writeFile(t, "config/machineconfig.yaml", "cluster:\n  token: {{ .JoinString }}\n")
 			},
@@ -149,6 +150,7 @@ func TestConfigDefaultByARPFallback(t *testing.T) {
 		{
 			"preseed", "/preseed", "debian",
 			func(t *testing.T) {
+				t.Helper()
 				viper.Set(config.PreseedFile, "config/preseed.cfg")
 				writeFile(t, "config/preseed.cfg", "d-i booty/join string {{ .JoinString }}\n")
 			},
