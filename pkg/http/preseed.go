@@ -185,23 +185,36 @@ func identifyHost(r *http.Request) *hardware.Host {
 // ?mac= counts as absent; a non-empty one goes straight to GetMacAddress
 // (which records unknown MACs and rejects malformed ones, giving nil).
 func identifyHostWith(r *http.Request, arp arpFunc) *hardware.Host {
-	mac := r.URL.Query().Get("mac")
-	if mac == "" {
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err == nil {
-			if parsed := net.ParseIP(ip); parsed != nil {
-				if hw, aerr := arp(parsed); aerr == nil {
-					mac = hw.String()
-				}
-			}
-		}
-	}
-	if mac == "" {
-		return nil
-	}
-	h, err := hardware.GetMacAddress(mac)
+	h, _, err := resolveBootHost(r, arp)
 	if err != nil {
 		return nil
 	}
 	return h
+}
+
+// resolveBootHost is the lookup behind identifyHostWith, and also returns the
+// normalised MAC and the lookup error so a caller can tell an unregistered MAC
+// (hardware.ErrNotFound) from a malformed one or a store failure. mac is ""
+// when the request names no MAC or one that does not parse.
+func resolveBootHost(r *http.Request, arp arpFunc) (host *hardware.Host, mac string, err error) {
+	raw := r.URL.Query().Get("mac")
+	if raw == "" {
+		ip, _, serr := net.SplitHostPort(r.RemoteAddr)
+		if serr == nil {
+			if parsed := net.ParseIP(ip); parsed != nil {
+				if hw, aerr := arp(parsed); aerr == nil {
+					raw = hw.String()
+				}
+			}
+		}
+	}
+	if raw == "" {
+		return nil, "", nil
+	}
+	mac, nerr := hardware.NormalizeMAC(raw)
+	if nerr != nil {
+		return nil, "", nerr
+	}
+	host, err = hardware.GetMacAddress(mac)
+	return host, mac, err
 }

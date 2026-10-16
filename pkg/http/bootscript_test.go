@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 
@@ -27,7 +26,7 @@ func seedMenuHost(t *testing.T, mac string) {
 }
 
 func TestBootScriptHandlers(t *testing.T) {
-	servingStore(t)
+	s := servingStore(t)
 	const menuMAC = "aa:bb:cc:dd:ee:a1"
 	seedMenuHost(t, menuMAC)
 	noARP := func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp") }
@@ -42,13 +41,13 @@ func TestBootScriptHandlers(t *testing.T) {
 		remote  string
 		want    string
 	}{
-		{"unknown MAC", bootScriptHandler(noARP), "/booty.ipxe?mac=aa:bb:cc:dd:ee:a0", "", "not yet approved"},
+		{"unknown MAC", bootScriptHandler(s, noARP), "/booty.ipxe?mac=aa:bb:cc:dd:ee:a0", "", "not yet approved"},
 		{
-			"malformed MAC never falls back to ARP", bootScriptHandler(menuARP),
+			"malformed MAC never falls back to ARP", bootScriptHandler(nil, menuARP),
 			"/booty.ipxe?mac=zz", "10.0.0.9:1", "not yet approved",
 		},
-		{"menu host", bootScriptHandler(noARP), "/booty.ipxe?mac=" + menuMAC, "", menuMarker},
-		{"ARP fallback", bootScriptHandler(menuARP), "/booty.ipxe", "10.0.0.9:1", menuMarker},
+		{"menu host", bootScriptHandler(nil, noARP), "/booty.ipxe?mac=" + menuMAC, "", menuMarker},
+		{"ARP fallback", bootScriptHandler(nil, menuARP), "/booty.ipxe", "10.0.0.9:1", menuMarker},
 		{
 			"menu selection, uncached tuple", menuSelectionHandler(noARP),
 			"/menu/talos/x/amd64/v9.9.9/boot.ipxe?mac=" + menuMAC, "", "not yet approved",
@@ -75,8 +74,12 @@ func TestBootScriptHandlers(t *testing.T) {
 	}
 
 	t.Run("unknown MAC is recorded", func(t *testing.T) {
-		if !slices.Contains(hardware.ListUnknownHosts(), "aa:bb:cc:dd:ee:a0") {
-			t.Errorf("unknown hosts = %v", hardware.ListUnknownHosts())
+		rows, err := s.ListDiscoveredHosts(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].MAC != "aa:bb:cc:dd:ee:a0" {
+			t.Errorf("discovered hosts = %+v, want exactly aa:bb:cc:dd:ee:a0", rows)
 		}
 	})
 }
@@ -84,7 +87,7 @@ func TestBootScriptHandlers(t *testing.T) {
 func TestBootScriptRejectsPost(t *testing.T) {
 	noARP := func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp") }
 	mux := http.NewServeMux()
-	mux.Handle("GET /booty.ipxe", bootScriptHandler(noARP))
+	mux.Handle("GET /booty.ipxe", bootScriptHandler(nil, noARP))
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/booty.ipxe", http.NoBody))
 	if rr.Code != http.StatusMethodNotAllowed {
@@ -100,7 +103,7 @@ func TestBootScriptDoesNotChangeDoInstall(t *testing.T) {
 	}
 	noARP := func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp") }
 	rr := httptest.NewRecorder()
-	bootScriptHandler(noARP)(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/booty.ipxe?mac="+mac, http.NoBody))
+	bootScriptHandler(nil, noARP)(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/booty.ipxe?mac="+mac, http.NoBody))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
 	}
@@ -129,7 +132,7 @@ func TestBootScriptLogsNormalisedMAC(t *testing.T) {
 	} {
 		logBuf.Reset()
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/booty.ipxe?mac="+tc.query, http.NoBody)
-		bootScriptHandler(noARP)(httptest.NewRecorder(), req)
+		bootScriptHandler(nil, noARP)(httptest.NewRecorder(), req)
 		got := logBuf.String()
 		if !strings.Contains(got, `msg="boot script"`) || !strings.Contains(got, "kind=") ||
 			!strings.Contains(got, tc.want) || strings.Contains(got, tc.absent) {

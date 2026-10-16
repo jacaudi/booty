@@ -48,7 +48,7 @@ func baseMux(deps APIDeps, dataRoot *os.Root) (*http.ServeMux, error) {
 	myHandler.HandleFunc("GET /ignition.json", ignitionHandler(deps.Store, deps.NodeReports))
 	myHandler.HandleFunc("GET /machineconfig", handleMachineConfigRequest(deps.Store))
 	myHandler.HandleFunc("GET /preseed", preseedHandler(deps.Store, deps.NodeReports))
-	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(arpLookup))
+	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(deps.Store, arpLookup))
 	myHandler.Handle("GET /menu/", menuSelectionHandler(arpLookup))
 	// Bare path: every method reaches the handler, so a non-POST is a 405
 	// (404 when the feature is off) instead of falling to the "/" catch-all.
