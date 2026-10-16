@@ -43,7 +43,7 @@ func ignitionHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
 
 		macAddress := ignitionRequestMAC(r)
 		slog.Debug("using mac address", "mac", macAddress)
-		host := ignitionHost(macAddress)
+		host := configHost(ignitionHost(macAddress))
 
 		// DB-resolved config (precedence rungs 1–2) takes priority over the file.
 		if host != nil && serveBoundIgnition(w, r, n, store, host) {

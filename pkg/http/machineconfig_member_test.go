@@ -28,6 +28,7 @@ func seedMember(t *testing.T, s *db.Store, mac string) []byte {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	cid, err := s.CreateCluster("serve", "https://10.0.0.10:6443", "v1.13.5", "v1.34.0", []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +95,7 @@ func TestNonMemberIgnoresARP(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?mac="+mac, http.NoBody)
 	rr := httptest.NewRecorder()
 	machineConfigHandler(s, failingARP)(rr, req)

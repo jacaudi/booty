@@ -20,6 +20,7 @@ func seedEvilHost(t *testing.T, mac, os string) *hardware.Host {
 	if err := hardware.WriteMacAddress(mac, h); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	return &h
 }
 

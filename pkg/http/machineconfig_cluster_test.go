@@ -41,6 +41,7 @@ func TestNonMemberFallsThroughByteIdentical(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos", Hostname: "plain", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil)
@@ -57,6 +58,7 @@ func TestMemberWithUndecryptableConfigFailsLoud(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	cid, _ := s.CreateCluster("bad", "https://e:6443", "v1.13.5", "v1.34.0", []byte("x"))
 	// Store ciphertext that the CURRENT key cannot decrypt.
 	enc, _ := encryptSecrets([]byte("frozen"))

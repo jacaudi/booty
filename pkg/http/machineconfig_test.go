@@ -105,6 +105,7 @@ func TestMachineConfig_RendersHostFields(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed host: %v", err)
 	}
+	approveHost(t, "aa:bb:cc:dd:ee:ff")
 
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
@@ -227,6 +228,7 @@ func TestMachineConfig_RegisteredBlankHostnameUsesHostnameQuery(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed host: %v", err)
 	}
+	approveHost(t, "aa:bb:cc:dd:ee:ff")
 
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff&hostname=node-x", nil)
 	req.RemoteAddr = "192.0.2.1:12345"
@@ -333,6 +335,8 @@ func TestMachineConfig_InvalidHostnameQueryIgnoredForKnownHost(t *testing.T) {
 	if err := hardware.WriteMacAddress("aa:bb:cc:dd:ee:02", hardware.Host{}); err != nil {
 		t.Fatalf("seed host: %v", err)
 	}
+	approveHost(t, "aa:bb:cc:dd:ee:01")
+	approveHost(t, "aa:bb:cc:dd:ee:02")
 	store := machineConfigTestStore(t)
 
 	for _, tc := range []struct {

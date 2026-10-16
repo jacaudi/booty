@@ -68,6 +68,7 @@ func TestMachineConfigFallsThroughForSchematicBoundHost(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "talos", Approved: true}); err != nil {
 		t.Fatal(err)
 	}
+	approveHost(t, mac)
 	bindSchematicKindConfig(t, s, mac)
 
 	rr := httptest.NewRecorder()

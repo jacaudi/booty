@@ -40,6 +40,7 @@ func TestPreseedFailureNeverLogsTheJoinString(t *testing.T) {
 			if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "debian", Approved: true}); err != nil {
 				t.Fatal(err)
 			}
+			approveHost(t, mac)
 			cid, err := s.CreateConfig("leaky-debianconfig", kindDebianConfig)
 			if err != nil {
 				t.Fatal(err)
