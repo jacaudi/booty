@@ -212,7 +212,7 @@ func TestMachineConfigUnapprovedMemberIsForbidden(t *testing.T) {
 	}
 }
 
-func TestPreseedUnapprovedHostGetsDefault(t *testing.T) {
+func TestPreseedUnapprovedHostGetsUnknownAnswer(t *testing.T) {
 	const tmpl = "d-i mirror/http/hostname string {{ .ServerIP }}\nd-i netcfg/get_hostname string {{ .Hostname }}\n"
 	s := servingStore(t)
 	viper.Set(config.PreseedFile, "config/preseed.cfg")

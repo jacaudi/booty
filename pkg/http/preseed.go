@@ -32,9 +32,14 @@ func handlePreseedRequest(store *db.Store) http.HandlerFunc {
 // unit (n nil = feature off, output unchanged). Only a DB-bound debianconfig
 // is injected; the raw --preseedFile default never is.
 func preseedHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
+	return preseedHandlerWith(store, n, arpLookup)
+}
+
+// preseedHandlerWith is preseedHandler with the ARP lookup injected.
+func preseedHandlerWith(store *db.Store, n *NodeReports, arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("preseed request", "uri", r.RequestURI)
-		host := configHost(identifyHost(r))
+		host := configHost(identifyHostWith(r, arp))
 		if host == nil {
 			// Refused before any template is read, so nothing in the server-default
 			// file, including the join string, can reach this caller (#162).
@@ -112,7 +117,7 @@ func renderPreseed(kind string, src []byte, vars TemplateVars, healthCmd string)
 // raw preseed, debianconfig, and the server default alike (design: appending
 // is safe for debconf since a later directive overrides an earlier one, so
 // this needs no TemplateVars field and render.go/debiangen.go stay untouched).
-// A netinst / non-debian / unidentified host is unaffected: out is returned
+// A netinst or non-debian host is unaffected: out is returned
 // as-is. mirrorHost is vars.ServerIP (already host:port) — reused rather than
 // recomputed, since preseedVars is the single source of that construction.
 func withDVDMirror(store *db.Store, host *hardware.Host, mirrorHost string, out []byte) []byte {
@@ -177,14 +182,9 @@ func preseedVars(store *db.Store, host *hardware.Host) TemplateVars {
 	}
 }
 
-// identifyHost resolves the requesting host by ?mac= or ARP (nil when
-// unidentified), mirroring the ignition/machineconfig identification block.
-func identifyHost(r *http.Request) *hardware.Host {
-	return identifyHostWith(r, arpLookup)
-}
-
-// identifyHostWith is identifyHost with an injectable ARP lookup. An empty
-// ?mac= counts as absent; a non-empty one is resolved by resolveBootHost
+// identifyHostWith resolves the requesting host by ?mac= or ARP (nil when
+// unidentified), mirroring the ignition/machineconfig identification block. An
+// empty ?mac= counts as absent; a non-empty one is resolved by resolveBootHost
 // (normalised, then looked up). Any error gives nil.
 func identifyHostWith(r *http.Request, arp arpFunc) *hardware.Host {
 	h, _, err := resolveBootHost(r, arp)
