@@ -23,6 +23,8 @@ export default function HostsView() {
   const [discovered, setDiscovered] = useState<DiscoveredHost[]>([])
   const [discoveredFull, setDiscoveredFull] = useState(false)
   const [approvingNew, setApprovingNew] = useState<DiscoveredHost | null>(null)
+  // AntD 5's plain Modal does not await onOk, so a second click would start a second chain.
+  const [submittingNew, setSubmittingNew] = useState(false)
   const [newForm] = Form.useForm()
   const [osOptions, setOsOptions] = useState<OS[]>([])
   const [familyKinds, setFamilyKinds] = useState<FamilyKinds | undefined>()
@@ -131,13 +133,22 @@ export default function HostsView() {
   // so no registered-but-unapproved host is left behind; a failure creating it
   // deletes nothing.
   const submitApproveNew = async () => {
-    if (!approvingNew) return
+    if (!approvingNew || submittingNew) return
     // outside try, and caught: an unhandled validateFields rejection fails the vitest run (BootConfigsView.tsx:78-81)
     const values = await newForm.validateFields().catch(() => undefined)
     if (!values) return
+    setSubmittingNew(true)
     const mac = approvingNew.mac
     let created = false
     try {
+      // The list may be stale: another operator may have registered this MAC
+      // since it loaded. Creating over a registered host would overwrite it, and
+      // the rollback would then delete it, so re-check before any write.
+      const inv = await listHostInventory()
+      if (inv.hosts.some((h) => h.mac === mac)) {
+        message.error(`${mac} is already registered; reload the list`)
+        return
+      }
       await createHost({ mac, os: values.os })
       created = true
       if (values.os === 'talos' && values.schematic) {
@@ -156,6 +167,7 @@ export default function HostsView() {
         }
       }
     } finally {
+      setSubmittingNew(false)
       setApprovingNew(null)
       await load()
     }
@@ -318,7 +330,8 @@ export default function HostsView() {
                         title={`Dismiss all ${discovered.length} new machines?`}
                         onConfirm={async () => {
                           try {
-                            await dismissAllDiscovered()
+                            const res = await dismissAllDiscovered()
+                            message.success(`Dismissed ${res?.deleted ?? 0}`)
                             await load()
                           } catch (e) {
                             message.error(e instanceof Error ? e.message : 'dismiss failed')
@@ -374,7 +387,7 @@ export default function HostsView() {
           )}
         </Form>
       </Modal>
-      <Modal title={`Approve ${approvingNew?.mac ?? ''}`} open={!!approvingNew} onOk={submitApproveNew} onCancel={() => setApprovingNew(null)} destroyOnHidden>
+      <Modal title={`Approve ${approvingNew?.mac ?? ''}`} open={!!approvingNew} onOk={submitApproveNew} confirmLoading={submittingNew} onCancel={() => setApprovingNew(null)} destroyOnHidden>
         <Form
           form={newForm}
           layout="vertical"

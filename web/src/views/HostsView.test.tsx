@@ -404,6 +404,53 @@ describe('HostsView', () => {
       await ok()
       await waitFor(() => expect(client.deleteHost).toHaveBeenCalledWith(D.mac))
       await waitFor(() => expect(vi.mocked(client.listHostInventory).mock.calls.length).toBeGreaterThanOrEqual(2))
+      expect(errSpy).toHaveBeenCalledWith('boom')
+      errSpy.mockRestore()
+    })
+
+    it('failed step 2 rolls back', async () => {
+      seed()
+      const errSpy = vi.spyOn(message, 'error').mockImplementation(() => ({}) as ReturnType<typeof message.error>)
+      vi.mocked(client.bindSchematic).mockRejectedValue(new Error('bind boom'))
+      await openModal()
+      await chooseOS('talos')
+      await userEvent.type(await screen.findByLabelText(/talos schematic/i), 'abc123')
+      await ok()
+      await waitFor(() => expect(client.deleteHost).toHaveBeenCalledWith(D.mac))
+      expect(client.approveHostWith).not.toHaveBeenCalled()
+      expect(errSpy).toHaveBeenCalledWith('bind boom')
+      errSpy.mockRestore()
+    })
+
+    it('a second OK while the approve is in flight does nothing', async () => {
+      seed()
+      let release!: () => void
+      vi.mocked(client.createHost).mockReturnValue(new Promise<Host | undefined>((resolve) => { release = () => resolve(undefined) }))
+      await openModal()
+      await chooseOS('flatcar')
+      await ok()
+      // confirmLoading prefixes the button's accessible name ("loading OK")
+      await userEvent.click(await screen.findByRole('button', { name: /ok$/i }))
+      expect(client.createHost).toHaveBeenCalledTimes(1)
+      release()
+      await waitFor(() => expect(client.approveHostWith).toHaveBeenCalledTimes(1))
+    })
+
+    it('aborts without writing when the MAC was registered since the list loaded', async () => {
+      seed()
+      const errSpy = vi.spyOn(message, 'error').mockImplementation(() => ({}) as ReturnType<typeof message.error>)
+      vi.mocked(client.listHostInventory)
+        .mockResolvedValueOnce({ hosts: [], discovered: [D], discoveredFull: false })
+        .mockResolvedValueOnce({ hosts: [host({ mac: D.mac })], discovered: [], discoveredFull: false })
+      await openModal()
+      await chooseOS('flatcar')
+      await ok()
+      await waitFor(() => expect(errSpy).toHaveBeenCalledWith(`${D.mac} is already registered; reload the list`))
+      expect(client.createHost).not.toHaveBeenCalled()
+      expect(client.bindSchematic).not.toHaveBeenCalled()
+      expect(client.approveHostWith).not.toHaveBeenCalled()
+      expect(client.deleteHost).not.toHaveBeenCalled()
+      await waitFor(() => expect(vi.mocked(client.listHostInventory).mock.calls.length).toBeGreaterThanOrEqual(3))
       errSpy.mockRestore()
     })
 
@@ -430,13 +477,17 @@ describe('HostsView', () => {
       await waitFor(() => expect(client.dismissDiscovered).toHaveBeenCalledWith(D.mac))
     })
 
-    it('dismiss all confirms then deletes', async () => {
+    it('dismiss all confirms then deletes and reports the count', async () => {
       seed()
+      const okSpy = vi.spyOn(message, 'success').mockImplementation(() => ({}) as ReturnType<typeof message.success>)
+      vi.mocked(client.dismissAllDiscovered).mockResolvedValue({ deleted: 3 })
       render(<HostsView />)
       await screen.findByText(D.mac)
       await userEvent.click(screen.getByRole('button', { name: 'Dismiss all' }))
       await userEvent.click(await screen.findByRole('button', { name: 'OK' }))
       await waitFor(() => expect(client.dismissAllDiscovered).toHaveBeenCalled())
+      await waitFor(() => expect(okSpy).toHaveBeenCalledWith('Dismissed 3'))
+      okSpy.mockRestore()
     })
 
     it('registered pending host shows Approve, never Allow', async () => {
