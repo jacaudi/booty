@@ -27,8 +27,8 @@ import (
 type openRoute struct {
 	// probe is a concrete request path that lands on the pattern.
 	probe string
-	// mutates is true when the handler changes server-side state. Exactly one
-	// open route may set it (POST /node/report).
+	// mutates is true when the handler changes server-side state. Exactly two
+	// open routes may set it: POST /node/report and GET /booty.ipxe.
 	mutates bool
 	// why is the reason the route is open.
 	why string
@@ -52,7 +52,7 @@ func openRouteTable() map[string]openRoute {
 		"GET /ignition.json": {probe: "/ignition.json", why: "boot path: Ignition config for the booting host, identified by ?mac= or ARP; read-only"},
 		"GET /machineconfig": {probe: "/machineconfig", why: "boot path: Talos machine config for the booting host; read-only"},
 		"GET /preseed":       {probe: "/preseed", why: "boot path: Debian preseed for the booting host; read-only"},
-		"GET /booty.ipxe":    {probe: "/booty.ipxe", why: "boot path: the rendered iPXE script (holding, assigned or menu); read-only"},
+		"GET /booty.ipxe":    {probe: "/booty.ipxe", mutates: true, why: "boot path: the rendered iPXE script (holding, assigned or menu); also records an unknown MAC in discovered_hosts (new rows limited 8 per source IP per 10 min, capped at 1024 with no eviction, refreshes debounced to one write per 20 s per MAC; a row grants nothing)"},
 		"GET /menu/":         {probe: "/menu/x", why: "boot path: iPXE boot-menu selection script; read-only"},
 		"/node/report": {
 			probe:   "/node/report",
@@ -168,7 +168,7 @@ func gateFired(rr *httptest.ResponseRecorder) bool {
 // the gate did not reject under the mux pattern that served it. That set must
 // equal openRouteTable exactly: an extra route fails (it is open and nobody
 // reviewed it), and a missing one fails (the table is stale, or a route was
-// dropped). Exactly one allowlisted route may change state.
+// dropped). Exactly two allowlisted routes may change state.
 //
 // The handler probed is the one StartHTTP serves (srv.Handler), so a wrapper
 // StartHTTP gains later is probed too, and the /api/v1 operations are read
@@ -258,7 +258,7 @@ func TestOnlyAllowlistedRoutesAnswerWithoutACredential(t *testing.T) {
 			t.Errorf("allowlisted route %q is registered for a state-changing method but not marked mutates", pattern)
 		}
 	}
-	if want := []string{"/node/report"}; !slices.Equal(mutating, want) {
+	if want := []string{"/node/report", "GET /booty.ipxe"}; !slices.Equal(mutating, want) {
 		t.Errorf("open routes that change state = %q, want %q: every other state-changing endpoint belongs under the gated /api/v1 group", mutating, want)
 	}
 }
