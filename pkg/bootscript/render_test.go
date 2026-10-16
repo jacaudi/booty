@@ -11,7 +11,7 @@ import (
 )
 
 func TestStubScript(t *testing.T) {
-	want := "#!ipxe\nchain http://10.0.0.1:8080/booty.ipxe?mac=${mac} || shell\n"
+	want := "#!ipxe\nchain http://10.0.0.1:8080/booty.ipxe?mac=${mac}&arch=${buildarch} || shell\n"
 	if got := StubScript("10.0.0.1:8080"); got != want {
 		t.Fatalf("StubScript = %q, want %q", got, want)
 	}
@@ -24,7 +24,7 @@ func TestNoTFTPChainsRemain(t *testing.T) {
 		}
 	}
 	menu := renderMenu(nil, nil, "10.0.0.1:8080")
-	const retryChain = "chain http://10.0.0.1:8080/booty.ipxe?mac=${mac} || shell"
+	const retryChain = "chain http://10.0.0.1:8080/booty.ipxe?mac=${mac}&arch=${buildarch} || shell"
 	if strings.Contains(menu, "tftp://") || !strings.Contains(menu, retryChain) {
 		t.Errorf("menu retry chain wrong:\n%s", menu)
 	}
