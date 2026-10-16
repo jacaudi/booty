@@ -232,9 +232,10 @@ not:
 
 ```bash
 curl -H "X-Booty-Token: $BOOTY_TOKEN" http://localhost:8080/api/v1/info   # versions + build info
-curl -H "X-Booty-Token: $BOOTY_TOKEN" http://localhost:8080/api/v1/hosts  # all known hosts, plus an
-                                                                            # "unknown" array of seen-
-                                                                            # but-unregistered MACs
+curl -H "X-Booty-Token: $BOOTY_TOKEN" http://localhost:8080/api/v1/hosts  # all known hosts, plus a
+                                                                            # "discovered" array of seen-
+                                                                            # but-unregistered MACs, and
+                                                                            # "discoveredFull"
 curl http://localhost:8080/version.json                                   # OS versions, no auth
 ```
 
@@ -245,9 +246,12 @@ remove hosts.
 
 - **Registered vs. unknown hosts.** booty only boots machines it knows. A machine is *registered* by
   mapping its MAC to an OS (via `POST /api/v1/hosts` or the web UI). A machine whose MAC isn't
-  registered is an *unknown host*: it's served a reboot-loop config and listed in the `unknown` array
+  registered is an *unknown host*: it's served a reboot-loop config and listed in the `discovered` array
   of `GET /api/v1/hosts` until you register it. This prevents a stray machine from booting into
-  something unintended.
+  something unintended. Discovered machines appear in the web UI under Hosts, Pending, New
+  machines, and you approve them there. The list holds at most 1024 machines; when it is full
+  booty stops recording new ones until you dismiss or approve some (the API reports
+  `discoveredFull: true`).
 - **DoInstall.** The host record carries a DoInstall flag for a future install-once feature. booty does
   not act on it yet.
 - **Per-host Talos schematics.** A Talos host may set its own Image Factory `schematic`; booty caches
