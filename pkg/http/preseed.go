@@ -181,21 +181,21 @@ func identifyHost(r *http.Request) *hardware.Host {
 	return identifyHostWith(r, arpLookup)
 }
 
-// configHost is the host a config route may serve. An unapproved host gets
-// the unknown-host answer, because approval is the gate (#158).
-func configHost(h *hardware.Host) *hardware.Host {
-	if h == nil || !h.Approved {
-		return nil
-	}
-	return h
-}
-
 // identifyHostWith is identifyHost with an injectable ARP lookup. An empty
 // ?mac= counts as absent; a non-empty one is resolved by resolveBootHost
 // (normalised, then looked up). Any error gives nil.
 func identifyHostWith(r *http.Request, arp arpFunc) *hardware.Host {
 	h, _, err := resolveBootHost(r, arp)
 	if err != nil {
+		return nil
+	}
+	return h
+}
+
+// configHost is the host a config route may serve. An unapproved host gets
+// the unknown-host answer, because approval is the gate (#158).
+func configHost(h *hardware.Host) *hardware.Host {
+	if h == nil || !h.Approved {
 		return nil
 	}
 	return h

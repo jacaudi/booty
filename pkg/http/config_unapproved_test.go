@@ -121,11 +121,12 @@ func TestIgnitionRevokedHostGetsRebootConfig(t *testing.T) {
 func TestMachineConfigUnapprovedHostGetsUnknownAnswer(t *testing.T) {
 	const tmpl = "machine:\n  hostname: {{ .Hostname }}\n  mac: {{ .MAC }}\n  ip: {{ .IP }}\n  schematic: {{ .Schematic }}\n"
 	cases := []struct {
-		name string
-		bind bool
+		name         string
+		bind         bool
+		wantApproved string // what the host's own config contains once approved
 	}{
-		{"file template", false},
-		{"bound config", true},
+		{"file template", false, "hostname: sentinel-host"},
+		{"bound config", true, "token: SENTINEL-BOUND"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -158,8 +159,8 @@ func TestMachineConfigUnapprovedHostGetsUnknownAnswer(t *testing.T) {
 			// Approving the same host flips it to its own config.
 			approveHost(t, mac)
 			approved := fetchConfig(t, h, "/machineconfig?mac="+mac)
-			if approved.Body.String() == want.Body.String() {
-				t.Errorf("approved host still gets the unknown-host answer: %s", approved.Body.String())
+			if approved.Code != http.StatusOK || !strings.Contains(approved.Body.String(), c.wantApproved) {
+				t.Errorf("approved host did not get its own config (want %q): %d %s", c.wantApproved, approved.Code, approved.Body.String())
 			}
 		})
 	}

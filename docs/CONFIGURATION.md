@@ -127,7 +127,9 @@ to `POST /node/report`. booty keeps the latest report per host and shows it on t
 ## Boot config precedence (P4)
 
 Each boot-facing handler (`/ignition.json`, `/machineconfig`, `/preseed`) resolves a host's config
-in a fixed 4-rung precedence, falling through to the next rung on any miss:
+in a fixed 4-rung precedence, falling through to the next rung on any miss. This applies only to an
+**approved** host: the config routes answer an unapproved host (never approved, or revoked) exactly
+as they answer an unknown one, and an unapproved cluster member gets `403`.
 
 1. **Host `config_id`** — an explicit per-host binding (`POST /hosts/{mac}/approve` or `/bind`, see
    [schema/API.md](schema/API.md)). A bound config whose `kind` mismatches the host's OS family (or

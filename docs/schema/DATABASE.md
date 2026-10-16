@@ -162,7 +162,7 @@ P1c; remaining columns keep their defaults):
 | `os` | TEXT | `flatcar` \| `coreos` \| `talos`. For config-kind family matching (P4), `coreos` maps to the ostype canonical family `fedora-coreos`; `flatcar`/`talos` are identity — see `cache.CacheNameToCanonical`. |
 | `do_install` | INTEGER | Reserved; not acted on. |
 | `schematic` | TEXT | Talos per-host schematic ID. |
-| `approved` | INTEGER | **Active (P1c).** `1` = approved to boot; `0` = holding pattern. |
+| `approved` | INTEGER | **Active (P1c).** `1` = approved to boot; `0` = holding pattern. Also gates the config routes: an unapproved host gets the unknown-host answer from `/ignition.json`, `/machineconfig` and `/preseed` (an unapproved cluster member gets `403`). |
 | `boot_mode` | TEXT | **Active (P1c).** `assigned` = boot the assigned target; `menu` = serve the interactive boot menu instead. Persists until explicitly changed — `POST /hosts/{mac}/approve` sets it back to `assigned`, `POST /hosts/{mac}/menu` sets it to `menu` again. |
 | `assigned_os`/`assigned_arch`/`assigned_params` | TEXT | **Active (P1c).** Target (OS, arch, params) the host boots when `boot_mode='assigned'`. |
 | `uuid`/`serial` | TEXT | Scanned on every host read; not yet populated by booty (hardware identity, reserved for a future slice). |
