@@ -168,7 +168,7 @@ func TestMachineConfig_ApprovedHostWithoutOverridesRendersDefault(t *testing.T) 
 	viper.Set(config.TalosSchematic, "default-schematic")
 	seedApprovedHost(t, "aa:bb:cc:dd:ee:ff", hardware.Host{})
 
-	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?mac=aa:bb:cc:dd:ee:ff", http.NoBody)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
 	store := machineConfigTestStore(t)
