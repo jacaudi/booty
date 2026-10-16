@@ -182,8 +182,8 @@ func identifyHost(r *http.Request) *hardware.Host {
 }
 
 // identifyHostWith is identifyHost with an injectable ARP lookup. An empty
-// ?mac= counts as absent; a non-empty one goes straight to GetMacAddress
-// (which records unknown MACs and rejects malformed ones, giving nil).
+// ?mac= counts as absent; a non-empty one is resolved by resolveBootHost
+// (normalised, then looked up). Any error gives nil.
 func identifyHostWith(r *http.Request, arp arpFunc) *hardware.Host {
 	h, _, err := resolveBootHost(r, arp)
 	if err != nil {
