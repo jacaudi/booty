@@ -80,6 +80,17 @@ func (d *discoverer) record(r *http.Request, mac string) {
 	if exists {
 		return
 	}
+	// A full table refuses the insert, so check before Allow: a refusal must not
+	// spend the source's budget, or a flood while full locks it out afterwards.
+	n, err := d.store.CountDiscoveredHosts(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "discovery count failed", "mac", mac, "err", err)
+		return
+	}
+	if n >= maxDiscoveredHosts {
+		slog.DebugContext(ctx, "discovery refused: table full", "mac", mac)
+		return
+	}
 	if !d.limit.Allow(key) {
 		slog.DebugContext(ctx, "discovery refused: rate limited", "mac", mac)
 		return

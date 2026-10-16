@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
@@ -156,8 +157,9 @@ func TestBootScriptRateLimitsNewRowsPerIP(t *testing.T) {
 	}
 }
 
-func TestBootScriptRefusesWhenFull(t *testing.T) {
-	s := servingStore(t)
+// fillDiscovered inserts maxDiscoveredHosts rows, 02:00:00:00:00:00 first.
+func fillDiscovered(t *testing.T, s *db.Store) {
+	t.Helper()
 	for i := range maxDiscoveredHosts {
 		mac := fmt.Sprintf("02:00:00:00:%02x:%02x", i/256, i%256)
 		if _, err := s.InsertDiscoveredHost(t.Context(), mac, "", "", maxDiscoveredHosts); err != nil {
@@ -165,6 +167,39 @@ func TestBootScriptRefusesWhenFull(t *testing.T) {
 			continue
 		}
 	}
+}
+
+// TestDiscoveryConstants pins the spec D7 values: changing one is a design change.
+func TestDiscoveryConstants(t *testing.T) {
+	if maxDiscoveredHosts != 1024 || discoveryPerIP != 8 || discoveryWindow != 10*time.Minute || discoveryLimiterCapacity != 4096 {
+		t.Errorf("cap %d, per-IP %d, window %v, capacity %d; want 1024, 8, 10m, 4096",
+			maxDiscoveredHosts, discoveryPerIP, discoveryWindow, discoveryLimiterCapacity)
+	}
+}
+
+// A full table refuses every new MAC, so refused attempts must not spend the
+// source's limiter budget; otherwise a flood while full locks the source out
+// for the window after rows are dismissed.
+func TestBootScriptFullTableSpendsNoLimiterBudget(t *testing.T) {
+	s := servingStore(t)
+	fillDiscovered(t, s)
+	h := bootScriptHandler(s, noARPFn)
+	const remote = "10.0.0.41:1"
+	for i := range discoveryPerIP {
+		getBoot(t, h, http.MethodGet, fmt.Sprintf("/booty.ipxe?mac=aa:bb:cc:dd:ee:%02x", i), remote)
+	}
+	if _, err := s.DeleteAllDiscoveredHosts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	getBoot(t, h, http.MethodGet, "/booty.ipxe?mac=aa:bb:cc:dd:ef:00", remote)
+	if got := countDiscovered(t, s); got != 1 {
+		t.Errorf("count = %d, want 1: refusals while full spent the source's budget", got)
+	}
+}
+
+func TestBootScriptRefusesWhenFull(t *testing.T) {
+	s := servingStore(t)
+	fillDiscovered(t, s)
 	h := bootScriptHandler(s, noARPFn)
 	rr := getBoot(t, h, http.MethodGet, "/booty.ipxe?mac=aa:bb:cc:dd:ee:b1", "10.0.0.40:1")
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "not yet approved") {
