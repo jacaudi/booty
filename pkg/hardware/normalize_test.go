@@ -1,7 +1,6 @@
 package hardware
 
 import (
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -92,21 +91,17 @@ func TestWriteMacAddress_RejectsInvalid(t *testing.T) {
 	}
 
 	// Nothing should have been stored.
-	data, err := GetData()
+	hosts, err := ListHosts()
 	if err != nil {
-		t.Fatalf("GetData: %v", err)
+		t.Fatalf("ListHosts: %v", err)
 	}
-	var bd BootyData
-	if err := json.Unmarshal(data, &bd); err != nil {
-		t.Fatalf("Unmarshal GetData: %v", err)
-	}
-	if len(bd.Hosts) != 0 {
-		t.Errorf("invalid writes leaked into Hosts: %+v", bd.Hosts)
+	if len(hosts) != 0 {
+		t.Errorf("invalid writes leaked into Hosts: %+v", hosts)
 	}
 }
 
 // GetMacAddress on an invalid MAC must return an error (not ErrNotFound, not a
-// panic) and must not pollute UnknownHosts with garbage.
+// panic).
 func TestGetMacAddress_InvalidIsErrorNotMiss(t *testing.T) {
 	setupTempDB(t)
 
@@ -119,18 +114,6 @@ func TestGetMacAddress_InvalidIsErrorNotMiss(t *testing.T) {
 	}
 	if errors.Is(err, ErrNotFound) {
 		t.Errorf("GetMacAddress(invalid): err = ErrNotFound, want validation error")
-	}
-
-	data, err := GetData()
-	if err != nil {
-		t.Fatalf("GetData: %v", err)
-	}
-	var bd BootyData
-	if err := json.Unmarshal(data, &bd); err != nil {
-		t.Fatalf("Unmarshal GetData: %v", err)
-	}
-	if len(bd.UnknownHosts) != 0 {
-		t.Errorf("invalid MAC polluted UnknownHosts: %+v", bd.UnknownHosts)
 	}
 }
 
@@ -195,15 +178,11 @@ func TestLoad_SkipsInvalidLegacyKeys(t *testing.T) {
 		t.Errorf("valid key = %+v, want hostname good", got)
 	}
 
-	data, err := GetData()
+	hosts, err := ListHosts()
 	if err != nil {
-		t.Fatalf("GetData: %v", err)
+		t.Fatalf("ListHosts: %v", err)
 	}
-	var bd BootyData
-	if err := json.Unmarshal(data, &bd); err != nil {
-		t.Fatalf("Unmarshal GetData: %v", err)
-	}
-	if len(bd.Hosts) != 1 {
-		t.Errorf("expected only the valid host retained, got %+v", bd.Hosts)
+	if len(hosts) != 1 {
+		t.Errorf("expected only the valid host retained, got %+v", hosts)
 	}
 }

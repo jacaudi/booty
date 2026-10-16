@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	// maxDiscoveredHosts caps the discovered_hosts table. It never evicts: a
+	// maxDiscoveredHosts caps the discovered hosts table. It never evicts: a
 	// full table refuses new rows, so a flood cannot push out a real machine.
 	maxDiscoveredHosts = 1024
 	// discoveryPerIP is the new rows one source key may add per discoveryWindow.

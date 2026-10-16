@@ -8,11 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"sync"
 
 	"github.com/jeefy/booty/pkg/config"
@@ -20,7 +18,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Host describes a registered (or seen-but-not-registered) machine.
+// Host describes a registered machine.
 type Host struct {
 	MAC          string `json:"mac"`
 	Hostname     string `json:"hostname"`
@@ -47,12 +45,6 @@ type Host struct {
 	NodeConfigID *int64 `json:"nodeConfigId,omitzero"`
 }
 
-// BootyData is the JSON shape returned by GetData and consumed by the UI.
-type BootyData struct {
-	Hosts        map[string]*Host `json:"hosts"`
-	UnknownHosts map[string]*Host `json:"unknownHosts"`
-}
-
 // NormalizeMAC parses mac in any form net.ParseMAC accepts and returns the
 // canonical lowercase colon-delimited key. It is the one source of truth for
 // MAC canonicalization in booty. An empty/invalid MAC returns a wrapped error.
@@ -73,19 +65,6 @@ var (
 	storeMu       sync.RWMutex
 	store         *db.Store
 	storeInjected bool
-)
-
-// maxUnknownHosts caps unknownHosts: every unauthenticated ?mac= probe adds
-// an entry, so the oldest is evicted beyond this many.
-const maxUnknownHosts = 1024
-
-// unknownHosts tracks MACs that contacted booty without a record — a runtime
-// only "pending" list for the UI, reset on each Load (never persisted).
-var (
-	unknownMu    sync.Mutex
-	unknownHosts = map[string]*Host{}
-	// unknownOrder holds unknownHosts' keys, earliest-tracked first.
-	unknownOrder []string //nolint:gochecknoglobals // pairs with the unknownHosts global under unknownMu; package-level host state is tracked in #93
 )
 
 // SetStore injects the shared database store. Call it once at startup before
@@ -116,7 +95,7 @@ func withRLockedStore(fn func(st *db.Store) error) (bool, error) {
 // Load prepares the host store and performs the one-time hardware.json import.
 // If no store was injected (tests / standalone), it (re)opens a fresh store at
 // config.DatabasePathValue(), preserving the pre-SQLite reset-per-Load
-// semantics. The in-memory pending tracker is reset.
+// semantics.
 func Load() error {
 	storeMu.Lock()
 	if !storeInjected {
@@ -132,11 +111,6 @@ func Load() error {
 	}
 	st := store
 	storeMu.Unlock()
-
-	unknownMu.Lock()
-	unknownHosts = map[string]*Host{}
-	unknownOrder = nil
-	unknownMu.Unlock()
 
 	return importLegacyJSON(st)
 }
@@ -238,53 +212,10 @@ func fromDBHost(d db.Host) *Host {
 	}
 }
 
-// ListUnknownHosts returns the sorted MACs of machines booty has seen but that
-// are not registered. They live only in the in-memory unknownHosts map
-// (populated by trackUnknown on a GetMacAddress miss) and are never persisted,
-// so ListHosts cannot surface them — which is why GET /api/v1/hosts needs this
-// to genuinely supersede the retired GET /booty.json.
-func ListUnknownHosts() []string {
-	unknownMu.Lock()
-	defer unknownMu.Unlock()
-	return slices.Sorted(maps.Keys(unknownHosts))
-}
-
-// GetData returns the JSON-marshaled BootyData (registered + unknown hosts).
-func GetData() ([]byte, error) {
-	hosts := map[string]*Host{}
-	if _, err := withRLockedStore(func(st *db.Store) error {
-		list, err := st.ListHosts()
-		if err != nil {
-			return fmt.Errorf("hardware: list hosts: %w", err)
-		}
-		for _, d := range list {
-			hosts[d.MAC] = fromDBHost(d)
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	unknownMu.Lock()
-	unknown := make(map[string]*Host, len(unknownHosts))
-	maps.Copy(unknown, unknownHosts)
-	unknownMu.Unlock()
-
-	out, err := json.Marshal(BootyData{Hosts: hosts, UnknownHosts: unknown})
-	if err != nil {
-		return nil, fmt.Errorf("hardware: marshal: %w", err)
-	}
-	return out, nil
-}
-
-// HasHost reports whether mac is a registered host, WITHOUT the trackUnknown
-// side effect GetMacAddress has on a miss. Callers that only need an
-// existence check (delete-host, approve-host, bind-host, menu-host) must use
-// this instead of GetMacAddress: reusing GetMacAddress purely as a gate meant
-// a single mistyped/absent MAC permanently added itself to
-// ListUnknownHosts, surfacing as a phantom machine in the operator's Hosts
-// view. A malformed/empty MAC still returns a validation error, matching
-// GetMacAddress and NormalizeMAC.
+// HasHost reports whether mac is a registered host. Callers that only need an
+// existence check (delete-host, approve-host, bind-host, menu-host) use this
+// instead of GetMacAddress, which fetches the full row. A malformed/empty MAC
+// still returns a validation error, matching GetMacAddress and NormalizeMAC.
 func HasHost(mac string) (bool, error) {
 	key, err := NormalizeMAC(mac)
 	if err != nil {
@@ -307,10 +238,9 @@ func HasHost(mac string) (bool, error) {
 }
 
 // GetMacAddress returns a fresh *Host for the canonicalized mac, or ErrNotFound.
-// On a miss the canonical MAC is tracked in the pending list. Unlike the old
-// map-backed store, the returned *Host does NOT alias shared state, so callers
-// may mutate the copy freely. An invalid/empty MAC returns a validation error
-// distinct from ErrNotFound and does not pollute the pending list.
+// It has no side effect. Unlike the old map-backed store, the returned *Host
+// does NOT alias shared state, so callers may mutate the copy freely. An
+// invalid/empty MAC returns a validation error distinct from ErrNotFound.
 func GetMacAddress(mac string) (*Host, error) {
 	key, err := NormalizeMAC(mac)
 	if err != nil {
@@ -329,19 +259,17 @@ func GetMacAddress(mac string) (*Host, error) {
 		return nil
 	})
 	if !had || errors.Is(err, sql.ErrNoRows) {
-		trackUnknown(key)
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("hardware: get host %s: %w", key, err)
 	}
-	clearUnknown(key)
 	return out, nil
 }
 
-// WriteMacAddress upserts host for the canonicalized mac and clears it from the
-// pending list. An invalid/empty MAC is rejected and never stored. The write is
-// transactional in SQLite, so there is no in-memory state to roll back.
+// WriteMacAddress upserts host for the canonicalized mac. An invalid/empty MAC
+// is rejected and never stored. The write is transactional in SQLite, so there
+// is no in-memory state to roll back.
 func WriteMacAddress(mac string, host Host) error {
 	key, err := NormalizeMAC(mac)
 	if err != nil {
@@ -354,11 +282,7 @@ func WriteMacAddress(mac string, host Host) error {
 	if !had {
 		return errors.New("hardware: store not initialized")
 	}
-	if err != nil {
-		return err
-	}
-	clearUnknown(key)
-	return nil
+	return err
 }
 
 // RemoveMacAddress deletes the host for the canonicalized mac. Idempotent: a
@@ -554,33 +478,4 @@ func PreserveBoot() (int64, error) {
 		return 0, errors.New("hardware: store not initialized")
 	}
 	return n, err
-}
-
-// trackUnknown records key as an unknown host. A new key beyond
-// maxUnknownHosts evicts the earliest-tracked one; re-tracking a key already
-// listed changes nothing.
-func trackUnknown(key string) {
-	unknownMu.Lock()
-	defer unknownMu.Unlock()
-	if _, ok := unknownHosts[key]; ok {
-		return
-	}
-	if len(unknownOrder) >= maxUnknownHosts {
-		delete(unknownHosts, unknownOrder[0])
-		unknownOrder = unknownOrder[1:]
-	}
-	unknownHosts[key] = &Host{}
-	unknownOrder = append(unknownOrder, key)
-}
-
-func clearUnknown(key string) {
-	unknownMu.Lock()
-	defer unknownMu.Unlock()
-	if _, ok := unknownHosts[key]; !ok {
-		return
-	}
-	delete(unknownHosts, key)
-	if i := slices.Index(unknownOrder, key); i >= 0 {
-		unknownOrder = slices.Delete(unknownOrder, i, i+1)
-	}
 }
