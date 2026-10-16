@@ -93,11 +93,11 @@ func removeVersionDir(osName, schematic, arch, version string) error {
 // cacheNameByCanonical is the SINGLE source of the on-disk-name bridge: the
 // taxonomy's canonical OS name (left) maps to the irreversible on-disk cache
 // segment (right). Only fedora-coreos differs (disk stays "coreos"); every
-// other OS is identity. The two accessors below are the only callers.
+// other OS is identity. CanonicalToCacheName is also used by pkg/http to store the boot vocabulary.
 var cacheNameByCanonical = map[string]string{"fedora-coreos": "coreos"}
 
-// canonicalToCacheName maps a taxonomy canonical name to its on-disk segment.
-func canonicalToCacheName(canonical string) string {
+// CanonicalToCacheName maps a taxonomy canonical name to its on-disk segment.
+func CanonicalToCacheName(canonical string) string {
 	if n, ok := cacheNameByCanonical[canonical]; ok {
 		return n
 	}

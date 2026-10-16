@@ -52,7 +52,7 @@ func evictOverBudget(store *db.Store, maxBytes int64) error {
 		for i := range candidates {
 			cand := candidates[i]
 			params, _ := decodeParams(cand.Params)
-			if cand.Version == NewestCached(canonicalToCacheName(cand.OS), cand.Arch, params) {
+			if cand.Version == NewestCached(CanonicalToCacheName(cand.OS), cand.Arch, params) {
 				continue
 			}
 			// M3: never evict a version a live cluster pins.
@@ -70,7 +70,7 @@ func evictOverBudget(store *db.Store, maxBytes int64) error {
 			return nil
 		}
 		params, _ := decodeParams(c.Params)
-		cacheName := canonicalToCacheName(c.OS)
+		cacheName := CanonicalToCacheName(c.OS)
 		segment := paramSegment(params)
 		if err := store.DeleteTargetVersionByID(c.TargetVersionID); err != nil {
 			return fmt.Errorf("cache: evict delete row %s/%s: %w", c.OS, c.Version, err)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/jeefy/booty/pkg/bootscript"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
@@ -274,7 +275,10 @@ func registerHosts(api huma.API, deps APIDeps) {
 			merged.Hostname = in.Body.Hostname
 		}
 		if in.Body.OS != "" {
-			merged.OS = in.Body.OS
+			// Store the boot vocabulary ("coreos"), not the taxonomy name
+			// the caller may have sent ("fedora-coreos"): host.OS is what
+			// bootscript.Assignable and the iPXE template lookup key on.
+			merged.OS = cache.CanonicalToCacheName(in.Body.OS)
 		}
 		if in.Body.Schematic != "" {
 			merged.Schematic = in.Body.Schematic
@@ -319,6 +323,11 @@ func registerHosts(api huma.API, deps APIDeps) {
 		h, err := hardware.GetMacAddress(in.MAC)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("get host", err)
+		}
+		// A tool OS (or any OS without an assigned-boot template) cannot be
+		// booted by assignment; approving it would strand the host.
+		if h.OS != "" && !bootscript.Assignable(h.OS) {
+			return nil, huma.Error422UnprocessableEntity("os " + h.OS + " cannot be booted by assignment; use the boot menu")
 		}
 		hasBinding := in.Body != nil && (in.Body.ConfigID != nil || in.Body.RoleIDs != nil)
 		// Validate a requested binding BEFORE approving/assigning: a validation
