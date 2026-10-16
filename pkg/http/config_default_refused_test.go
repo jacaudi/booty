@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/jeefy/booty/pkg/config"
+	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 )
 
@@ -111,5 +112,68 @@ func TestPreseedDefaultRefusedWithoutApprovedHost(t *testing.T) {
 
 			checkDefaultRefusal(t, rr.Code, c.want, rr.Body.String(), sentinel)
 		})
+	}
+}
+
+// TestConfigDefaultByARPFallback: with no ?mac=, the host the source IP
+// ARP-resolves to decides the answer. An approved host gets the rendered server
+// default; an unapproved or unregistered one gets the 404.
+func TestConfigDefaultByARPFallback(t *testing.T) {
+	const sentinel = "SENTINEL-JOIN"
+	const mac = "aa:bb:cc:dd:ee:b3"
+	cases := []struct {
+		name     string
+		register bool
+		approve  bool
+		want     int
+	}{
+		{"approved host", true, true, http.StatusOK},
+		{"unapproved host", true, false, http.StatusNotFound},
+		{"unregistered host", false, false, http.StatusNotFound},
+	}
+	routes := []struct {
+		name string
+		path string
+		os   string
+		cfg  func(*testing.T)
+		h    func(*db.Store, arpFunc) http.HandlerFunc
+	}{
+		{
+			"machineconfig", "/machineconfig", "talos",
+			func(t *testing.T) {
+				viper.Set(config.TalosConfigFile, "config/machineconfig.yaml")
+				writeFile(t, "config/machineconfig.yaml", "cluster:\n  token: {{ .JoinString }}\n")
+			},
+			machineConfigHandler,
+		},
+		{
+			"preseed", "/preseed", "debian",
+			func(t *testing.T) {
+				viper.Set(config.PreseedFile, "config/preseed.cfg")
+				writeFile(t, "config/preseed.cfg", "d-i booty/join string {{ .JoinString }}\n")
+			},
+			func(s *db.Store, arp arpFunc) http.HandlerFunc { return preseedHandlerWith(s, nil, arp) },
+		},
+	}
+	for _, rt := range routes {
+		for _, c := range cases {
+			t.Run(rt.name+"/"+c.name, func(t *testing.T) {
+				s := servingStore(t)
+				viper.Set(config.JoinString, sentinel)
+				rt.cfg(t)
+				if c.register {
+					if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: rt.os}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if c.approve {
+					approveHost(t, mac)
+				}
+
+				rr := fetchConfig(t, rt.h(s, fixedARP(mac)), rt.path)
+
+				checkDefaultRefusal(t, rr.Code, c.want, rr.Body.String(), sentinel)
+			})
+		}
 	}
 }

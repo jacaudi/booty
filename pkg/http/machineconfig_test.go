@@ -26,16 +26,18 @@ func machineConfigTestStore(t *testing.T) *db.Store {
 	return store
 }
 
-// seedApprovedHost registers and approves mac in a fresh hardware store. The
+// seedApprovedHost registers and approves mac in a fresh hardware store that
+// the test's cleanup resets, so the host cannot leak into another test. The
 // machineconfig route renders its server-default file only for an approved host
-// (#162), so a test whose target is that render must name one. Call it after
-// viper.Reset and after DataDir is set.
+// (#162), so a test whose target is that render must name one.
 func seedApprovedHost(t *testing.T, mac string, h hardware.Host) {
 	t.Helper()
-	viper.Set(config.HardwareMap, "hardware.json")
-	if err := hardware.Load(); err != nil {
-		t.Fatalf("hardware.Load: %v", err)
+	s, err := db.Open(filepath.Join(t.TempDir(), "hosts.db"))
+	if err != nil {
+		t.Fatalf("open hardware store: %v", err)
 	}
+	hardware.SetStore(s)
+	t.Cleanup(func() { hardware.SetStore(nil); _ = s.Close() })
 	if err := hardware.WriteMacAddress(mac, h); err != nil {
 		t.Fatalf("seed host: %v", err)
 	}

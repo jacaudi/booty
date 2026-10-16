@@ -183,8 +183,8 @@ func serveFileMachineConfig(w http.ResponseWriter, r *http.Request, host *hardwa
 // host-ONLY with a separate .ServerHTTPPort (the live machineconfig semantics —
 // must NOT be host:port); .TalosVersion is newly sourced from the newest cached
 // talos version for the host's schematic; .Roles from host_roles. Hostname/UUID/
-// Serial seed from the request query string, since Talos legitimately fetches
-// its config before the host exists in the DB.
+// Serial seed from the request query string; the approved host's own record
+// then overrides Hostname.
 func machineConfigVars(store *db.Store, r *http.Request, host *hardware.Host, hostname string) TemplateVars {
 	return machineConfigVarsCore(store, host, hostname, r.URL.Query().Get("uuid"), r.URL.Query().Get("serial"))
 }
