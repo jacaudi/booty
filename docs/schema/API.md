@@ -14,7 +14,7 @@ Served on `--httpPort` (default `8080`).
 |--------|------|---------|----------|
 | `GET` | `/` | Redirect to the web UI. | `302 → /ui/` |
 | `GET` | `/ignition.json` | Ignition config for a Flatcar/CoreOS host. MAC resolved from a query param or by ARP; unknown hosts get a reboot-loop config. | Ignition v3.4.0 JSON |
-| `GET` | `/booty.ipxe?mac=` | Per-host iPXE script (holding / assigned OS / menu). Open and read-only; the host is identified by `?mac=` with ARP fallback. | iPXE script (`text/plain`). Other methods fall through to the UI redirect. |
+| `GET` | `/booty.ipxe?mac=&arch=` | Per-host iPXE script (holding / assigned OS / menu). Open; the host is identified by `?mac=` with ARP fallback. `arch` is the iPXE `${buildarch}` (`x86_64` and `i386` are stored as `amd64`, `arm64` as `arm64`, anything else or absent as empty). A `GET` (never `HEAD`) for a MAC the lookup reports as not found records it in `discovered_hosts` ([DATABASE.md](DATABASE.md#discovered_hosts)); a database error records nothing. Recording is bounded: 8 new rows per source IP per 10 minutes (IPv6 keyed by /64, 4096 tracked keys), a 1024-row table cap with no eviction, and a 20 s debounce on refreshing a known row. A row grants nothing. | iPXE script (`text/plain`). Other methods fall through to the UI redirect. |
 | `GET` | `/menu/<os>/<segment>/<arch>/<version>/boot.ipxe?mac=` | iPXE script for one boot-menu selection. Open and read-only; identified by `?mac=` with ARP fallback; only menu-mode hosts get a boot script, others get the holding script. | iPXE script (`text/plain`) |
 | `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. An invalid `?hostname=` is ignored (logged), not an error. | YAML (`text/yaml`) |
 | `POST` | `/node/report?mac=` | Node health report from a host's injected unit. Only registered when `--nodeReports` is on (otherwise `404` for every method). Authenticated by the per-host token in the `X-Booty-Node-Token` header, not by the API token. Also requires the source IP to ARP-resolve to `?mac=`; otherwise `401`. Body: JSON health report, max 64 KiB. Limits: 10/min per source IP, 1 per 10 s per host. See [Node reports](../CONFIGURATION.md#node-reports). | `204` / `400` bad MAC, bad JSON or unknown firmware / `401` missing or wrong token, unknown host, source IP not ARP-resolving to `?mac=` / `405` not `POST` (`Allow: POST`) / `413` body too large / `429` rate limited |
@@ -41,8 +41,8 @@ other unrecognized path: `302 → /ui/`, not `404`. Their successors are all und
 | Retired | Successor |
 |---------|-----------|
 | `GET /info` | `GET /api/v1/info` |
-| `GET /hosts?mac=<MAC>` | `GET /api/v1/hosts` (filter client-side, or see the `unknown` array below) |
-| `GET /booty.json` | `GET /api/v1/hosts` (`hosts` + `unknown` fields) |
+| `GET /hosts?mac=<MAC>` | `GET /api/v1/hosts` (filter client-side, or see the `discovered` array below) |
+| `GET /booty.json` | `GET /api/v1/hosts` (`hosts` + `discovered` fields) |
 | `POST /register` | `POST /api/v1/hosts` (create/update; see below) |
 | `POST /unregister` | `DELETE /api/v1/hosts/{mac}` |
 
@@ -54,7 +54,7 @@ Served on UDP `:69` (`--tftpPort`). TFTP itself identifies a host only by ARP on
 
 | Filename | Behavior |
 |----------|----------|
-| `booty.ipxe` | A stub that chains to `http://<serverIP>[:port]/booty.ipxe?mac=${mac}`. The per-host script (holding / assigned OS / menu) is rendered over HTTP. |
+| `booty.ipxe` | A stub that chains to `http://<serverIP>[:port]/booty.ipxe?mac=${mac}&arch=${buildarch}`. The per-host script (holding / assigned OS / menu) is rendered over HTTP. |
 | `menu/<entry>/boot.ipxe` | The boot-menu selection script, rendered for the host that ARP resolves from the source IP (no `?mac=` over TFTP). |
 | *(any other path)* | Served only if below cache/ or public/, or one of the iPXE bootfile names (undionly.kpxe, ipxe.efi, snponly.efi, ipxe-arm64.efi and the --proxyDHCPBootfile* values); everything else is "file not found". |
 
@@ -322,9 +322,9 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
-| `GET` | `/api/v1/hosts` | List known hosts, plus an `unknown` array of MACs booty has seen (TFTP or `/ignition.json`) but that are not registered — see [DATABASE.md](DATABASE.md#unknown-hosts). Optional `?approved=true\|false` filter (applies to `hosts` only). `unknown` is always an array, `[]` when empty, never `null`. | `{"hosts":[…],"unknown":[…]}` |
-| `POST` | `/api/v1/hosts` | Create or update a host (upsert, keyed by `mac`). Body: `{"mac","hostname"?,"os"?,"schematic"?}`. `os`, when present, must be an OS booty can boot — validated through the same `coreos` ↔ `fedora-coreos` bridge the boot path uses (`osFamily`, not the bare `ostype.Lookup` `POST /api/v1/targets` uses), so both spellings are accepted; `"unknown OS <os>"` `422` otherwise — it is optional, so an absent/empty value is accepted. `ignitionFile` is deliberately not an accepted field (huma rejects unknown properties with `422`): it was the only request-controlled input to the Ignition template reader, and omitting it removes that writer at the source. A read-modify-write on update: unsupplied fields (and any operator-set `ignitionFile`) are preserved from the existing row, never blanked. | `201` (create) / `200` (update) host JSON / `422` |
-| `POST` | `/api/v1/hosts/{mac}/approve` | Approve a host. If the host has a non-empty `os` field, also sets `boot_mode='assigned'` and `assigned_os=os` (plus `schematic` param for Talos), making the host immediately boot-ready once its target's versions are cached. **P4:** the body is now optional and extended to `{"configId"?, "roleIds"?[]}` — an empty/omitted body is byte-identical to pre-P4 approve; a present `configId`/`roleIds` is validated and bound in the same call (see the family-match rule below). | host JSON / `404` / `422` |
+| `GET` | `/api/v1/hosts` | List known hosts, plus a `discovered` array of machines that booted `/booty.ipxe` but are not registered (`mac`, `arch`, `ip`, `firstSeen`, `lastSeen`; times are RFC 3339) — see [DATABASE.md](DATABASE.md#discovered_hosts). `discoveredFull` is `true` when the table has reached its 1024-row cap: booty then refuses new discoveries until entries are dismissed or approved. Optional `?approved=true\|false` filter (applies to `hosts` only). `discovered` is always an array, `[]` when empty, never `null`. **Breaking:** `unknown` was removed in favour of `discovered`. | `{"hosts":[…],"discovered":[…],"discoveredFull":false}` |
+| `POST` | `/api/v1/hosts` | Create or update a host (upsert, keyed by `mac`). Body: `{"mac","hostname"?,"os"?,"schematic"?}`. `os`, when present, must be an OS booty can boot — validated through the same `coreos` ↔ `fedora-coreos` bridge the boot path uses (`osFamily`, not the bare `ostype.Lookup` `POST /api/v1/targets` uses), so both spellings are accepted; the stored name is the boot vocabulary (`fedora-coreos` is stored as `coreos`); `"unknown OS <os>"` `422` otherwise — it is optional, so an absent/empty value is accepted. `ignitionFile` is deliberately not an accepted field (huma rejects unknown properties with `422`): it was the only request-controlled input to the Ignition template reader, and omitting it removes that writer at the source. A read-modify-write on update: unsupplied fields (and any operator-set `ignitionFile`) are preserved from the existing row, never blanked. | `201` (create) / `200` (update) host JSON / `422` |
+| `POST` | `/api/v1/hosts/{mac}/approve` | Approve a host. If the host has a non-empty `os` field, also sets `boot_mode='assigned'` and `assigned_os=os` (plus `schematic` param for Talos), making the host immediately boot-ready once its target's versions are cached. **P4:** the body is now optional and extended to `{"configId"?, "roleIds"?[]}` — an empty/omitted body is byte-identical to pre-P4 approve; a present `configId`/`roleIds` is validated and bound in the same call (see the family-match rule below). A host whose `os` cannot be booted by assignment is refused with `422` `os <os> cannot be booted by assignment; use the boot menu`. | host JSON / `404` / `422` |
 | `POST` | `/api/v1/hosts/{mac}/bind` | **P4.** Rebind `{"configId"?, "roleIds"?[]}` on an already-approved host without changing its approval state. Same validation as `approve`'s binding. | host JSON / `404` / `422` |
 | `POST` | `/api/v1/hosts/{mac}/schematic` | **P5.** Bind a Talos schematic to a host. Body: `{"configId"?, "schematic"?}` — **exactly one** of the two, `422` otherwise. See "Schematic binding" below. | host JSON / `404` / `422` |
 | `POST` | `/api/v1/hosts/{mac}/revoke` | Revoke approval (host falls back to holding pattern). | `204` |
@@ -334,6 +334,8 @@ the boot-config precedence — see [CONFIGURATION.md](../CONFIGURATION.md)).
 | `POST` | `/api/v1/hosts/{mac}/report-token/rotate` | Bump the host's report-token generation; the old token is refused at once. `404` unknown host, `409` when `--nodeReports` is off, `422` bad MAC. | `200` `{"generation":n}` / `404` / `409` / `422` |
 | `PUT` | `/api/v1/hosts/{mac}` | **Wired but not implemented yet: `403` regardless of credential.** | `403` |
 | `DELETE` | `/api/v1/hosts/{mac}` | Delete a host. `RemoveMacAddress` is idempotent, so existence is checked first to give a truthful `404` for a MAC that was never registered rather than a `204`. | `204` / `404` |
+| `DELETE` | `/api/v1/discovered/{mac}` | Dismiss one discovered machine. Touches only `discovered_hosts`, never `hosts`. `404` when the MAC has no discovered row, `422` for a bad MAC. | `204` / `404` / `422` |
+| `DELETE` | `/api/v1/discovered` | Dismiss every discovered machine (frees the table when it is full). | `200` `{"deleted":n}` |
 
 > **`health` on list-hosts.** Each item of `GET /api/v1/hosts` carries an optional `health` summary
 > once the host has reported: `{running, kernel, firmware, receivedAt, failedUnitCount, vendor, product}`.

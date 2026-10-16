@@ -137,9 +137,11 @@ In priority order (milestones M0–M7 that deliver these: `docs/roadmap.md`):
   - New seams (the secrets store first) get an explicit patchbay wired from `cmd/`.
 - **Security invariants.**
   - Every state-changing endpoint lives under `/api/v1`, behind the auth gate.
-  - Boot-path endpoints (`/ignition.json`, `/machineconfig`, `/preseed`, `/booty.ipxe`,
-    `/menu/`, `/boot/*`, `/data/*`) are read-only. The one open route that writes is
-    `POST /node/report` (node health, per-host HMAC token plus an ARP match).
+  - Boot-path endpoints (`/ignition.json`, `/machineconfig`, `/preseed`, `/menu/`, `/boot/*`,
+    `/data/*`) are read-only. Two open routes write: `POST /node/report` (node health, per-host
+    HMAC token plus an ARP match), and `GET /booty.ipxe`, which records a machine it does not
+    know in `discovered_hosts`. New rows are limited per source IP and capped at 1024 with no
+    eviction, refreshes are debounced to one write per 20 s per MAC, and a row grants nothing.
     `TestOnlyAllowlistedRoutesAnswerWithoutACredential` (`pkg/http/open_routes_test.go`) pins
     the exact set of routes that answer without a credential.
   - Files under `dataDir` are served only from an explicit allowlist, on HTTP and TFTP alike.
@@ -148,8 +150,8 @@ In priority order (milestones M0–M7 that deliver these: `docs/roadmap.md`):
     the first 7 characters of a mistyped scalar, which full-string redaction cannot catch.
   - Any new unauthenticated endpoint carries its own credential and bounded, pre-auth rate limiting.
     Boot-path routes are the exception: firmware and installers have no credential to present, so
-    they stay open and read-only (`/booty.ipxe`, `/menu/`, `/boot/` have neither credential nor
-    rate limit).
+    they stay open (`/menu/` and `/boot/` have neither credential nor
+    rate limit; `/booty.ipxe` has no credential and limits only its discovery writes).
 
 ### How the principles apply to existing code
 
@@ -184,7 +186,7 @@ Each item has an open issue; close the issue when the item is gone and drop its 
 | `cmd/` | Cobra entrypoint. `main.go` registers flags into an `args` struct in `init()` and binds them all with one `viper.BindPFlags(flags)`, and holds the `run` startup sequence; `shutdown.go` the ordered shutdown; `token.go` and `convert_preseed.go` the `token` and `convert-preseed` subcommands. |
 | `pkg/config/` | Viper key constants, `LoadConfig` defaults/env bindings, path helpers, `--secretsKey` (age) loading. |
 | `pkg/auth/` | Shared API token store (`<dataDir>/api-token`, 0600) and the stateless signed session cookie. Leaf package. |
-| `pkg/db/` | SQLite (`modernc.org/sqlite`, pure Go) typed store. Migrations are embedded `migrations/NNNN_name.sql` files, applied in order against `PRAGMA user_version`; there are no down migrations. |
+| `pkg/db/` | SQLite (`modernc.org/sqlite`, pure Go) typed store, including discovered hosts. Migrations are embedded `migrations/NNNN_name.sql` files, applied in order against `PRAGMA user_version`; there are no down migrations. |
 | `pkg/hardware/` | Host model (`Host`), MAC normalisation (`NormalizeMAC`), get/write host helpers over `pkg/db`. |
 | `pkg/ostype/` | OS taxonomy: families (ignition, talos, debian, tool), OS registrations, version discovery, verification keys. |
 | `pkg/cache/` | Artifact cache: catalog (`catalog.yaml`), reconciler, download/verify, retention/eviction, Debian DVD handling. |
@@ -213,8 +215,8 @@ Each item has an open issue; close the issue when the item is gone and drop its 
    fallback.
 3. The OS kernel/initrd come from `/data/cache/...` over HTTP. The config comes from
    `/ignition.json`, `/machineconfig` or `/preseed`, identified by `?mac=` or ARP.
-4. Unknown or unapproved MACs get the holding script from `/booty.ipxe` and appear as unknown
-   hosts until approved. The reboot-loop config is `/ignition.json`'s answer for a host it cannot
+4. Unknown or unapproved MACs get the holding script from `/booty.ipxe` and are recorded
+   as discovered machines (`discovered_hosts`) and appear under Pending until approved. The reboot-loop config is `/ignition.json`'s answer for a host it cannot
    identify, not part of the iPXE path.
 
 ## Conventions
