@@ -35,7 +35,7 @@ func URLHost() string {
 // StubScript is the whole of booty.ipxe over TFTP: it hands the client to the
 // HTTP renderer, passing the MAC iPXE reports so no ARP is needed.
 func StubScript(urlHost string) string {
-	return "#!ipxe\nchain http://" + urlHost + "/booty.ipxe?mac=${mac} || shell\n"
+	return "#!ipxe\nchain http://" + urlHost + ChainPath + " || shell\n"
 }
 
 // RenderBootScript renders the per-host booty.ipxe script and returns it with

@@ -32,7 +32,7 @@ func init() {
 	PXEConfig["holding.ipxe"] = `#!ipxe
 	echo Booty: this host is not yet approved. Waiting...
 	sleep 30
-	chain http://[[server]]/booty.ipxe?mac=${mac} || shell`
+	chain http://[[server]]` + ChainPath + ` || shell`
 
 	// Unlike the other OS templates, the boot URL is substituted directly into
 	// the kernel/initrd lines rather than via an iPXE "set BASEURL"/${BASEURL}

@@ -199,6 +199,6 @@ func renderMenu(inWindow, archived []cache.CacheEntry, urlHost string) string {
 	}
 
 	b.WriteString(":retry\n")
-	b.WriteString("chain http://" + urlHost + "/booty.ipxe?mac=${mac} || shell\n")
+	b.WriteString("chain http://" + urlHost + ChainPath + " || shell\n")
 	return b.String()
 }
