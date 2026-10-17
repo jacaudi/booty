@@ -2,9 +2,7 @@ package http
 
 import (
 	"bytes"
-	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"text/template"
 
@@ -31,11 +29,15 @@ func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
 // injected.
 func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		slog.Info("machineconfig request", "uri", r.RequestURI)
+		slog.InfoContext(r.Context(), "machineconfig request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
 
-		macAddress := machineConfigMAC(r, arp)
-		hostname := queryHostname(r, macAddress)
-		host := machineConfigHost(macAddress)
+		host := identifyHostWith(r, arp)
+		// Log the MAC the host was identified by: ARP finds hosts that send no ?mac=.
+		logMAC := r.URL.Query().Get("mac")
+		if host != nil {
+			logMAC = host.MAC
+		}
+		hostname := queryHostname(r, logMAC)
 
 		// Approval is the gate (#158). An unapproved cluster member gets a 403,
 		// never its frozen config and never the generic file config below, which
@@ -77,37 +79,6 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 		}
 		serveFileMachineConfig(w, r, host, hostname)
 	}
-}
-
-// machineConfigMAC is the MAC the request names: ?mac= when present, else what
-// arp resolves for the client's address, else "".
-func machineConfigMAC(r *http.Request, arp arpFunc) string {
-	if mac := r.URL.Query().Get("mac"); mac != "" {
-		return mac
-	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		slog.WarnContext(r.Context(), "error splitting user ip; not IP:port", "remote", r.RemoteAddr)
-	}
-	hwAddr, err := arp(net.ParseIP(ip))
-	if err != nil {
-		slog.WarnContext(r.Context(), "error with ARP request", "err", err)
-		return ""
-	}
-	return hwAddr.String()
-}
-
-// machineConfigHost loads the host for macAddress, or nil when the MAC is
-// empty, unknown or the lookup fails (a failure is logged, not fatal).
-func machineConfigHost(macAddress string) *hardware.Host {
-	if macAddress == "" {
-		return nil
-	}
-	host, err := hardware.GetMacAddress(macAddress)
-	if err != nil && !errors.Is(err, hardware.ErrNotFound) {
-		slog.Warn("error looking up host", "mac", macAddress, "err", err)
-	}
-	return host
 }
 
 // serveBoundMachineConfig serves the DB-resolved config bound to host (rungs

@@ -84,7 +84,7 @@ func TestIgnitionFailureNeverLogsTheJoinString(t *testing.T) {
 				t.Cleanup(func() { slog.SetDefault(orig) })
 
 				rr := httptest.NewRecorder()
-				ignitionHandler(s, nil)(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ignition.json?mac="+mac, http.NoBody))
+				ignitionHandler(s, nil, arpLookup)(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ignition.json?mac="+mac, http.NoBody))
 
 				if rr.Code != tc.wantStatus {
 					t.Fatalf("status = %d, want %d: %s", rr.Code, tc.wantStatus, rr.Body.String())

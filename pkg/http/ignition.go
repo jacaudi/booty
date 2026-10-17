@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"text/template"
@@ -15,7 +14,6 @@ import (
 	butaneConfig "github.com/coreos/butane/config"
 	butaneCommon "github.com/coreos/butane/config/common"
 	coreostype "github.com/coreos/ignition/v2/config/v3_4/types"
-	"github.com/j-keck/arping"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
@@ -27,72 +25,27 @@ import (
 // DB-resolved config (precedence rungs 1–2) can be tried before falling
 // through to the existing file-based path (rungs 3–4, unchanged).
 func handleIgnitionRequest(store *db.Store) http.HandlerFunc {
-	return ignitionHandler(store, nil)
+	return ignitionHandler(store, nil, arpLookup)
 }
 
 // ignitionHandler is handleIgnitionRequest with the optional node health
-// report unit (n nil = feature off, output unchanged).
-func ignitionHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
+// report unit (n nil = feature off, output unchanged) and the ARP lookup
+// injected. A host it will not serve gets the reboot config, so it PXE-boots
+// again until it can be served.
+func ignitionHandler(store *db.Store, n *NodeReports, arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// If we don't identify the host, tell FlatCar to reboot
-		// Reboot the host till we identify it
-		// Cool so, we want to have logic based around a recognized MAC address
-		// Therefore what we need to do is collect the MAC address
-
-		slog.Info("ignition request", "uri", r.RequestURI)
-
-		macAddress := ignitionRequestMAC(r)
-		slog.Debug("using mac address", "mac", macAddress)
-		host := configHost(ignitionHost(macAddress))
-
+		slog.InfoContext(r.Context(), "ignition request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
+		host := configHost(identifyHostWith(r, arp))
+		if host == nil {
+			serveRebootIgnition(w)
+			return
+		}
 		// DB-resolved config (precedence rungs 1–2) takes priority over the file.
-		if host != nil && serveBoundIgnition(w, r, n, store, host) {
+		if serveBoundIgnition(w, r, n, store, host) {
 			return
 		}
 		serveFileIgnition(w, r, n, store, host)
 	}
-}
-
-// ignitionRequestMAC is the MAC the request names: ?mac= when present, else
-// what ARP resolves for the client's address, else "".
-func ignitionRequestMAC(r *http.Request) string {
-	if mac := r.URL.Query().Get("mac"); mac != "" {
-		slog.DebugContext(r.Context(), "mac address url override", "mac", mac)
-		return mac
-	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		slog.WarnContext(r.Context(), "error splitting user ip; not IP:port", "remote", r.RemoteAddr)
-	}
-	remoteIP := net.ParseIP(ip)
-
-	hwAddr, _, err := arping.Ping(remoteIP)
-	if err != nil {
-		slog.WarnContext(r.Context(), "error with ARP request", "err", err)
-		return ""
-	}
-	macAddress := hwAddr.String()
-	slog.DebugContext(r.Context(), "mac address from ARP", "mac", macAddress)
-	return macAddress
-}
-
-// ignitionHost loads the host for macAddress, or nil. An empty MAC means we
-// never identified the host (no ?mac= and ARP found nothing). That is the
-// expected unidentified-host case, not an error: skip the lookup so the
-// caller serves the reboot config without logging a spurious warning. A
-// non-empty but malformed MAC still flows through GetMacAddress and a genuine
-// lookup error is worth a Warn.
-func ignitionHost(macAddress string) *hardware.Host {
-	if macAddress == "" {
-		return nil
-	}
-	host, err := hardware.GetMacAddress(macAddress)
-	if err != nil && !errors.Is(err, hardware.ErrNotFound) {
-		slog.Warn("error looking up host", "mac", macAddress, "err", err)
-		// Treat unexpected errors the same as a miss — fall through to the
-		// reboot-config path so the machine doesn't boot loop on a bad DB.
-	}
-	return host
 }
 
 // serveBoundIgnition serves the DB-resolved config bound to host and reports
@@ -125,8 +78,27 @@ ExecStart=reboot
 WantedBy=default.target
 `
 
-// serveFileIgnition serves the file-based config (precedence rungs 3–4), or
-// the reboot config when host is nil.
+// serveRebootIgnition answers a host booty will not serve with an Ignition
+// config whose only unit reboots it, so it PXE-boots again. It reads no
+// template: a missing or broken --ignitionFile cannot turn it into a 5xx,
+// which Ignition retries forever instead of rebooting (design R4).
+func serveRebootIgnition(w http.ResponseWriter) {
+	coreosConfig := coreostype.Config{}
+	coreosConfig.Ignition.Version = "3.4.0"
+	coreosConfig.Systemd.Units = append(coreosConfig.Systemd.Units, coreostype.Unit{
+		Name:     "booty-reboot.service",
+		Enabled:  new(true),
+		Contents: new(rebootUnitContents),
+	})
+	dataOut, err := json.Marshal(&coreosConfig)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to marshal reboot config", err)
+		return
+	}
+	writeBody(w, dataOut)
+}
+
+// serveFileIgnition serves the file-based config (precedence rungs 3–4) for an approved host.
 func serveFileIgnition(w http.ResponseWriter, r *http.Request, n *NodeReports, store *db.Store, host *hardware.Host) {
 	var tpl bytes.Buffer
 
@@ -137,14 +109,12 @@ func serveFileIgnition(w http.ResponseWriter, r *http.Request, n *NodeReports, s
 	}{
 		JoinString: viper.GetString(config.JoinString),
 		ServerIP:   fmt.Sprintf("%s:%s", viper.GetString(config.ServerIP), viper.GetString(config.ServerHttpPort)),
+		Hostname:   hardware.StripControl(host.Hostname),
 	}
 
 	ignitionFile := viper.GetString(config.IgnitionFile)
-	if host != nil {
-		if host.IgnitionFile != "" {
-			ignitionFile = host.IgnitionFile
-		}
-		templateData.Hostname = hardware.StripControl(host.Hostname)
+	if host.IgnitionFile != "" {
+		ignitionFile = host.IgnitionFile
 	}
 	ignitionPath, err := resolveWithinDataDir(ignitionFile)
 	if err != nil {
@@ -163,23 +133,6 @@ func serveFileIgnition(w http.ResponseWriter, r *http.Request, n *NodeReports, s
 
 	if err = t.Execute(&tpl, templateData); err != nil {
 		writeError(w, http.StatusInternalServerError, "ignition render failed", err)
-		return
-	}
-
-	if host == nil {
-		coreosConfig := coreostype.Config{}
-		coreosConfig.Ignition.Version = "3.4.0"
-		coreosConfig.Systemd.Units = append(coreosConfig.Systemd.Units, coreostype.Unit{
-			Name:     "booty-reboot.service",
-			Enabled:  new(true),
-			Contents: new(rebootUnitContents),
-		})
-		dataOut, err := json.Marshal(&coreosConfig)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to marshal reboot config", err)
-			return
-		}
-		writeBody(w, dataOut)
 		return
 	}
 

@@ -38,7 +38,7 @@ func preseedHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
 // preseedHandlerWith is preseedHandler with the ARP lookup injected.
 func preseedHandlerWith(store *db.Store, n *NodeReports, arp arpFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		slog.Info("preseed request", "uri", r.RequestURI)
+		slog.InfoContext(r.Context(), "preseed request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
 		host := configHost(identifyHostWith(r, arp))
 		if host == nil {
 			// Refused before any template is read, so nothing in the server-default
@@ -183,12 +183,16 @@ func preseedVars(store *db.Store, host *hardware.Host) TemplateVars {
 }
 
 // identifyHostWith resolves the requesting host by ?mac= or ARP (nil when
-// unidentified), mirroring the ignition/machineconfig identification block. An
-// empty ?mac= counts as absent; a non-empty one is resolved by resolveBootHost
-// (normalised, then looked up). Any error gives nil.
+// unidentified). An empty ?mac= counts as absent; a non-empty one is resolved
+// by resolveBootHost (normalised, then looked up). Any error gives nil. A store
+// failure for a well-formed MAC is logged; a ?mac= that does not parse is not,
+// because that error quotes the raw, client-controlled value.
 func identifyHostWith(r *http.Request, arp arpFunc) *hardware.Host {
-	h, _, err := resolveBootHost(r, arp)
+	h, mac, err := resolveBootHost(r, arp)
 	if err != nil {
+		if mac != "" && !errors.Is(err, hardware.ErrNotFound) {
+			slog.WarnContext(r.Context(), "error looking up host", "mac", mac, "err", err)
+		}
 		return nil
 	}
 	return h
