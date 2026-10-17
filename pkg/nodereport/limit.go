@@ -26,12 +26,22 @@ type limitEntry struct {
 	count int
 }
 
-// MustNewLimiter allows limit events per key per window and remembers at most
-// capacity keys. It panics unless both are at least 1 (callers pass
-// constants). now supplies the clock.
+// MustNewLimiter is NewLimiter for callers that pass constants: it panics
+// where NewLimiter returns an error.
 func MustNewLimiter(limit int, window time.Duration, capacity int, now func() time.Time) *Limiter {
+	l, err := NewLimiter(limit, window, capacity, now)
+	if err != nil {
+		panic(err)
+	}
+	return l
+}
+
+// NewLimiter allows limit events per key per window and remembers at most
+// capacity keys. It returns an error unless both are at least 1. now supplies
+// the clock.
+func NewLimiter(limit int, window time.Duration, capacity int, now func() time.Time) (*Limiter, error) {
 	if limit < 1 || capacity < 1 {
-		panic(fmt.Sprintf("nodereport: MustNewLimiter needs limit >= 1 and capacity >= 1, got %d and %d", limit, capacity))
+		return nil, fmt.Errorf("nodereport: a limiter needs limit >= 1 and capacity >= 1, got %d and %d", limit, capacity)
 	}
 	return &Limiter{
 		max:      limit,
@@ -40,7 +50,7 @@ func MustNewLimiter(limit int, window time.Duration, capacity int, now func() ti
 		now:      now,
 		order:    list.New(),
 		entries:  make(map[string]*list.Element),
-	}
+	}, nil
 }
 
 // Allow records an event for key and reports whether it is within budget.
