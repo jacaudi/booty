@@ -58,7 +58,7 @@ func TestIgnitionOutputsStable(t *testing.T) {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ignition", http.NoBody)
 		req.RemoteAddr = "192.0.2.1:12345"
 		rec := httptest.NewRecorder()
-		handleIgnitionRequest(ignitionTestStore(t))(rec, req)
+		ignitionHandler(ignitionTestStore(t), nil, arpLookup, allowProof{})(rec, req)
 		compareIgnitionGolden(t, "reboot.json", rec.Body.Bytes())
 	})
 
@@ -98,7 +98,7 @@ func TestRebootConfigIsValidIgnition(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ignition", http.NoBody)
 	req.RemoteAddr = "192.0.2.1:12345"
 	rec := httptest.NewRecorder()
-	handleIgnitionRequest(ignitionTestStore(t))(rec, req)
+	ignitionHandler(ignitionTestStore(t), nil, arpLookup, allowProof{})(rec, req)
 
 	_, rep, err := ignitioncfg.Parse(rec.Body.Bytes())
 	if rep.IsFatal() {

@@ -62,7 +62,7 @@ func TestPreseedFailureNeverLogsTheJoinString(t *testing.T) {
 			t.Cleanup(func() { slog.SetDefault(orig) })
 
 			rr := httptest.NewRecorder()
-			handlePreseedRequest(s)(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/preseed?mac="+mac, http.NoBody))
+			preseedHandler(s, nil, arpLookup, allowProof{})(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/preseed?mac="+mac, http.NoBody))
 
 			if rr.Code != http.StatusInternalServerError {
 				t.Fatalf("status = %d, want %d: %s", rr.Code, http.StatusInternalServerError, rr.Body.String())

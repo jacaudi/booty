@@ -2,6 +2,8 @@ package http
 
 import (
 	"bytes"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/jeefy/booty/pkg/bootticket"
@@ -16,4 +18,20 @@ func testTicketer(t *testing.T) *bootticket.Ticketer {
 		t.Fatal(err)
 	}
 	return tk
+}
+
+// allowProof proves every request: tests that exercise rendering, not identity,
+// keep their behaviour.
+type allowProof struct{}
+
+func (allowProof) Prove(*http.Request, string, string) error { return nil }
+
+// withTicket appends a valid boot ticket for mac and family to path.
+func withTicket(t *testing.T, tk *bootticket.Ticketer, path, mac, family string) string {
+	t.Helper()
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + bootticket.QueryKey + "=" + tk.Issue(mac, family)
 }

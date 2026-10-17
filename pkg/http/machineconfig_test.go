@@ -64,7 +64,7 @@ func TestMachineConfig_RendersTemplate(t *testing.T) {
 	rec := httptest.NewRecorder()
 	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(store)(rec, req)
+	machineConfigHandler(store, arpLookup, allowProof{})(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
@@ -89,7 +89,7 @@ func TestMachineConfig_MissingTemplateIs500(t *testing.T) {
 	rec := httptest.NewRecorder()
 	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(store)(rec, req)
+	machineConfigHandler(store, arpLookup, allowProof{})(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
@@ -132,7 +132,7 @@ func TestMachineConfig_RendersHostFields(t *testing.T) {
 	rec := httptest.NewRecorder()
 	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(store)(rec, req)
+	machineConfigHandler(store, arpLookup, allowProof{})(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
@@ -175,7 +175,7 @@ func TestMachineConfig_ApprovedHostWithoutOverridesRendersDefault(t *testing.T) 
 	rec := httptest.NewRecorder()
 	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(store)(rec, req)
+	machineConfigHandler(store, arpLookup, allowProof{})(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
@@ -225,7 +225,7 @@ func TestMachineConfig_RegisteredBlankHostnameUsesHostnameQuery(t *testing.T) {
 	rec := httptest.NewRecorder()
 	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(store)(rec, req)
+	machineConfigHandler(store, arpLookup, allowProof{})(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%q", rec.Code, rec.Body.String())
@@ -256,7 +256,7 @@ func TestMachineConfig_ExecuteFailureIs500(t *testing.T) {
 	rec := httptest.NewRecorder()
 	store := machineConfigTestStore(t)
 
-	handleMachineConfigRequest(store)(rec, req)
+	machineConfigHandler(store, arpLookup, allowProof{})(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
@@ -291,7 +291,7 @@ func TestMachineConfig_ValidatesHostnameQuery(t *testing.T) {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?"+tc.query, http.NoBody)
 		req.RemoteAddr = "192.0.2.1:12345"
 		rec := httptest.NewRecorder()
-		machineConfigHandler(store, failingARP)(rec, req)
+		machineConfigHandler(store, failingARP, allowProof{})(rec, req)
 		if rec.Code != tc.want {
 			t.Errorf("%s: status = %d, want %d; body=%q", tc.query, rec.Code, tc.want, rec.Body.String())
 		}
@@ -340,7 +340,7 @@ func TestMachineConfig_InvalidHostnameQueryIgnoredForKnownHost(t *testing.T) {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?mac="+tc.mac+"&hostname=bad_name", http.NoBody)
 		req.RemoteAddr = "192.0.2.1:12345"
 		rec := httptest.NewRecorder()
-		machineConfigHandler(store, failingARP)(rec, req)
+		machineConfigHandler(store, failingARP, allowProof{})(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Errorf("%s: status = %d, want 200; body=%q", tc.mac, rec.Code, rec.Body.String())
 			continue

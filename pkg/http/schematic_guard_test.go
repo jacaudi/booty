@@ -73,7 +73,7 @@ func TestMachineConfigFallsThroughForSchematicBoundHost(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil)
-	handleMachineConfigRequest(s)(rr, req)
+	machineConfigHandler(s, arpLookup, allowProof{})(rr, req)
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "/dev/sda") {
 		t.Fatalf("schematic-bound host must fall through to the server-default file: %d %s", rr.Code, rr.Body.String())
 	}

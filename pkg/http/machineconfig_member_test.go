@@ -73,7 +73,7 @@ func TestMemberConfigRequiresMatchingARP(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?mac="+mac, http.NoBody)
 			req.RemoteAddr = c.remoteAddr
 			rr := httptest.NewRecorder()
-			machineConfigHandler(s, c.arp)(rr, req)
+			machineConfigHandler(s, c.arp, allowProof{})(rr, req)
 			if rr.Code != c.wantCode {
 				t.Fatalf("code = %d, want %d; body %q", rr.Code, c.wantCode, rr.Body.String())
 			}
@@ -98,7 +98,7 @@ func TestNonMemberIgnoresARP(t *testing.T) {
 	approveHost(t, mac)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/machineconfig?mac="+mac, http.NoBody)
 	rr := httptest.NewRecorder()
-	machineConfigHandler(s, failingARP)(rr, req)
+	machineConfigHandler(s, failingARP, allowProof{})(rr, req)
 	if rr.Code != 200 {
 		t.Fatalf("non-member must not need ARP: %d %q", rr.Code, rr.Body.String())
 	}

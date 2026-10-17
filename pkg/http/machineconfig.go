@@ -10,24 +10,19 @@ import (
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
 
-// handleMachineConfigRequest serves a Talos machineconfig rendered from the
+// machineConfigHandler serves a Talos machineconfig rendered from the
 // template at <dataDir>/<talosConfigFile>. UUID/Serial come from the query
 // string per request (not persisted in PR6); host fields come from the DB when
-// the MAC identifies a host. A caller with no approved host gets a 404 (#162),
-// and genuine failures return 500 + short plaintext.
-// It is returned as a closure over store so a DB-resolved config (precedence
-// rungs 1–2) can be tried before falling through to the existing file-based
-// path (rungs 3–4, reached only for an approved host).
-func handleMachineConfigRequest(store *db.Store) http.HandlerFunc {
-	return machineConfigHandler(store, arpLookup)
-}
-
-// machineConfigHandler is handleMachineConfigRequest with the ARP lookup
-// injected.
-func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
+// the MAC identifies a host. A caller with no approved host, or without a
+// valid boot ticket for it (#88), gets a 404 (#162), and genuine failures
+// return 500 + short plaintext. A DB-resolved config (precedence rungs 1–2) is
+// tried before the file-based path (rungs 3–4, reached only for an approved
+// host).
+func machineConfigHandler(store *db.Store, arp arpFunc, proof hostProof) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.InfoContext(r.Context(), "machineconfig request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
 
@@ -49,9 +44,11 @@ func machineConfigHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 			writeError(w, http.StatusForbidden, "cluster member config requires an approved host", nil)
 			return
 		}
+		// A request must also prove it is this host's own boot (#88); without a
+		// valid boot ticket it gets the same 404 as a caller with no host.
 		host = configHost(host)
-		if host == nil {
-			writeError(w, http.StatusNotFound, "no approved host for this request", nil)
+		if host == nil || !proven(r, proof, host, ostype.FamilyTalos) {
+			writeError(w, http.StatusNotFound, noApprovedHostBody, nil)
 			return
 		}
 

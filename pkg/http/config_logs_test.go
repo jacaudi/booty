@@ -32,7 +32,7 @@ func TestConfigLogsNeverCarryTicket(t *testing.T) {
 				viper.Set(config.TalosConfigFile, "config/machineconfig.yaml")
 				writeFile(t, "config/machineconfig.yaml", "machine: {}\n")
 			},
-			func(s *db.Store) http.HandlerFunc { return machineConfigHandler(s, failingARP) },
+			func(s *db.Store) http.HandlerFunc { return machineConfigHandler(s, failingARP, allowProof{}) },
 		},
 		{
 			"/preseed", "debian",
@@ -41,7 +41,7 @@ func TestConfigLogsNeverCarryTicket(t *testing.T) {
 				viper.Set(config.PreseedFile, "config/preseed.cfg")
 				writeFile(t, "config/preseed.cfg", "d-i debian-installer/locale string en_US.UTF-8\n")
 			},
-			func(s *db.Store) http.HandlerFunc { return preseedHandlerWith(s, nil, failingARP) },
+			func(s *db.Store) http.HandlerFunc { return preseedHandler(s, nil, failingARP, allowProof{}) },
 		},
 		{
 			"/ignition.json", "flatcar",
@@ -50,7 +50,7 @@ func TestConfigLogsNeverCarryTicket(t *testing.T) {
 				viper.Set(config.IgnitionFile, "config/ignition.yaml")
 				writeFile(t, "config/ignition.yaml", "variant: fcos\nversion: 1.5.0\n")
 			},
-			func(s *db.Store) http.HandlerFunc { return ignitionHandler(s, nil, arpLookup) },
+			func(s *db.Store) http.HandlerFunc { return ignitionHandler(s, nil, arpLookup, allowProof{}) },
 		},
 	}
 	for _, rt := range routes {

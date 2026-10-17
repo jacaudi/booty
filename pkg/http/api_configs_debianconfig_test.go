@@ -89,7 +89,7 @@ func TestDebianConfigEndToEndServe(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/preseed?mac="+mac, nil)
-	handlePreseedRequest(deps.Store)(rr, req)
+	preseedHandler(deps.Store, nil, arpLookup, allowProof{})(rr, req)
 	want := "d-i debian-installer/locale string en_US.UTF-8\n" +
 		"d-i netcfg/get_hostname string deb-node\n" +
 		"d-i pkgsel/include string openssh-server\n"
