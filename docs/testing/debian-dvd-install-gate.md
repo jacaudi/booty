@@ -254,6 +254,19 @@ host-only bridged network — confirm Wi-Fi/Ethernet is off before booting, and
 treat any successful reach to a non-`10.0.2.2` address during the run as a
 gate failure (see PASS/FAIL below).
 
+**Get the preseed URL from booty.** `/preseed` refuses a request without a valid boot ticket for
+the host (#88), so the `-append` line below must use the URL booty rendered, not a hand-written
+one. Fetch the host's boot script, take its `preseed/url=` value, and substitute the MAC for the
+literal `${mac}` (iPXE would expand it):
+
+```bash
+PRESEED_URL=$(curl -sS 'http://localhost:8088/booty.ipxe?mac=52:54:00:12:34:56' \
+  | grep -o 'preseed/url=[^ ]*' | cut -d= -f2- | sed 's/\${mac}/52:54:00:12:34:56/')
+echo "$PRESEED_URL"
+```
+
+The ticket in it is valid for 1 hour; fetch a fresh one if the boot starts later.
+
 Boot the installer directly against the extracted tree:
 
 ```bash
@@ -261,7 +274,7 @@ qemu-system-x86_64 \
   -accel tcg -m 2048 -smp 2 \
   -kernel /tmp/booty-debian-dvd-lab/cache/debian/12/amd64/<version>/install.amd64/linux \
   -initrd /tmp/booty-debian-dvd-lab/cache/debian/12/amd64/<version>/install.amd64/initrd.gz \
-  -append 'auto=true priority=critical preseed/url=http://10.0.2.2:8088/preseed?mac=52:54:00:12:34:56 vga=788 --- quiet' \
+  -append "auto=true priority=critical preseed/url=$PRESEED_URL vga=788 --- quiet" \
   -drive file=/tmp/booty-debian-dvd-lab-disk.qcow2,format=qcow2,if=virtio \
   -no-reboot \
   -serial file:/tmp/booty-debian-dvd-lab-serial.log \
@@ -307,7 +320,8 @@ Notes on the flags, from prior netboot-lab runs:
    fetched and confirm the three directives are present and point at the
    local tree, not a real Debian mirror hostname:
    ```bash
-   curl -sS 'http://localhost:8088/preseed?mac=52:54:00:12:34:56'
+   # 10.0.2.2 exists only inside QEMU's user-mode network; this check runs on the host.
+   curl -sS "$(printf '%s' "$PRESEED_URL" | sed 's#10.0.2.2#localhost#')"
    ```
    Expect (paths per your actual `<version>`):
    ```

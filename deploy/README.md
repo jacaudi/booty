@@ -114,6 +114,12 @@ it once, and starts enforcing the gate:
 4. If anything still calls `POST /register`, migrate it to `POST /api/v1/hosts` (same fields, plus the
    token header) — the old route is gone.
 
+**Config routes and spoofed MACs.** `/ignition.json`, `/machineconfig` and `/preseed` serve a
+host's config only to a request carrying the short-lived boot ticket booty put in that host's boot
+script, so a copied or hand-written config URL gets nothing. A LAN client that *deliberately* asks
+`/booty.ipxe?mac=<an approved host's MAC>` still receives a ticket, and with it that host's config,
+join string included (#166).
+
 **Do not expose booty to the public internet or an untrusted network.** Token auth narrows who can act
 without a credential; it does not make booty safe to expose past your LAN boundary. Run it only on a
 trusted home/lab LAN, and keep it off any network segment you don't control.
