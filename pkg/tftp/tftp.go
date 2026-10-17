@@ -187,12 +187,17 @@ func (s *Server) Addr() net.Addr { return s.conn.LocalAddr() }
 // Shutdown stops serving, closes the socket and the root, and returns the
 // errors from closing them. It is idempotent: only the first call closes.
 // In single-port mode the library's Shutdown only cancels and sets a read
-// deadline, so the socket is closed here.
+// deadline, and its serve loop then closes the socket itself, racing the close
+// here; a socket already closed by that loop is not an error.
 func (s *Server) Shutdown() error {
 	var err error
 	s.once.Do(func() {
 		s.srv.Shutdown()
-		err = errors.Join(s.conn.Close(), s.root.Close())
+		connErr := s.conn.Close()
+		if errors.Is(connErr, net.ErrClosed) {
+			connErr = nil
+		}
+		err = errors.Join(connErr, s.root.Close())
 	})
 	return err
 }

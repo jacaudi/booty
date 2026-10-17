@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/pin/tftp/v3"
 	"github.com/spf13/viper"
@@ -140,6 +141,35 @@ func TestShutdownIsIdempotent(t *testing.T) {
 			t.Errorf("Shutdown call %d: %v", i+1, err)
 		}
 	}
+}
+
+// TestShutdownAfterServeLoopClosedConn: in single-port mode the library's
+// Shutdown returns before its serve loop closes the listener itself, so the
+// loop can close it before Server.Shutdown does. This forces that order (seen
+// on CI as "use of closed network connection") and wants Shutdown to succeed.
+func TestShutdownAfterServeLoopClosedConn(t *testing.T) {
+	s, err := Start(Config{Port: 0, DataDir: t.TempDir(), Tickets: testTickets(t)}, make(chan error, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.srv.Shutdown()
+	if !closedWithin(s.conn, 5*time.Second) {
+		t.Fatal("the serve loop never closed the listener")
+	}
+	if err := s.Shutdown(); err != nil {
+		t.Errorf("Shutdown after the serve loop closed the listener: %v", err)
+	}
+}
+
+// closedWithin reports whether conn is closed within d. Probing with a read
+// deadline of now also wakes a read blocked on it, as the library's Shutdown does.
+func closedWithin(conn net.PacketConn, d time.Duration) bool {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if errors.Is(conn.SetReadDeadline(time.Now()), net.ErrClosed) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestServerPrefersEmbeddedBootFiles(t *testing.T) {
