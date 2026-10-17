@@ -98,3 +98,23 @@ func TestMustNewLimiterPanicsOnBadBounds(t *testing.T) {
 		})
 	}
 }
+
+// TestNewLimiterRejectsBadBounds: the error-returning form refuses the bounds
+// MustNewLimiter panics on, and accepts the smallest valid ones.
+func TestNewLimiterRejectsBadBounds(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		limit, capacity int
+	}{
+		{"zero capacity", 1, 0}, {"negative capacity", 1, -1}, {"zero limit", 0, 1}, {"negative limit", -1, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if l, err := NewLimiter(tt.limit, time.Minute, tt.capacity, time.Now); err == nil || l != nil {
+				t.Errorf("NewLimiter(%d, _, %d) = %v, %v; want nil and an error", tt.limit, tt.capacity, l, err)
+			}
+		})
+	}
+	if l, err := NewLimiter(1, time.Minute, 1, time.Now); err != nil || l == nil {
+		t.Errorf("NewLimiter(1, _, 1) = %v, %v; want a limiter", l, err)
+	}
+}
