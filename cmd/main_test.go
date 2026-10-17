@@ -398,6 +398,9 @@ func TestRunFailsOnBadBootTicketKey(t *testing.T) {
 	if !errors.Is(err, syscall.EISDIR) {
 		t.Fatalf("Execute() error = %v, want one wrapping EISDIR from the boot-ticket key load", err)
 	}
+	if !strings.Contains(err.Error(), "boot tickets:") { //nolint:tricorder // errstrcmp: the "boot tickets:" prefix is the operator-facing contract under test (design R5)
+		t.Fatalf("Execute() error = %v, want the %q attribution", err, "boot tickets:")
+	}
 }
 
 // resetCmd restores the process-global Cmd (flags, args, writers) and the

@@ -117,7 +117,9 @@ func TestPreseedDefaultRefusedWithoutApprovedHost(t *testing.T) {
 
 // TestConfigDefaultByARPFallback: with no ?mac=, the host the source IP
 // ARP-resolves to decides the answer. An approved host gets the rendered server
-// default; an unapproved or unregistered one gets the 404.
+// default; an unapproved or unregistered one gets the 404 (the boot-ticket
+// proof is stubbed by allowProof; the ticket rule is pinned in
+// config_ticket_test.go).
 func TestConfigDefaultByARPFallback(t *testing.T) {
 	const sentinel = "SENTINEL-JOIN"
 	const mac = "aa:bb:cc:dd:ee:b3"
