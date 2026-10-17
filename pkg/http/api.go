@@ -9,6 +9,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/jeefy/booty/pkg/auth"
+	"github.com/jeefy/booty/pkg/bootticket"
 	"github.com/jeefy/booty/pkg/db"
 )
 
@@ -28,6 +29,9 @@ type APIDeps struct {
 	}
 	// NodeReports enables POST /node/report; nil leaves the feature off (404).
 	NodeReports *NodeReports
+	// Tickets issues the boot ticket in every OS boot script and checks it on
+	// the config routes (#88). StartHTTP refuses a nil one.
+	Tickets *bootticket.Ticketer
 	// now supplies the clock for the wake-host limiter; nil means time.Now.
 	// Tests set it to step past the limiter window.
 	now func() time.Time

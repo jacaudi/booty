@@ -132,7 +132,7 @@ func bootTokensFor(osToLoad, segment, arch, version, urlHost string) map[string]
 // "tool" family.
 func isToolOS(cacheName string) bool {
 	o, ok := ostype.Lookup(cache.CacheNameToCanonical(cacheName))
-	return ok && o.Family().Name == "tool"
+	return ok && o.Family().Name == ostype.FamilyTool
 }
 
 // debianBaseURL is the single source of the Debian boot base URL: the cached
@@ -270,13 +270,18 @@ func bootTokens(osToLoad, urlHost string, host *hardware.Host) map[string]string
 // assignedScript renders the boot script for an approved, assignment-mode host.
 // A tool OS is refused: tools have no per-host config and are reached through
 // menu mode. Serving the holding script is the safe fallback — the alternative
-// is a script with unsubstituted tokens, which design §6.4 forbids.
-func assignedScript(host *hardware.Host, urlHost string) string {
+// is a script with unsubstituted tokens, which design §6.4 forbids. The script's
+// config URL carries issuer's ticket for host.MAC and the OS's family.
+func assignedScript(host *hardware.Host, urlHost string, issuer TicketIssuer) string {
 	_, osToLoad := bootDispatch(host)
 	if isToolOS(osToLoad) {
 		slog.Warn("TFTP: refusing to boot a tool OS via assignment; use boot_mode=menu",
 			"os", osToLoad, "mac", host.MAC)
 		return holdingScript(urlHost)
 	}
-	return applyTokens(PXEConfig[osToLoad+".ipxe"], bootTokens(osToLoad, urlHost, host))
+	tokens := bootTokens(osToLoad, urlHost, host)
+	// Always set, "" included: applyTokens leaves a missing key as a literal
+	// [[ticket]] in the served script.
+	tokens["[[ticket]]"] = ticketFor(issuer, host.MAC, osToLoad)
+	return applyTokens(PXEConfig[osToLoad+".ipxe"], tokens)
 }

@@ -62,7 +62,8 @@ func menuItemText(e cache.CacheEntry) string {
 // traversal selection so the caller serves the holding fallback instead —
 // arbitrary disk content is never served. The path is rebuilt from a fixed
 // 4-segment split (cache.ValidCachedSelection), so a segment cannot smuggle traversal.
-func renderMenuSelection(filename, urlHost string) (string, error) {
+// The script's config URL carries issuer's ticket for mac and the selected OS's family.
+func renderMenuSelection(filename, urlHost, mac string, issuer TicketIssuer) (string, error) {
 	inner := strings.TrimSuffix(strings.TrimPrefix(filename, "menu/"), "/boot.ipxe")
 	parts := strings.Split(inner, "/")
 	if len(parts) != 4 {
@@ -81,7 +82,10 @@ func renderMenuSelection(filename, urlHost string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("tftp: menu selection: no template for %q", cacheName)
 	}
-	return applyTokens(tmpl, bootTokensFor(cacheName, segment, arch, version, urlHost)), nil
+	tokens := bootTokensFor(cacheName, segment, arch, version, urlHost)
+	// Always set, "" included (see assignedScript).
+	tokens["[[ticket]]"] = ticketFor(issuer, mac, cacheName)
+	return applyTokens(tmpl, tokens), nil
 }
 
 // MenuSelectionScript returns the iPXE script to serve for a HTTP
@@ -95,7 +99,7 @@ func renderMenuSelection(filename, urlHost string) (string, error) {
 // For menu-mode hosts, renderMenuSelection validates the tuple and renders the
 // OS template; on any validation error the holding fallback is still served
 // (behaviour unchanged from before this gate was added).
-func MenuSelectionScript(host *hardware.Host, filename, urlHost string) string {
+func MenuSelectionScript(host *hardware.Host, filename, urlHost string, issuer TicketIssuer) string {
 	holding := holdingScript(urlHost)
 	// Gate: restore symmetry with the booty.ipxe branch — only menu-mode hosts
 	// may boot a selection.
@@ -103,7 +107,7 @@ func MenuSelectionScript(host *hardware.Host, filename, urlHost string) string {
 	if kind != "menu" {
 		return holding
 	}
-	toServe, err := renderMenuSelection(filename, urlHost)
+	toServe, err := renderMenuSelection(filename, urlHost, host.MAC, issuer)
 	if err != nil {
 		slog.Warn("TFTP: menu selection rejected, serving holding", "file", filename, "err", err)
 		return holding

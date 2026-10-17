@@ -19,6 +19,7 @@ import (
 	"github.com/jeefy/booty/boot"
 	"github.com/jeefy/booty/pkg/auth"
 	"github.com/jeefy/booty/pkg/bootscript"
+	"github.com/jeefy/booty/pkg/bootticket"
 	"github.com/jeefy/booty/pkg/cache"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
@@ -527,6 +528,18 @@ func run(cmd *cobra.Command, argv []string) error {
 		nodeReports = &bootyHTTP.NodeReports{Key: key}
 	}
 
+	// The boot-ticket key loads unconditionally: every OS boot script carries a
+	// ticket and the config routes refuse a request without one (#88). A bad
+	// key file fails startup with nothing running.
+	ticketKey, err := keyfile.LoadOrCreate(filepath.Join(viper.GetString(config.DataDir), "boot-ticket-key"))
+	if err != nil {
+		return fmt.Errorf("boot tickets: %w", err)
+	}
+	tickets, err := bootticket.New(ticketKey)
+	if err != nil {
+		return fmt.Errorf("boot tickets: %w", err)
+	}
+
 	warnShadowedBootFiles(viper.GetString(config.DataDir), boot.Names(), slog.Default())
 
 	// Single cache reconciler replaces the per-OS version-check crons; it owns
@@ -548,6 +561,7 @@ func run(cmd *cobra.Command, argv []string) error {
 		DataDir:           viper.GetString(config.DataDir),
 		TopLevelBootFiles: tftp.TopLevelBootFiles(),
 		BootFiles:         boot.Files,
+		Tickets:           tickets,
 	}, tftpErr)
 	if err != nil {
 		return err
@@ -563,6 +577,7 @@ func run(cmd *cobra.Command, argv []string) error {
 		BootFiles:   boot.Files,
 		Waker:       &power.Waker{},
 		NodeReports: nodeReports,
+		Tickets:     tickets,
 	}, httpErr)
 	if err != nil {
 		return errors.Join(err, tftpServer.Shutdown())

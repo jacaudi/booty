@@ -29,6 +29,7 @@ type server struct {
 	topLevel  []string
 	bootFiles fs.FS
 	arp       func(net.IP) (net.HardwareAddr, error)
+	tickets   bootscript.TicketIssuer
 }
 
 // hostFromARP identifies the requesting host by ARP and loads its record. It
@@ -57,7 +58,7 @@ func (s *server) readHandler(filename string, rf io.ReaderFrom) error {
 	urlHost := bootscript.URLHost()
 
 	if strings.HasPrefix(filename, "menu/") && strings.HasSuffix(filename, "/boot.ipxe") {
-		toServe := bootscript.MenuSelectionScript(s.hostFromARP(raddr.IP), filename, urlHost)
+		toServe := bootscript.MenuSelectionScript(s.hostFromARP(raddr.IP), filename, urlHost, s.tickets)
 		r := strings.NewReader(toServe)
 		n, rerr := rf.ReadFrom(r)
 		if rerr != nil {
@@ -127,6 +128,7 @@ type Config struct {
 	TopLevelBootFiles []string
 	BootFiles         fs.FS                                  // embedded iPXE files served first; nil = none
 	ARP               func(net.IP) (net.HardwareAddr, error) // nil means arping.Ping
+	Tickets           bootscript.TicketIssuer                // mints the boot ticket in menu/ selection scripts; required
 }
 
 // Server is a running TFTP server.
@@ -141,6 +143,9 @@ type Server struct {
 // goroutine. Bind errors are returned; serve errors are sent on errCh. The
 // server is read-only: it has no write handler.
 func Start(cfg Config, errCh chan<- error) (*Server, error) {
+	if cfg.Tickets == nil {
+		return nil, errors.New("tftp: no boot ticket issuer")
+	}
 	root, err := os.OpenRoot(cfg.DataDir)
 	if err != nil {
 		return nil, fmt.Errorf("tftp: open dataDir: %w", err)
@@ -152,7 +157,7 @@ func Start(cfg Config, errCh chan<- error) (*Server, error) {
 			return hw, pingErr
 		}
 	}
-	h := &server{root: root, topLevel: cfg.TopLevelBootFiles, bootFiles: cfg.BootFiles, arp: arp}
+	h := &server{root: root, topLevel: cfg.TopLevelBootFiles, bootFiles: cfg.BootFiles, arp: arp, tickets: cfg.Tickets}
 
 	// A nil write handler makes the library answer WRQ with an error.
 	srv := tftp.NewServer(h.readHandler, nil)

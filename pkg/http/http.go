@@ -48,8 +48,8 @@ func baseMux(deps APIDeps, dataRoot *os.Root) (*http.ServeMux, error) {
 	myHandler.HandleFunc("GET /ignition.json", ignitionHandler(deps.Store, deps.NodeReports))
 	myHandler.HandleFunc("GET /machineconfig", handleMachineConfigRequest(deps.Store))
 	myHandler.HandleFunc("GET /preseed", preseedHandler(deps.Store, deps.NodeReports))
-	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(deps.Store, arpLookup))
-	myHandler.Handle("GET /menu/", menuSelectionHandler(arpLookup))
+	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(deps.Store, arpLookup, deps.Tickets))
+	myHandler.Handle("GET /menu/", menuSelectionHandler(arpLookup, deps.Tickets))
 	// Bare path: every method reaches the handler, so a non-POST is a 405
 	// (404 when the feature is off) instead of falling to the "/" catch-all.
 	myHandler.Handle("/node/report", nodeReportHandler(deps))
@@ -102,6 +102,11 @@ func (s *Server) Close() error {
 // caught. Returning an error rather than calling os.Exit keeps that refusal
 // testable.
 func StartHTTP(deps APIDeps, errCh chan<- error) (*Server, error) {
+	// Checked first and unconditionally, --noAuth included: without an issuer
+	// no boot script carries a ticket, so every config route would refuse.
+	if deps.Tickets == nil {
+		return nil, errors.New("http: no boot ticket issuer; refusing to start")
+	}
 	if deps.Auth == nil && !deps.NoAuth {
 		return nil, errors.New("http: no Auth token store and --noAuth not set; refusing to start unauthenticated")
 	}

@@ -72,7 +72,7 @@ func TestRenderMenuSelectionValid(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "cache", "talos", "schemA", "amd64", "v1.10.5"), 0o755); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	got, err := renderMenuSelection("menu/talos/schemA/amd64/v1.10.5/boot.ipxe", "10.0.0.1")
+	got, err := renderMenuSelection("menu/talos/schemA/amd64/v1.10.5/boot.ipxe", "10.0.0.1", "", nil)
 	if err != nil {
 		t.Fatalf("valid selection errored: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestMenuSelectionScript(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := MenuSelectionScript(tc.host, tc.filename, server)
+			got := MenuSelectionScript(tc.host, tc.filename, server, nil)
 			if tc.wantHolding {
 				if !strings.Contains(got, holdingMarker) {
 					t.Errorf("expected holding script (re-chains %q), got:\n%s", holdingMarker, got)
@@ -183,7 +183,7 @@ func TestRenderMenuSelectionRejects(t *testing.T) {
 		"menu/talos/../amd64/v1.10.5/boot.ipxe",           // traversal
 	}
 	for _, f := range bad {
-		if _, err := renderMenuSelection(f, "10.0.0.1"); err == nil {
+		if _, err := renderMenuSelection(f, "10.0.0.1", "", nil); err == nil {
 			t.Errorf("expected rejection for %q", f)
 		}
 	}

@@ -549,7 +549,7 @@ func TestBootTokensByteIdenticalForRealOS(t *testing.T) {
 // while a half-substituted SCRIPT ships. Assert on what is actually served.
 func TestAssignedToolServesHoldingNotABrokenScript(t *testing.T) {
 	host := &hardware.Host{Approved: true, BootMode: "assigned", AssignedOS: "memtest86plus"}
-	got := assignedScript(host, "10.0.0.5:8080")
+	got := assignedScript(host, "10.0.0.5:8080", nil)
 	if strings.Contains(got, "[[") {
 		t.Fatalf("served script has unsubstituted tokens:\n%s", got)
 	}
