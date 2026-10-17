@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/jeefy/booty/pkg/hardware"
 )
 
 // refusalRecords counts the config-refusal records at Warn and at Debug.
@@ -77,5 +80,59 @@ func TestConfigRefusalLogsNoError(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestInvalidHostnameLoggedOnlyForProvenHost: ?hostname= is read only for a
+// request proven to be an approved host's own boot, so a caller without a
+// valid ticket cannot write the invalid-hostname Warn at will (#169). A
+// ticketed request still logs it.
+func TestInvalidHostnameLoggedOnlyForProvenHost(t *testing.T) {
+	const mac = "aa:bb:cc:dd:ee:6e"
+	const warn = "machineconfig: ignoring invalid hostname"
+	for _, c := range []struct {
+		name, query string
+		ticket      bool
+		want        int
+	}{
+		{"unknown MAC", "?mac=aa:bb:cc:dd:ee:6f&hostname=bad_name", false, 0},
+		{"approved host without a ticket", "?mac=" + mac + "&hostname=bad_name", false, 0},
+		{"approved host with a ticket", "?mac=" + mac + "&hostname=bad_name", true, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rt := routeFor(t, "/machineconfig")
+			s, _ := seedTicketHost(t, rt, mac, false)
+			target := rt.path + c.query
+			if c.ticket {
+				target = withTicket(t, testTicketer(t), target, mac, "talos")
+			}
+			logBuf := captureLogs(t)
+			fetchConfig(t, regressHandler(t, s, rt.path, failingARP), target)
+			if n := bytes.Count(logBuf.Bytes(), []byte(warn)); n != c.want {
+				t.Errorf("%q records = %d, want %d:\n%s", warn, n, c.want, logBuf)
+			}
+		})
+	}
+}
+
+// TestUnapprovedMemberRefusalLogsNoError: the 403 for an unapproved cluster
+// member comes before any ticket check, so a client naming a revoked member's
+// MAC could write one ERROR per request. It is the expected answer, so the
+// refusal writes no ERROR record (#169); the 403 and its body are unchanged.
+func TestUnapprovedMemberRefusalLogsNoError(t *testing.T) {
+	const mac = "aa:bb:cc:dd:ee:6d"
+	s := servingStore(t)
+	testSecretsKey(t)
+	seedMember(t, s, mac)
+	if err := hardware.Revoke(mac); err != nil {
+		t.Fatal(err)
+	}
+	logBuf := captureLogs(t)
+	rr := fetchConfig(t, regressHandler(t, s, "/machineconfig", failingARP), "/machineconfig?mac="+mac)
+	if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "cluster member config requires an approved host") {
+		t.Fatalf("got %d %q, want the 403 refusal", rr.Code, rr.Body.String())
+	}
+	if bytes.Contains(logBuf.Bytes(), []byte("level=ERROR")) {
+		t.Errorf("refusal logged at ERROR:\n%s", logBuf)
 	}
 }

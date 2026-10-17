@@ -27,12 +27,6 @@ func machineConfigHandler(store *db.Store, arp arpFunc, proof configProof) http.
 		slog.InfoContext(r.Context(), "machineconfig request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
 
 		host := identifyHostWith(r, arp)
-		// Log the MAC the host was identified by: ARP finds hosts that send no ?mac=.
-		logMAC := r.URL.Query().Get("mac")
-		if host != nil {
-			logMAC = host.MAC
-		}
-		hostname := queryHostname(r, logMAC)
 
 		// Approval is the gate (#158). An unapproved cluster member gets a 403,
 		// never its frozen config and never the generic file config below, which
@@ -41,7 +35,9 @@ func machineConfigHandler(store *db.Store, arp arpFunc, proof configProof) http.
 		// refused before any template is rendered (#162), so nothing in the
 		// server-default file, including the join string, can reach it.
 		if host != nil && host.NodeConfigID != nil && !host.Approved {
-			writeError(w, http.StatusForbidden, "cluster member config requires an approved host", nil)
+			// Answered before any ticket check, so it writes no ERROR record
+			// either (#169): any client naming the MAC would otherwise log one.
+			http.Error(w, "cluster member config requires an approved host", http.StatusForbidden)
 			return
 		}
 		// A request must also prove it is this host's own boot (#88); without a
@@ -73,6 +69,9 @@ func machineConfigHandler(store *db.Store, arp arpFunc, proof configProof) http.
 			return
 		}
 
+		// ?hostname= is read only now, for a proven host, so a caller without a
+		// valid ticket cannot write its invalid-hostname Warn (#169).
+		hostname := queryHostname(r, host.MAC)
 		if serveBoundMachineConfig(w, r, store, host, hostname) {
 			return
 		}
