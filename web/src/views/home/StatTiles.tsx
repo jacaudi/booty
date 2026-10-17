@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Card, Col, Row, Statistic, Typography } from 'antd'
 import { isPending, type DiscoveredHost, type Host } from '../../api/types'
 import type { CacheEntry } from '../../api/cache'

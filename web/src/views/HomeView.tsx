@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Alert, Card, Col, Row, Skeleton, Space, Typography } from 'antd'
 import { listHostInventory } from '../api/client'
 import { listCache } from '../api/cache'
