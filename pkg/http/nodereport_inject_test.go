@@ -62,7 +62,7 @@ func getBody(t *testing.T, h http.HandlerFunc, target string) string {
 func TestIgnitionUnchangedWhenReportsOff(t *testing.T) {
 	s, bound, file := injectIgnitionHosts(t)
 	for _, mac := range []string{bound, file} {
-		body := getBody(t, ignitionHandler(s, nil), "/ignition.json?mac="+mac)
+		body := getBody(t, ignitionHandler(s, nil, arpLookup), "/ignition.json?mac="+mac)
 		if strings.Contains(body, "booty-health") {
 			t.Errorf("%s: reports off but body has booty-health:\n%s", mac, body)
 		}
@@ -74,7 +74,7 @@ func TestIgnitionGetsHealthWhenOn(t *testing.T) {
 	n := &NodeReports{Key: nodeReportKey()}
 	for name, mac := range map[string]string{"db-bound": bound, "file": file} {
 		t.Run(name, func(t *testing.T) {
-			body := getBody(t, ignitionHandler(s, n), "/ignition.json?mac="+mac)
+			body := getBody(t, ignitionHandler(s, n, arpLookup), "/ignition.json?mac="+mac)
 			if _, rep, err := ignitioncfg.Parse([]byte(body)); err != nil {
 				t.Fatalf("Parse: %v (report %s)\n%s", err, rep.String(), body)
 			}
@@ -89,7 +89,7 @@ func TestIgnitionGetsHealthWhenOn(t *testing.T) {
 
 func TestIgnitionNoInjectionForUnknownMAC(t *testing.T) {
 	s, _, _ := injectIgnitionHosts(t)
-	body := getBody(t, ignitionHandler(s, &NodeReports{Key: nodeReportKey()}), "/ignition.json?mac=aa:bb:cc:dd:ee:8f")
+	body := getBody(t, ignitionHandler(s, &NodeReports{Key: nodeReportKey()}, arpLookup), "/ignition.json?mac=aa:bb:cc:dd:ee:8f")
 	if !strings.Contains(body, "ExecStart=reboot") {
 		t.Fatalf("unknown MAC did not get the reboot config:\n%s", body)
 	}
