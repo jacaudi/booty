@@ -500,6 +500,13 @@ linters:
         linters:
           - sloglint
         text: default logger should not be used
+      # booty: package http shares its name with net/http. Renaming it belongs to the pkg/ layout
+      # debt (#94). revive reports a package name once per package, on whichever file it meets
+      # first, so adding a file to pkg/http can surface this old finding as "new". Remove with #94.
+      - path: ^pkg/http/
+        linters:
+          - revive
+        text: "^package-naming: don't use \"http\" because it conflicts"
       # booty: flags are the public CLI and environment surface (--dataDir, --serverIP, ...) and
       # every one is camelCase, so viper keys, docs and deployments all use that spelling.
       # Renaming them to kebab-case (go-standards §6) is a breaking change for operators.
