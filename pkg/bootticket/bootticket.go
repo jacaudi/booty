@@ -54,7 +54,9 @@ func New(key []byte) (*Ticketer, error) {
 }
 
 // Issue returns a v1 ticket for mac and family, expiring TTL after now. It
-// returns "" when t has no usable key or mac or family is empty.
+// returns "" when t has no usable key or mac or family is empty. mac is bound
+// byte for byte: issuer and checker must pass the same normalised form
+// (callers pass the stored host.MAC).
 func (t *Ticketer) Issue(mac, family string) string {
 	if !t.usable() || mac == "" || family == "" {
 		return ""
@@ -65,7 +67,9 @@ func (t *Ticketer) Issue(mac, family string) string {
 
 // Check returns nil when ticket is a valid, unexpired v1 ticket for mac and
 // family. The signature is checked before the expiry, and compared as the
-// encoded string, so a base64 padding-bit variant is refused.
+// encoded string, so a base64 padding-bit variant is refused. mac is bound byte
+// for byte: issuer and checker must pass the same normalised form (callers pass
+// the stored host.MAC).
 func (t *Ticketer) Check(ticket, mac, family string) error {
 	if !t.usable() || mac == "" || family == "" {
 		return ErrInvalid
@@ -91,7 +95,7 @@ func (t *Ticketer) Check(ticket, mac, family string) error {
 }
 
 // Prove checks the ticket r carries in its QueryKey parameter (the first one,
-// if there are several).
+// if there are several). r must be a server request (non-nil URL).
 func (t *Ticketer) Prove(r *http.Request, mac, family string) error {
 	return t.Check(r.URL.Query().Get(QueryKey), mac, family)
 }

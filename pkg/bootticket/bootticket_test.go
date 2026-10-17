@@ -38,16 +38,16 @@ func signedWithExp(tk *Ticketer, exp string) string {
 	return "v1." + exp + "." + tk.sign(testMAC, testFamily, exp)
 }
 
-// tamperLast flips the signature's last character between 'A' and 'B'. Those
-// differ only in a base64 padding bit, so a decode-then-compare would accept
-// the result; the string compare must refuse it.
+const b64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+// tamperLast flips the lowest bit of the signature's last character's alphabet
+// index. A 32-byte tag leaves the last character's low 2 bits unused, so that
+// changes only a padding bit: a decode-then-compare check would accept the
+// result, and the encoded-string compare must refuse it.
 func tamperLast(ticket string) string {
 	last := ticket[len(ticket)-1]
-	repl := byte('A')
-	if last == 'A' {
-		repl = 'B'
-	}
-	return ticket[:len(ticket)-1] + string(repl)
+	i := strings.IndexByte(b64url, last)
+	return ticket[:len(ticket)-1] + string(b64url[i^1])
 }
 
 func TestCheck(t *testing.T) {
@@ -161,7 +161,11 @@ func TestCheckExpiry(t *testing.T) {
 		if err := tk.Check(ticket, testMAC, testFamily); err != nil {
 			t.Fatalf("1 s before expiry: Check = %v, want nil", err)
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(time.Second)
+		if err := tk.Check(ticket, testMAC, testFamily); !errors.Is(err, ErrExpired) {
+			t.Fatalf("at expiry: Check = %v, want ErrExpired", err)
+		}
+		time.Sleep(time.Second)
 		if err := tk.Check(ticket, testMAC, testFamily); !errors.Is(err, ErrExpired) {
 			t.Fatalf("1 s after expiry: Check = %v, want ErrExpired", err)
 		}
