@@ -347,7 +347,7 @@ func TestRunBadNodeReportKeyFailsBeforeServicesStart(t *testing.T) {
 	port := udpAddr(t, pc.LocalAddr()).Port
 
 	dataDir := t.TempDir()
-	// A directory where the key file belongs makes LoadOrCreateKey fail.
+	// A directory where the key file belongs makes keyfile.LoadOrCreate fail.
 	if mkErr := os.Mkdir(filepath.Join(dataDir, "node-report-key"), 0o700); mkErr != nil {
 		t.Fatal(mkErr)
 	}
