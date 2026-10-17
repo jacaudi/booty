@@ -24,7 +24,7 @@ import (
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	bootyHTTP "github.com/jeefy/booty/pkg/http"
-	"github.com/jeefy/booty/pkg/nodereport"
+	"github.com/jeefy/booty/pkg/keyfile"
 	"github.com/jeefy/booty/pkg/power"
 	"github.com/jeefy/booty/pkg/proxydhcp"
 	"github.com/jeefy/booty/pkg/tftp"
@@ -520,7 +520,7 @@ func run(cmd *cobra.Command, argv []string) error {
 	// startup with nothing running.
 	var nodeReports *bootyHTTP.NodeReports
 	if viper.GetBool(config.NodeReports) {
-		key, keyErr := nodereport.LoadOrCreateKey(filepath.Join(viper.GetString(config.DataDir), "node-report-key"))
+		key, keyErr := keyfile.LoadOrCreate(filepath.Join(viper.GetString(config.DataDir), "node-report-key"))
 		if keyErr != nil {
 			return fmt.Errorf("node reports: %w", keyErr)
 		}
