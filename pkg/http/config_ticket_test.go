@@ -271,6 +271,9 @@ func TestConfigRefusalIsLogged(t *testing.T) {
 					t.Errorf("log lacks %q:\n%s", want, logs)
 				}
 			}
+			if n := strings.Count(logs, "config refused: no valid boot ticket"); n != 1 {
+				t.Errorf("refusal records = %d, want 1:\n%s", n, logs)
+			}
 			if c.ticket != "" && strings.Contains(logs, c.ticket) {
 				t.Errorf("log carries the ticket:\n%s", logs)
 			}
