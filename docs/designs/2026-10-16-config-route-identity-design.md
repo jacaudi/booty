@@ -396,7 +396,7 @@ unchanged). It reads `?mac=`, falls back to ARP on the source IP, normalises the
 the host up.
 - `machineConfigMAC` (`machineconfig.go:84-98`), `machineConfigHost` (`:102-111`),
   `ignitionRequestMAC` (`ignition.go:58-77`) and `ignitionHost` (`:85-96`) are deleted.
-- **Lookup-error logging, in machineconfig and ignition (as today):** when `err != nil` and not
+- **Lookup-error logging (Gate 2 ruling: in `identifyHostWith`, so `/preseed` and `/menu/` now log it too, which is harmless and DRY):** when `err != nil` and not
   `errors.Is(err, hardware.ErrNotFound)`, log at Warn `"error looking up host"` with
   `"mac", loggableMAC(r.URL.Query().Get("mac"))` and `"err", err`. That replaces today's raw,
   client-controlled `"mac"` value.
@@ -472,8 +472,10 @@ URL. The ticket parameter is built as `"&" + bootticket.QueryKey + "=[[ticket]]"
 
 The holding and tool templates are unchanged and never carry a ticket.
 
-**The token has one source: `bootTokensFor`.** It gains a final `ticket string` parameter and
-always sets `tokens["[[ticket]]"] = ticket`, with `""` when there is none.
+**The token is set by the two OS-script renderers.** `assignedScript` and `renderMenuSelection`
+always set `tokens["[[ticket]]"]` on the map `bootTokens` or `bootTokensFor` returns, with `""` when
+there is none. `bootTokensFor` keeps its signature, because a sixth parameter breaks the lint gate's
+`argument-limit` of 5 (Gate 2 B1).
 - `applyTokens` would otherwise ship a literal `[[ticket]]` (`tokens.go:71-76`).
 - An empty ticket fails proof, so this fails closed either way, and the rendered script never
   contains `[[`.
@@ -482,8 +484,6 @@ Signature changes, `pkg/bootscript`:
 
 | Function | Before | After |
 |---|---|---|
-| `bootTokensFor` (`tokens.go:95`) | `(osToLoad, segment, arch, version, urlHost string)` | `(osToLoad, segment, arch, version, urlHost, ticket string)` |
-| `bootTokens` (`tokens.go:214`) | `(osToLoad, urlHost string, host *hardware.Host)` | `(osToLoad, urlHost string, host *hardware.Host, ticket string)`; passes `ticket` to each `bootTokensFor` call |
 | `assignedScript` (`tokens.go:274`) | `(host, urlHost)` | `(host *hardware.Host, urlHost string, issuer TicketIssuer)`; ticket = `ticketFor(issuer, host.MAC, osToLoad)` |
 | `RenderBootScript` (`render.go:43`) | `(host, urlHost)` | `(host *hardware.Host, urlHost string, issuer TicketIssuer)`; passes `issuer` to `assignedScript` only |
 | `renderMenuSelection` (`menu.go:65`) | `(filename, urlHost string)` | `(filename, urlHost, mac string, issuer TicketIssuer)`; after it parses `cacheName`, ticket = `ticketFor(issuer, mac, cacheName)` |
@@ -585,7 +585,11 @@ Fixtures:
 **Existing tests that change** (the plan lists every call site):
 - **Signature changes** reach about 70 call sites across about 21 test files in `pkg/http`,
   `pkg/bootscript` and `pkg/tftp`.
-- **Config-fetch tests for an approved host that expect a serve** gain `withTicket`. The files
+- **Config-fetch tests for an approved host that expect a serve** keep their requests. Their
+  handlers get an always-allow test double, `allowProof`, as the proof. Those tests exercise
+  rendering, not identity; T1–T13 pin identity. *Ruling at Gate 2* (S1): it avoids threading tickets
+  through about 40 rendering tests. A mux-level test (`TestMuxWiresTicketsEndToEnd`) checks that
+  `baseMux` wires the real issuer and checker into every route. The files
   come from `grep -rln '/machineconfig\|/preseed\|/ignition.json' pkg/http --include='*_test.go'`,
   19 files at `904223b`.
 - **Tests building `APIDeps` for `StartHTTP` or `baseMux`** gain `Tickets: tk`:
@@ -624,6 +628,7 @@ fixed here; the #166 residual replaces it.
 | `docs/schema/API.md` | **Rows `:16`, `:19`, `:20`, and `:290`, `:462`:** each config route requires the `ticket` query parameter booty puts in the boot script, and without a valid one gets the answer listed. **`:542`:** the boot contract changes in this release: config URLs carry `ticket`. |
 | `deploy/README.md` | **§Security posture (`:76-119`):** add the residual. A LAN client that deliberately asks `/booty.ipxe?mac=<approved MAC>` can still fetch that host's config, join string included (#166). |
 | `README.md` | **`:83-90`:** config URLs carry a short-lived ticket, so only a booty-rendered boot fetches them. **`:168`:** the same correction as `CONFIGURATION.md:574-577`. |
+| `docs/schema/STORAGE.md`, `.gitignore` | Add `boot-ticket-key` next to `node-report-key` (Gate 2 S6). |
 | `docs/testing/debian-dvd-install-gate.md` | **`:264` and `:310`:** a hand-written `preseed/url` is now refused. The runbook gets the URL from booty instead: run `curl -sS 'http://localhost:8088/booty.ipxe?mac=52:54:00:12:34:56'`, copy the `preseed/url=` value, replace the literal `${mac}` with `52:54:00:12:34:56`, and use it within 1 hour. |
 
 ## 12. Follow-ups
@@ -661,6 +666,13 @@ fixed here; the #166 residual replaces it.
   - **Minor items:** anchors corrected, R8 `FamilyTool` and `ConfigKind`, §4 parsing rules,
     §5.1 unconditional load, §8 "booty never logs", the R3 legacy-GRUB note, and the §12
     Cache-Control call.
+- **2026-10-16, Gate 2 (`sr-eng-review`, plan gate).** The gate simulated the whole plan in a
+  scratch copy: 1,303 test runs, 0 FAIL, and the Debian lab passed. Design-level outcomes:
+  - **§7:** `bootTokensFor` keeps its signature (argument-limit lint).
+  - **§10:** existing rendering tests use `allowProof`, and a mux-level wiring test is added.
+  - **§6:** `identifyHostWith` logs lookup errors for every caller.
+  - **Added:** `boot-ticket-key` goes in `.gitignore` and `docs/schema/STORAGE.md`, and a
+    `FuzzCheck` covers `bootticket.Check`.
 - **Gate 1 could not verify, and this design still marks UNVERIFIED:**
   - Talos's COSI restart after 3 h;
   - the Flatcar 300 s reboot;
