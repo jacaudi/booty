@@ -37,7 +37,9 @@ type server struct {
 func (s *server) hostFromARP(ip net.IP) *hardware.Host {
 	hwAddr, err := s.arp(ip)
 	if err != nil {
-		slog.Warn("error with ARP request", "err", err)
+		// Debug, not Warn: ARP fails for any relayed, NATed or loopback
+		// client, and a UDP source can be forged, so a budget cannot bound it.
+		slog.Debug("error with ARP request", "err", err)
 		return nil
 	}
 	macAddress := hwAddr.String()
