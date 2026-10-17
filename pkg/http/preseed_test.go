@@ -91,7 +91,7 @@ func TestPreseedDVDModeHostGetsMirrorAppended(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/preseed?mac="+mac, nil)
-	handlePreseedRequest(s)(rr, req)
+	preseedHandler(s, nil, arpLookup, allowProof{})(rr, req)
 
 	body := rr.Body.String()
 	if rr.Code != 200 {
@@ -166,7 +166,7 @@ func TestPreseedNetinstModeHostUnchanged(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/preseed?mac="+mac, nil)
-	handlePreseedRequest(s)(rr, req)
+	preseedHandler(s, nil, arpLookup, allowProof{})(rr, req)
 
 	if rr.Code != 200 || rr.Body.String() != want {
 		t.Fatalf("netinst-mode host must be byte-identical: %d\ngot:  %q\nwant: %q", rr.Code, rr.Body.String(), want)

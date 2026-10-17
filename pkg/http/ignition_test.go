@@ -56,7 +56,7 @@ func TestHandleIgnitionRequest_EmptyMACServesRebootConfigQuietly(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	store := ignitionTestStore(t)
-	handleIgnitionRequest(store)(rec, req)
+	ignitionHandler(store, nil, arpLookup, allowProof{})(rec, req)
 
 	if strings.Contains(logBuf.String(), "error looking up host") {
 		t.Errorf("unidentified-host boot logged a host-lookup error; want it quiet.\nlogs:\n%s", logBuf.String())
@@ -95,7 +95,7 @@ func TestHandleIgnitionRequest_BadTemplateReturns500(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/ignition.json?mac=aa:bb:cc:dd:ee:ff", nil)
 	rec := httptest.NewRecorder()
 	store := ignitionTestStore(t)
-	handleIgnitionRequest(store)(rec, req)
+	ignitionHandler(store, nil, arpLookup, allowProof{})(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 for a genuine ignition failure", rec.Code)

@@ -62,7 +62,7 @@ func getBody(t *testing.T, h http.HandlerFunc, target string) string {
 func TestIgnitionUnchangedWhenReportsOff(t *testing.T) {
 	s, bound, file := injectIgnitionHosts(t)
 	for _, mac := range []string{bound, file} {
-		body := getBody(t, ignitionHandler(s, nil, arpLookup), "/ignition.json?mac="+mac)
+		body := getBody(t, ignitionHandler(s, nil, arpLookup, allowProof{}), "/ignition.json?mac="+mac)
 		if strings.Contains(body, "booty-health") {
 			t.Errorf("%s: reports off but body has booty-health:\n%s", mac, body)
 		}
@@ -74,7 +74,7 @@ func TestIgnitionGetsHealthWhenOn(t *testing.T) {
 	n := &NodeReports{Key: nodeReportKey()}
 	for name, mac := range map[string]string{"db-bound": bound, "file": file} {
 		t.Run(name, func(t *testing.T) {
-			body := getBody(t, ignitionHandler(s, n, arpLookup), "/ignition.json?mac="+mac)
+			body := getBody(t, ignitionHandler(s, n, arpLookup, allowProof{}), "/ignition.json?mac="+mac)
 			if _, rep, err := ignitioncfg.Parse([]byte(body)); err != nil {
 				t.Fatalf("Parse: %v (report %s)\n%s", err, rep.String(), body)
 			}
@@ -89,7 +89,7 @@ func TestIgnitionGetsHealthWhenOn(t *testing.T) {
 
 func TestIgnitionNoInjectionForUnknownMAC(t *testing.T) {
 	s, _, _ := injectIgnitionHosts(t)
-	body := getBody(t, ignitionHandler(s, &NodeReports{Key: nodeReportKey()}, arpLookup), "/ignition.json?mac=aa:bb:cc:dd:ee:8f")
+	body := getBody(t, ignitionHandler(s, &NodeReports{Key: nodeReportKey()}, arpLookup, allowProof{}), "/ignition.json?mac=aa:bb:cc:dd:ee:8f")
 	if !strings.Contains(body, "ExecStart=reboot") {
 		t.Fatalf("unknown MAC did not get the reboot config:\n%s", body)
 	}
@@ -146,7 +146,7 @@ func injectDebianHost(t *testing.T, src string) (*db.Store, string) {
 func TestDebianconfigGetsHealthWhenOn(t *testing.T) {
 	s, mac := injectDebianHost(t,
 		"disk:\n  devices: [/dev/sda, /dev/sdb]\n  raid: mirror\nlate_command: echo operator-last\npackages: [vim]\n")
-	body := getBody(t, preseedHandler(s, &NodeReports{Key: nodeReportKey()}), "/preseed?mac="+mac)
+	body := getBody(t, preseedHandler(s, &NodeReports{Key: nodeReportKey()}, arpLookup, allowProof{}), "/preseed?mac="+mac)
 
 	// The unit enable is inside base64, so check the decoded late_command.
 	health := strings.Index(body, "in-target sh -c 'mkdir -p /opt/booty")
@@ -174,7 +174,7 @@ func TestDebianconfigGetsHealthWhenOn(t *testing.T) {
 
 func TestDebianconfigUnchangedWhenReportsOff(t *testing.T) {
 	s, mac := injectDebianHost(t, "locale: en_US\n")
-	body := getBody(t, preseedHandler(s, nil), "/preseed?mac="+mac)
+	body := getBody(t, preseedHandler(s, nil, arpLookup, allowProof{}), "/preseed?mac="+mac)
 	if strings.Contains(body, "booty-health") || strings.Contains(body, "curl") {
 		t.Fatalf("reports off but preseed changed:\n%s", body)
 	}
@@ -206,7 +206,7 @@ func TestRawPreseedNeverInjected(t *testing.T) {
 		t.Fatal(err)
 	}
 	approveHost(t, mac)
-	body := getBody(t, preseedHandler(s, &NodeReports{Key: nodeReportKey()}), "/preseed?mac="+mac)
+	body := getBody(t, preseedHandler(s, &NodeReports{Key: nodeReportKey()}, arpLookup, allowProof{}), "/preseed?mac="+mac)
 	if strings.Contains(body, "booty-health") {
 		t.Fatalf("raw preseed was injected:\n%s", body)
 	}

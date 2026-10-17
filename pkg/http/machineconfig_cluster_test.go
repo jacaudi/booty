@@ -18,7 +18,7 @@ func TestMemberServesFrozenBytesVerbatim(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil)
 	req.RemoteAddr = "10.0.0.50:1234"
-	machineConfigHandler(s, fixedARP(mac))(rr, req)
+	machineConfigHandler(s, fixedARP(mac), allowProof{})(rr, req)
 
 	if rr.Code != 200 {
 		t.Fatalf("member machineconfig = %d: %s", rr.Code, rr.Body.String())
@@ -45,7 +45,7 @@ func TestNonMemberFallsThroughByteIdentical(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil)
-	handleMachineConfigRequest(s)(rr, req)
+	machineConfigHandler(s, arpLookup, allowProof{})(rr, req)
 	if rr.Code != 200 || rr.Body.String() != "version: v1alpha1\nmachine:\n  network:\n    hostname: plain\n" {
 		t.Fatalf("non-member must render the P4 file path unchanged: %d %q", rr.Code, rr.Body.String())
 	}
@@ -75,7 +75,7 @@ func TestMemberWithUndecryptableConfigFailsLoud(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/machineconfig?mac="+mac, nil)
 	req.RemoteAddr = "10.0.0.50:1234"
-	machineConfigHandler(s, fixedARP(mac))(rr, req)
+	machineConfigHandler(s, fixedARP(mac), allowProof{})(rr, req)
 	if rr.Code != 500 {
 		t.Fatalf("member with undecryptable config = %d, want 500 (never fall through)", rr.Code)
 	}

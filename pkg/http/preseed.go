@@ -18,32 +18,23 @@ import (
 	"github.com/spf13/viper"
 )
 
-// handlePreseedRequest serves a Debian preseed: a DB-resolved config (rungs
-// 1–2, kind debianconfig — the only authorable Debian kind, #59) when the
-// host is bound, else the --preseedFile server default (rung 4, served
-// verbatim via renderPreseedFile — a raw d-i template, not an authored kind).
-// Debian has no legacy per-host file column, so rung 3 does not apply. A caller
-// with no approved host gets a 404 and no template is rendered (#162).
-func handlePreseedRequest(store *db.Store) http.HandlerFunc {
-	return preseedHandler(store, nil)
-}
-
-// preseedHandler is handlePreseedRequest with the optional node health report
-// unit (n nil = feature off, output unchanged). Only a DB-bound debianconfig
-// is injected; the raw --preseedFile default never is.
-func preseedHandler(store *db.Store, n *NodeReports) http.HandlerFunc {
-	return preseedHandlerWith(store, n, arpLookup)
-}
-
-// preseedHandlerWith is preseedHandler with the ARP lookup injected.
-func preseedHandlerWith(store *db.Store, n *NodeReports, arp arpFunc) http.HandlerFunc {
+// preseedHandler serves a Debian preseed: a DB-resolved config (rungs 1–2,
+// kind debianconfig — the only authorable Debian kind, #59) when the host is
+// bound, else the --preseedFile server default (rung 4, served verbatim via
+// renderPreseedFile — a raw d-i template, not an authored kind). Debian has no
+// legacy per-host file column, so rung 3 does not apply. A caller with no
+// approved host, or without a valid boot ticket for it (#88), gets a 404 and
+// no template is rendered (#162). n is the optional node health report unit
+// (nil = feature off, output unchanged); only a DB-bound debianconfig is
+// injected, the raw --preseedFile default never is.
+func preseedHandler(store *db.Store, n *NodeReports, arp arpFunc, proof hostProof) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.InfoContext(r.Context(), "preseed request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
 		host := configHost(identifyHostWith(r, arp))
-		if host == nil {
+		if host == nil || !proven(r, proof, host, ostype.FamilyDebian) {
 			// Refused before any template is read, so nothing in the server-default
-			// file, including the join string, can reach this caller (#162).
-			writeError(w, http.StatusNotFound, "no approved host for this request", nil)
+			// file, including the join string, can reach this caller (#162, #88).
+			writeError(w, http.StatusNotFound, noApprovedHostBody, nil)
 			return
 		}
 

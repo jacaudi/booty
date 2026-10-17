@@ -70,7 +70,7 @@ func TestIgnitionUnapprovedHostGetsRebootConfig(t *testing.T) {
 			if c.bind {
 				bindConfig(t, s, mac, "bound", "butane", butane)
 			}
-			h := handleIgnitionRequest(s)
+			h := ignitionHandler(s, nil, arpLookup, allowProof{})
 
 			rr := fetchConfig(t, h, "/ignition.json?mac="+mac)
 			if rr.Code != http.StatusOK {
@@ -104,7 +104,7 @@ func TestIgnitionRevokedHostGetsRebootConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	approveHost(t, mac)
-	h := handleIgnitionRequest(s)
+	h := ignitionHandler(s, nil, arpLookup, allowProof{})
 	if rr := fetchConfig(t, h, "/ignition.json?mac="+mac); !strings.Contains(rr.Body.String(), "SENTINEL-JOIN") {
 		t.Fatalf("approved host did not get its real config: %d %s", rr.Code, rr.Body.String())
 	}
@@ -142,7 +142,7 @@ func TestMachineConfigUnapprovedHostGetsUnknownAnswer(t *testing.T) {
 			if c.bind {
 				bindConfig(t, s, mac, "bound", "machineconfig", "machine:\n  token: SENTINEL-BOUND\n")
 			}
-			h := machineConfigHandler(s, failingARP)
+			h := machineConfigHandler(s, failingARP, allowProof{})
 
 			want := fetchConfig(t, h, "/machineconfig?mac=aa:bb:cc:dd:ee:f1") // unregistered MAC
 			got := fetchConfig(t, h, "/machineconfig?mac="+mac)
@@ -175,7 +175,7 @@ func TestMachineConfigRevokedHostGetsUnknownAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	approveHost(t, mac)
-	h := machineConfigHandler(s, failingARP)
+	h := machineConfigHandler(s, failingARP, allowProof{})
 	if rr := fetchConfig(t, h, "/machineconfig?mac="+mac); !strings.Contains(rr.Body.String(), "sentinel-host") {
 		t.Fatalf("approved host did not get its own config: %d %s", rr.Code, rr.Body.String())
 	}
@@ -203,7 +203,7 @@ func TestMachineConfigUnapprovedMemberIsForbidden(t *testing.T) {
 	}
 
 	// The ARP matches, so the 403 is the approval gate and not the ARP check.
-	rr := fetchConfig(t, machineConfigHandler(s, fixedARP(mac)), "/machineconfig?mac="+mac)
+	rr := fetchConfig(t, machineConfigHandler(s, fixedARP(mac), allowProof{}), "/machineconfig?mac="+mac)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("code = %d, want 403; body %q", rr.Code, rr.Body.String())
 	}
@@ -222,7 +222,7 @@ func TestPreseedUnapprovedHostGetsUnknownAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	bindConfig(t, s, mac, "bound", "debianconfig", "hostname: \"sentinel-bound\"\nlocale: en_US.UTF-8\n")
-	h := handlePreseedRequest(s)
+	h := preseedHandler(s, nil, arpLookup, allowProof{})
 
 	want := fetchConfig(t, h, "/preseed?mac=aa:bb:cc:dd:ee:f1") // unregistered MAC
 	got := fetchConfig(t, h, "/preseed?mac="+mac)

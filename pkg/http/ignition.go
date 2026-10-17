@@ -18,24 +18,22 @@ import (
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
 	"github.com/jeefy/booty/pkg/nodereport"
+	"github.com/jeefy/booty/pkg/ostype"
 	"github.com/spf13/viper"
 )
 
-// handleIgnitionRequest returns the handler as a closure over store so a
-// DB-resolved config (precedence rungs 1–2) can be tried before falling
-// through to the existing file-based path (rungs 3–4, unchanged).
-func handleIgnitionRequest(store *db.Store) http.HandlerFunc {
-	return ignitionHandler(store, nil, arpLookup)
-}
-
-// ignitionHandler is handleIgnitionRequest with the optional node health
-// report unit (n nil = feature off, output unchanged) and the ARP lookup
-// injected. A host it will not serve gets the reboot config, so it PXE-boots
-// again until it can be served.
-func ignitionHandler(store *db.Store, n *NodeReports, arp arpFunc) http.HandlerFunc {
+// ignitionHandler serves a Flatcar/CoreOS Ignition config: the DB-resolved
+// config (precedence rungs 1–2) when one is bound, else the file template
+// (rungs 3–4). n nil leaves the node health unit out. A host it will not serve
+// (unknown, unapproved, or a request without a valid boot ticket for it, #88)
+// gets the reboot config, so it PXE-boots again and fetches a fresh ticket.
+func ignitionHandler(store *db.Store, n *NodeReports, arp arpFunc, proof hostProof) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.InfoContext(r.Context(), "ignition request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
 		host := configHost(identifyHostWith(r, arp))
+		if host != nil && !proven(r, proof, host, ostype.FamilyIgnition) {
+			host = nil
+		}
 		if host == nil {
 			serveRebootIgnition(w)
 			return

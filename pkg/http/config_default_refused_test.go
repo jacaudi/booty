@@ -91,7 +91,7 @@ func TestMachineConfigDefaultRefusedWithoutApprovedHost(t *testing.T) {
 			writeFile(t, "config/machineconfig.yaml", "cluster:\n  token: {{ .JoinString }}\n")
 			target := prepareDefaultRefusalHost(t, c, "/machineconfig", "aa:bb:cc:dd:ee:b1", "talos")
 
-			rr := fetchConfig(t, machineConfigHandler(s, failingARP), target)
+			rr := fetchConfig(t, machineConfigHandler(s, failingARP, allowProof{}), target)
 
 			checkDefaultRefusal(t, rr.Code, c.want, rr.Body.String(), sentinel)
 		})
@@ -108,7 +108,7 @@ func TestPreseedDefaultRefusedWithoutApprovedHost(t *testing.T) {
 			writeFile(t, "config/preseed.cfg", "d-i booty/join string {{ .JoinString }}\n")
 			target := prepareDefaultRefusalHost(t, c, "/preseed", "aa:bb:cc:dd:ee:b2", "debian")
 
-			rr := fetchConfig(t, handlePreseedRequest(s), target)
+			rr := fetchConfig(t, preseedHandler(s, nil, arpLookup, allowProof{}), target)
 
 			checkDefaultRefusal(t, rr.Code, c.want, rr.Body.String(), sentinel)
 		})
@@ -145,7 +145,7 @@ func TestConfigDefaultByARPFallback(t *testing.T) {
 				viper.Set(config.TalosConfigFile, "config/machineconfig.yaml")
 				writeFile(t, "config/machineconfig.yaml", "cluster:\n  token: {{ .JoinString }}\n")
 			},
-			machineConfigHandler,
+			func(s *db.Store, arp arpFunc) http.HandlerFunc { return machineConfigHandler(s, arp, allowProof{}) },
 		},
 		{
 			"preseed", "/preseed", "debian",
@@ -154,7 +154,7 @@ func TestConfigDefaultByARPFallback(t *testing.T) {
 				viper.Set(config.PreseedFile, "config/preseed.cfg")
 				writeFile(t, "config/preseed.cfg", "d-i booty/join string {{ .JoinString }}\n")
 			},
-			func(s *db.Store, arp arpFunc) http.HandlerFunc { return preseedHandlerWith(s, nil, arp) },
+			func(s *db.Store, arp arpFunc) http.HandlerFunc { return preseedHandler(s, nil, arp, allowProof{}) },
 		},
 	}
 	for _, rt := range routes {

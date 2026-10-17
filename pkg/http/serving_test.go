@@ -71,7 +71,7 @@ func TestIgnitionUnboundHostByteIdenticalServerIPPort(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ignition.json?mac="+mac, nil)
-	handleIgnitionRequest(s)(rr, req)
+	ignitionHandler(s, nil, arpLookup, allowProof{})(rr, req)
 
 	if rr.Code != 200 {
 		t.Fatalf("ignition = %d: %s", rr.Code, rr.Body.String())
@@ -102,7 +102,7 @@ func TestIgnitionBoundConfigServed(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/ignition.json?mac="+mac, nil)
-	handleIgnitionRequest(s)(rr, req)
+	ignitionHandler(s, nil, arpLookup, allowProof{})(rr, req)
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "http://10.0.0.1:8080/bound") {
 		t.Fatalf("bound config not served: %d %s", rr.Code, rr.Body.String())
 	}
@@ -122,7 +122,7 @@ func TestPreseedServesServerDefaultFile(t *testing.T) {
 	approveHost(t, mac)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/preseed?mac="+mac, http.NoBody)
-	handlePreseedRequest(s)(rr, req)
+	preseedHandler(s, nil, arpLookup, allowProof{})(rr, req)
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "10.0.0.1") {
 		t.Fatalf("preseed default file: %d %s", rr.Code, rr.Body.String())
 	}
@@ -159,7 +159,7 @@ func TestPreseedBoundDebianConfigServed(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/preseed?mac="+mac, nil)
-	handlePreseedRequest(s)(rr, req)
+	preseedHandler(s, nil, arpLookup, allowProof{})(rr, req)
 	want := "d-i debian-installer/locale string en_US.UTF-8\nd-i netcfg/get_hostname string deb1\n"
 	if rr.Code != 200 || rr.Body.String() != want {
 		t.Fatalf("bound debianconfig = %d:\ngot:\n%s\nwant:\n%s", rr.Code, rr.Body.String(), want)

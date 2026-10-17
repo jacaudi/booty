@@ -32,7 +32,7 @@ func TestIgnitionRebootConfigNeedsNoTemplate(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			rr := fetchConfig(t, ignitionHandler(s, nil, arpLookup), "/ignition.json?mac="+mac)
+			rr := fetchConfig(t, ignitionHandler(s, nil, arpLookup, allowProof{}), "/ignition.json?mac="+mac)
 			if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "booty-reboot.service") {
 				t.Fatalf("got %d %q, want 200 with the reboot config", rr.Code, rr.Body.String())
 			}
@@ -53,7 +53,7 @@ func TestIgnitionARPFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	approveHost(t, mac)
-	rr := fetchConfig(t, ignitionHandler(s, nil, fixedARP(mac)), "/ignition.json")
+	rr := fetchConfig(t, ignitionHandler(s, nil, fixedARP(mac), allowProof{}), "/ignition.json")
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), sentinel) {
 		t.Fatalf("got %d %q, want the host's config", rr.Code, rr.Body.String())
 	}

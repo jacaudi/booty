@@ -45,9 +45,9 @@ func baseMux(deps APIDeps, dataRoot *os.Root) (*http.ServeMux, error) {
 	// All URLs will be handled by this function. The read-only routes below
 	// are GET (HEAD too), so any other method lands here instead (#149).
 	myHandler.HandleFunc("/", handleRequest)
-	myHandler.HandleFunc("GET /ignition.json", ignitionHandler(deps.Store, deps.NodeReports, arpLookup))
-	myHandler.HandleFunc("GET /machineconfig", handleMachineConfigRequest(deps.Store))
-	myHandler.HandleFunc("GET /preseed", preseedHandler(deps.Store, deps.NodeReports))
+	myHandler.HandleFunc("GET /ignition.json", ignitionHandler(deps.Store, deps.NodeReports, arpLookup, deps.Tickets))
+	myHandler.HandleFunc("GET /machineconfig", machineConfigHandler(deps.Store, arpLookup, deps.Tickets))
+	myHandler.HandleFunc("GET /preseed", preseedHandler(deps.Store, deps.NodeReports, arpLookup, deps.Tickets))
 	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(deps.Store, arpLookup, deps.Tickets))
 	myHandler.Handle("GET /menu/", menuSelectionHandler(arpLookup, deps.Tickets))
 	// Bare path: every method reaches the handler, so a non-POST is a 405

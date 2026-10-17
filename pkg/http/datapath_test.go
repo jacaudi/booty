@@ -189,7 +189,7 @@ func TestIgnitionRefusesATraversingIgnitionFile(t *testing.T) {
 	approveHost(t, mac)
 
 	rr := httptest.NewRecorder()
-	handleIgnitionRequest(s)(rr, httptest.NewRequest(http.MethodGet, "/ignition.json?mac="+mac, nil))
+	ignitionHandler(s, nil, arpLookup, allowProof{})(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ignition.json?mac="+mac, http.NoBody))
 
 	if strings.Contains(rr.Body.String(), leakSentinel) {
 		t.Fatalf("a template from OUTSIDE dataDir was rendered and served: %s", rr.Body.String())
@@ -214,7 +214,7 @@ func TestIgnitionStillServesALegitimateTemplate(t *testing.T) {
 	approveHost(t, mac)
 
 	rr := httptest.NewRecorder()
-	handleIgnitionRequest(s)(rr, httptest.NewRequest(http.MethodGet, "/ignition.json?mac="+mac, nil))
+	ignitionHandler(s, nil, arpLookup, allowProof{})(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ignition.json?mac="+mac, http.NoBody))
 
 	if rr.Code != 200 {
 		t.Fatalf("a legitimate in-dataDir template = %d, want 200: %s", rr.Code, rr.Body.String())
