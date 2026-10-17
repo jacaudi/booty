@@ -80,14 +80,14 @@ It does one job: get your machines netbooted into the right OS.
         │  2b. /booty.ipxe?mac= renders the per-host script
         │      (host identified by ?mac=, ARP as fallback)
         │  3. serves cached kernel + initramfs from /data/...
-        │  4. serves /ignition.json or /machineconfig for this host
+        │  4. serves /ignition.json or /machineconfig for this host (with the script's boot ticket)
         ▼
   machine boots the assigned OS
 ```
 
 A host booty doesn't recognize is held at step 2 and recorded as an *unknown host* until you
 register **and approve** it. Until then `/ignition.json` serves it a reboot-loop config, and
-`/machineconfig` and `/preseed` return `404`.
+`/machineconfig` and `/preseed` return `404`. Config URLs carry a short-lived boot ticket, so only a boot booty rendered can fetch them.
 
 ---
 
@@ -168,7 +168,8 @@ The `/api/v1` management surface — hosts, cache, catalog, configs, roles, sche
 and read-only endpoints (`/ignition.json`, `/machineconfig`, `/preseed`, `/version.*`, `/healthz`,
 `/data/cache/**`, `/data/public/**`, `/ui/**`, `/`, `/api/v1/docs`, the OpenAPI/schema documents, and
 `/login`/`/logout` themselves) stay open, since machines booting for the first time — and a browser
-fetching the login page — have no credential to present yet.
+fetching the login page — have no credential to present yet. The three config routes instead
+require the boot ticket booty puts in the boot script.
 
 **Finding the token.** On first run booty generates a 32-byte random token, writes it to
 `<dataDir>/api-token` (mode `0600`), and logs it **exactly once**:

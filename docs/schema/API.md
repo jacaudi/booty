@@ -13,11 +13,11 @@ Served on `--httpPort` (default `8080`).
 | Method | Path | Purpose | Response |
 |--------|------|---------|----------|
 | `GET` | `/` | Redirect to the web UI. | `302 → /ui/` |
-| `GET` | `/ignition.json` | Ignition config for a Flatcar/CoreOS host. MAC resolved from a query param or by ARP; unknown and unapproved hosts get a reboot-loop config. | Ignition v3.4.0 JSON |
+| `GET` | `/ignition.json` | Ignition config for a Flatcar/CoreOS host. MAC resolved from a query param or by ARP; requires the `ticket` query parameter booty puts in the boot script. Unknown and unapproved hosts, and any request without a valid ticket for the host, get a reboot-loop config (no template is read). | Ignition v3.4.0 JSON |
 | `GET` | `/booty.ipxe?mac=&arch=` | Per-host iPXE script (holding / assigned OS / menu). Open; the host is identified by `?mac=` with ARP fallback. `arch` is the iPXE `${buildarch}` (`x86_64` and `i386` are stored as `amd64`, `arm64` as `arm64`, anything else or absent as empty). A `GET` (never `HEAD`) for a MAC the lookup reports as not found records it in `discovered_hosts` ([DATABASE.md](DATABASE.md#discovered_hosts)); a database error records nothing. Recording is bounded: 8 new rows per source IP per 10 minutes (IPv6 keyed by /64, 4096 tracked keys), a 1024-row table cap with no eviction, and a 20 s debounce on refreshing a known row. A row grants nothing. | iPXE script (`text/plain`). Other methods fall through to the UI redirect. |
 | `GET` | `/menu/<os>/<segment>/<arch>/<version>/boot.ipxe?mac=` | iPXE script for one boot-menu selection. Open and read-only; identified by `?mac=` with ARP fallback; only menu-mode hosts get a boot script, others get the holding script. | iPXE script (`text/plain`) |
-| `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. A caller with no approved host (unknown, unapproved, revoked, or no MAC resolvable) gets `404` and no template is rendered; an unapproved cluster member gets `403`. An invalid `?hostname=` is ignored (logged), not an error. | YAML (`text/yaml`) / `403` / `404` (`text/plain`) |
-| `GET` | `/preseed` | Debian preseed for a host. Boot path, no credential. MAC resolved from query/ARP. An approved host gets its bound `debianconfig` rendered, else the `--preseedFile` server default; any other caller (unknown, unapproved, revoked, or no MAC resolvable) gets `404` and no template is rendered. | preseed text (`text/plain`) / `404` (`text/plain`) |
+| `GET` | `/machineconfig` | Talos machine config for a host. MAC resolved from query/ARP; supports a per-host schematic. A caller with no approved host (unknown, unapproved, revoked, or no MAC resolvable), or without a valid `ticket` (the boot ticket booty puts in the boot script) for it, gets `404` and no template is rendered; an unapproved cluster member gets `403`. An invalid `?hostname=` is ignored (logged), not an error. | YAML (`text/yaml`) / `403` / `404` (`text/plain`) |
+| `GET` | `/preseed` | Debian preseed for a host. Boot path, no credential. MAC resolved from query/ARP. An approved host gets its bound `debianconfig` rendered, else the `--preseedFile` server default; any other caller (unknown, unapproved, revoked, no MAC resolvable, or no valid `ticket` for the host) gets `404` and no template is rendered. | preseed text (`text/plain`) / `404` (`text/plain`) |
 | `POST` | `/node/report?mac=` | Node health report from a host's injected unit. Only registered when `--nodeReports` is on (otherwise `404` for every method). Authenticated by the per-host token in the `X-Booty-Node-Token` header, not by the API token. Also requires the source IP to ARP-resolve to `?mac=`; otherwise `401`. Body: JSON health report, max 64 KiB. Limits: 10/min per source IP, 1 per 10 s per host. See [Node reports](../CONFIGURATION.md#node-reports). | `204` / `400` bad MAC, bad JSON or unknown firmware / `401` missing or wrong token, unknown host, source IP not ARP-resolving to `?mac=` / `405` not `POST` (`Allow: POST`) / `413` body too large / `429` rate limited |
 | `GET` | `/version.txt` | Current cached versions, env-var format. | `FLATCAR_VERSION=…\nCOREOS_VERSION=…\n` |
 | `GET` | `/version.json` | Current cached versions, JSON. | `{"flatcar":"…","coreos":"…"}` |
@@ -287,7 +287,7 @@ The Debian family authors `debianconfig` only — the family guard
 (`familyAllowsKind`) maps the preseed family to `{debianconfig}` exclusively;
 the raw `preseed` config kind was retired (#59). The raw-preseed serving
 surface is now solely the `--preseedFile` server default (resolve rung 4), served to
-approved hosts only; any other caller of `/preseed` gets `404`.
+approved hosts carrying a valid boot ticket only; any other caller of `/preseed` gets `404`.
 `accounts.user.password_hash`
 is optional (a key-only account emits a locked `*` and requires an
 `ssh_authorized_keys` entry); `accounts.user.sudo` is a tri-state
@@ -459,7 +459,7 @@ a self-healing skew, not a bug: re-bind members promptly after a version bump to
 
 **Seam interactions with P5.** `POST /hosts/{mac}/schematic` (the raw schematic bind, see
 [Hosts](#hosts) above) returns `422` for a cluster member — a member's schematic moves only through
-this cluster's add-member/re-bind path. `GET /machineconfig?mac=` serves a member's active frozen
+this cluster's add-member/re-bind path. `GET /machineconfig?mac=&ticket=` (with the ARP match) serves a member's active frozen
 revision **verbatim, byte-identical** to what was generated or imported (see
 [DATABASE.md](DATABASE.md#cluster_node_configs)); non-member hosts continue through the pre-P6
 resolution rungs unchanged.
@@ -542,4 +542,4 @@ back to holding; arbitrary files are never served through this path. Operator-fa
 The boot-facing endpoints (`/ignition.json`, `/machineconfig`, `/version.*`), the TFTP filenames,
 and proxyDHCP behavior are the **stable contract** machines depend on. The `/api/v1` management
 plane is explicitly versioned and documented here as each slice lands; it does not change the boot
-contract.
+contract. That contract changed once: the config URLs now carry a `ticket` parameter (#88).

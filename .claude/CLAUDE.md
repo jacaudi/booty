@@ -138,10 +138,12 @@ In priority order (milestones M0–M7 that deliver these: `docs/roadmap.md`):
 - **Security invariants.**
   - Every state-changing endpoint lives under `/api/v1`, behind the auth gate.
   - Boot-path endpoints (`/ignition.json`, `/machineconfig`, `/preseed`, `/menu/`, `/boot/*`,
-    `/data/*`) are read-only. The three config routes serve a host only once it is approved: an
-    unapproved host gets the unknown-host answer (the reboot config from `/ignition.json`, a 404
-    with no template rendered from `/machineconfig` and `/preseed`), and an unapproved cluster
-    member gets 403.
+    `/data/*`) are read-only. The three config routes serve a host only once it is approved, and
+    only to a request carrying a valid boot ticket for that host and the route's OS family, which
+    the booty-rendered boot script puts in the config URL (`pkg/bootticket`, 1 h TTL, key
+    `<dataDir>/boot-ticket-key`). Any other caller gets the unknown-host answer (the reboot config
+    from `/ignition.json`, a 404 with no template rendered from `/machineconfig` and `/preseed`),
+    and an unapproved cluster member gets 403.
     Two open routes write: `POST /node/report` (node health, per-host
     HMAC token plus an ARP match), and `GET /booty.ipxe`, which records a machine it does not
     know in `discovered_hosts`. New rows are limited per source IP and capped at 1024 with no
@@ -152,13 +154,15 @@ In priority order (milestones M0–M7 that deliver these: `docs/roadmap.md`):
   - Secrets are never logged and never written outside their store. Rendered-config errors pass
     through `redactJoinString` (`pkg/http/ignition.go`). Known residual: a yaml type error quotes
     the first 7 characters of a mistyped scalar, which full-string redaction cannot catch.
-  - Known residual (#164): a caller that names an approved host's MAC with `?mac=` still gets
-    that host's config, and the join string if its template uses it, from any source. A
-    non-member has no ARP check, and rung 4 ignores the OS family.
+  - Known residual (#166): `/booty.ipxe` and `/menu/` still identify a host by the client-asserted
+    `?mac=`, so a client that deliberately names an approved host's MAC there gets a fresh boot
+    ticket, and with it that host's config and the join string if its template uses it. Boot
+    tickets stop accidental misdelivery (#88), not deliberate spoofing.
   - Any new unauthenticated endpoint carries its own credential and bounded, pre-auth rate limiting.
-    Boot-path routes are the exception: firmware and installers have no credential to present, so
-    they stay open (`/menu/` and `/boot/` have neither credential nor
-    rate limit; `/booty.ipxe` has no credential and limits only its discovery writes).
+    Boot-path routes are the exception: firmware and installers have no credential of their own
+    (the config routes accept the boot ticket booty put in the boot script), so they stay open
+    (`/menu/` and `/boot/` have neither credential nor rate limit; `/booty.ipxe` has no credential
+    and limits only its discovery writes).
 
 ### How the principles apply to existing code
 
@@ -193,6 +197,8 @@ Each item has an open issue; close the issue when the item is gone and drop its 
 | `cmd/` | Cobra entrypoint. `main.go` registers flags into an `args` struct in `init()` and binds them all with one `viper.BindPFlags(flags)`, and holds the `run` startup sequence; `shutdown.go` the ordered shutdown; `token.go` and `convert_preseed.go` the `token` and `convert-preseed` subcommands. |
 | `pkg/config/` | Viper key constants, `LoadConfig` defaults/env bindings, path helpers, `--secretsKey` (age) loading. |
 | `pkg/auth/` | Shared API token store (`<dataDir>/api-token`, 0600) and the stateless signed session cookie. Leaf package. |
+| `pkg/bootticket/` | Short-lived HMAC boot tickets (`v1.<exp>.<sig>`, 1 h) that bind a config request to the boot booty rendered for that MAC and OS family (#88). Leaf package. |
+| `pkg/keyfile/` | Loads or creates the 32-byte keys in `dataDir` (`node-report-key`, `boot-ticket-key`). Leaf package. |
 | `pkg/db/` | SQLite (`modernc.org/sqlite`, pure Go) typed store, including discovered hosts. Migrations are embedded `migrations/NNNN_name.sql` files, applied in order against `PRAGMA user_version`; there are no down migrations. |
 | `pkg/hardware/` | Host model (`Host`), MAC normalisation (`NormalizeMAC`), get/write host helpers over `pkg/db`. |
 | `pkg/ostype/` | OS taxonomy: families (ignition, talos, debian, tool), OS registrations, version discovery, verification keys. |
@@ -221,7 +227,8 @@ Each item has an open issue; close the issue when the item is gone and drop its 
    The host is identified by the `?mac=` iPXE reports; **ARP** on the request's source IP is the
    fallback.
 3. The OS kernel/initrd come from `/data/cache/...` over HTTP. The config comes from
-   `/ignition.json`, `/machineconfig` or `/preseed`, identified by `?mac=` or ARP. An unapproved
+   `/ignition.json`, `/machineconfig` or `/preseed`, identified by `?mac=` or ARP and proven by the
+   boot ticket the script put in the config URL. An unapproved
    host gets the unknown-host answer: the reboot config from `/ignition.json`, a 404 from
    `/machineconfig` and `/preseed` (an unapproved cluster member gets 403).
 4. Unknown or unapproved MACs get the holding script from `/booty.ipxe` and are recorded

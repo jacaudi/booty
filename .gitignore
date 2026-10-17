@@ -15,4 +15,5 @@ api-token
 booty.db
 booty.db-*
 node-report-key
+boot-ticket-key
 .task/

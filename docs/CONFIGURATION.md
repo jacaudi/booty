@@ -131,9 +131,16 @@ in a fixed 4-rung precedence, falling through to the next rung on any miss. This
 **approved** host: the config routes answer an unapproved host (never approved, or revoked) exactly
 as they answer an unknown one, and an unapproved cluster member gets `403`. For `/machineconfig` and
 `/preseed` that answer is `404` with no template rendered, so rung 4 never runs for a caller with no
-approved host. A caller that names an approved host's MAC with `?mac=` still gets that host's
-config, join string included (#164). `/ignition.json` still answers a caller with no approved host
-with the reboot config.
+approved host. A request must also carry a valid **boot ticket** for that host and the route's OS
+family: booty puts `ticket=v1.…` in the config URL of every OS boot script it renders, and a ticket
+is valid for 1 hour. A request without one gets the same answer as a caller with no approved host,
+and the refusal is logged as `config refused: no valid boot ticket` with the MAC, the family and
+the reason (`no ticket`, `invalid ticket`, `expired ticket`). `/ignition.json` answers every such
+caller with the reboot config, which needs no template file, so a Flatcar or CoreOS machine reboots
+and fetches a fresh ticket. A Talos node or Debian installer with an expired ticket waits until it
+is rebooted. The ticket key is `<dataDir>/boot-ticket-key`; delete it and restart booty to
+invalidate every outstanding ticket. Known residual (#166): a client that deliberately names an
+approved host's MAC at `/booty.ipxe` still receives a ticket for it.
 
 1. **Host `config_id`** — an explicit per-host binding (`POST /hosts/{mac}/approve` or `/bind`, see
    [schema/API.md](schema/API.md)). A bound config whose `kind` mismatches the host's OS family (or
@@ -576,7 +583,8 @@ returns `401` with no credential; the boot-facing and read-only surface — `/ig
 `/machineconfig`, `/preseed`, `/version.txt`, `/version.json`, `/healthz`, `/data/cache/**`,
 `/data/public/**`, `/ui/**`, `/`, `/api/v1/docs`, the OpenAPI/schema documents, and `/login`/`/logout`
 themselves — stays open, since a booting machine or a browser fetching the login page has no
-credential to present yet.
+credential to present yet. The three config routes instead require the boot ticket booty puts in
+the boot script (see [Boot config precedence](#boot-config-precedence-p4)).
 
 **Token lifecycle.**
 
