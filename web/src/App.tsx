@@ -1,5 +1,5 @@
 import { Layout, Menu } from 'antd'
-import { Link, Route, Routes, useLocation } from 'react-router-dom'
+import { Link, Route, Routes, useLocation } from 'react-router'
 import LoginGate from './auth/LoginGate'
 import { navEntries } from './nav'
 

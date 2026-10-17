@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Alert, Button, Card, List, message, Space, Typography } from 'antd'
 import { approveHost } from '../../api/client'
 import { isPending, type DiscoveredHost, type Host } from '../../api/types'

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import {
   Alert, Button, Collapse, Form, Input, Segmented, Select, Space, Tabs, Typography, message, theme,
 } from 'antd'
