@@ -2,6 +2,7 @@ package keyfile
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +39,7 @@ func TestLoadOrCreate(t *testing.T) {
 	if kerr == nil {
 		t.Fatal("31-byte key file: want error")
 	}
-	if !strings.Contains(kerr.Error(), bad) {
+	if !strings.Contains(kerr.Error(), bad) { //nolint:tricorder // errstrcmp: the key path in the message is the operator-facing contract under test
 		t.Errorf("error %q does not name the path %q", kerr, bad)
 	}
 }
@@ -60,7 +61,7 @@ func TestLoadOrCreateLeavesNoTemp(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error")
 	}
-	if strings.Contains(err.Error(), "already closed") {
+	if errors.Is(err, os.ErrClosed) {
 		t.Errorf("spurious close error: %v", err)
 	}
 	prefix := "." + filepath.Base(bad) + "-"
