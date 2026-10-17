@@ -45,9 +45,14 @@ func baseMux(deps APIDeps, dataRoot *os.Root) (*http.ServeMux, error) {
 	// All URLs will be handled by this function. The read-only routes below
 	// are GET (HEAD too), so any other method lands here instead (#149).
 	myHandler.HandleFunc("/", handleRequest)
-	myHandler.HandleFunc("GET /ignition.json", ignitionHandler(deps.Store, deps.NodeReports, arpLookup, deps.Tickets))
-	myHandler.HandleFunc("GET /machineconfig", machineConfigHandler(deps.Store, arpLookup, deps.Tickets))
-	myHandler.HandleFunc("GET /preseed", preseedHandler(deps.Store, deps.NodeReports, arpLookup, deps.Tickets))
+	// One refusal log for the three config routes, so a source's Warn budget covers them all.
+	proof, err := newRefusalLog(deps.Tickets)
+	if err != nil {
+		return nil, fmt.Errorf("http: %w", err)
+	}
+	myHandler.HandleFunc("GET /ignition.json", ignitionHandler(deps.Store, deps.NodeReports, arpLookup, proof))
+	myHandler.HandleFunc("GET /machineconfig", machineConfigHandler(deps.Store, arpLookup, proof))
+	myHandler.HandleFunc("GET /preseed", preseedHandler(deps.Store, deps.NodeReports, arpLookup, proof))
 	myHandler.Handle("GET /booty.ipxe", bootScriptHandler(deps.Store, arpLookup, deps.Tickets))
 	myHandler.Handle("GET /menu/", menuSelectionHandler(arpLookup, deps.Tickets))
 	// Bare path: every method reaches the handler, so a non-POST is a 405

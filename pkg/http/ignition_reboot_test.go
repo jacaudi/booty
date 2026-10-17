@@ -67,7 +67,7 @@ func TestIgnitionARPFallback(t *testing.T) {
 			if c.ticket {
 				target = withTicket(t, testTicketer(t), target, mac, "ignition")
 			}
-			rr := fetchConfig(t, ignitionHandler(s, nil, fixedARP(mac), testTicketer(t)), target)
+			rr := fetchConfig(t, ignitionHandler(s, nil, fixedARP(mac), refusalLogFor(t, testTicketer(t))), target)
 			body := rr.Body.String()
 			if rr.Code != http.StatusOK || !strings.Contains(body, c.want) {
 				t.Fatalf("got %d %q, want 200 with %q", rr.Code, body, c.want)

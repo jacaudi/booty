@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jeefy/booty/pkg/bootticket"
+	"github.com/jeefy/booty/pkg/hardware"
 )
 
 // testTicketer is the boot-ticket issuer and checker pkg/http tests use. The
@@ -24,7 +25,17 @@ func testTicketer(t *testing.T) *bootticket.Ticketer {
 // keep their behaviour.
 type allowProof struct{}
 
-func (allowProof) Prove(*http.Request, string, string) error { return nil }
+func (allowProof) proven(*http.Request, *hardware.Host, string) bool { return true }
+
+// refusalLogFor is tk wrapped in its refusal log, as baseMux wires it.
+func refusalLogFor(t *testing.T, tk *bootticket.Ticketer) *refusalLog {
+	t.Helper()
+	l, err := newRefusalLog(tk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
 
 // withTicket appends a valid boot ticket for mac and family to path.
 func withTicket(t *testing.T, tk *bootticket.Ticketer, path, mac, family string) string {

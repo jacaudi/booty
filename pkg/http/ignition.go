@@ -27,11 +27,11 @@ import (
 // (rungs 3–4). n nil leaves the node health unit out. A host it will not serve
 // (unknown, unapproved, or a request without a valid boot ticket for it, #88)
 // gets the reboot config, so it PXE-boots again and fetches a fresh ticket.
-func ignitionHandler(store *db.Store, n *NodeReports, arp arpFunc, proof hostProof) http.HandlerFunc {
+func ignitionHandler(store *db.Store, n *NodeReports, arp arpFunc, proof configProof) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.InfoContext(r.Context(), "ignition request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
 		host := configHost(identifyHostWith(r, arp))
-		if host != nil && !proven(r, proof, host, ostype.FamilyIgnition) {
+		if host != nil && !proof.proven(r, host, ostype.FamilyIgnition) {
 			host = nil
 		}
 		if host == nil {
