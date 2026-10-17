@@ -39,12 +39,13 @@ func StubScript(urlHost string) string {
 }
 
 // RenderBootScript renders the per-host booty.ipxe script and returns it with
-// the kind of boot (holding, assigned, menu) it chose.
-func RenderBootScript(host *hardware.Host, urlHost string) (script, kind string) {
+// the kind of boot (holding, assigned, menu) it chose. issuer mints the boot
+// ticket an assigned OS script carries; the holding and menu scripts carry none.
+func RenderBootScript(host *hardware.Host, urlHost string, issuer TicketIssuer) (script, kind string) {
 	kind, _ = bootDispatch(host)
 	switch kind {
 	case kindAssigned:
-		return assignedScript(host, urlHost), kind
+		return assignedScript(host, urlHost, issuer), kind
 	case kindMenu:
 		var inWindow, archEntries []cache.CacheEntry
 		if s := currentStore(); s != nil {

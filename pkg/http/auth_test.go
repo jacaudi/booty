@@ -506,7 +506,7 @@ func TestStartHTTPRefusesANilStoreWithoutNoAuth(t *testing.T) {
 	viper.Set(config.DataDir, t.TempDir())
 	viper.Set(config.HttpPort, 0) // never actually bound: the guard returns first
 
-	srv, err := StartHTTP(APIDeps{}, make(chan error, 1))
+	srv, err := StartHTTP(APIDeps{Tickets: testTicketer(t)}, make(chan error, 1))
 	if err == nil {
 		if srv != nil {
 			_ = srv.Close()
@@ -572,7 +572,7 @@ func TestStartHTTPAllowsANilStoreUnderNoAuth(t *testing.T) {
 	viper.Set(config.DataDir, t.TempDir())
 	viper.Set(config.HttpPort, 0)
 
-	srv, err := StartHTTP(APIDeps{NoAuth: true}, make(chan error, 1))
+	srv, err := StartHTTP(APIDeps{NoAuth: true, Tickets: testTicketer(t)}, make(chan error, 1))
 	if err != nil {
 		t.Fatalf("StartHTTP(NoAuth: true) with a nil Auth store = %v, want nil error", err)
 	}
@@ -598,7 +598,7 @@ func TestStartHTTPReturnsABindError(t *testing.T) {
 	viper.Set(config.DataDir, t.TempDir())
 	viper.Set(config.HttpPort, int(netip.MustParseAddrPort(ln.Addr().String()).Port()))
 
-	srv, err := StartHTTP(APIDeps{NoAuth: true}, make(chan error, 1))
+	srv, err := StartHTTP(APIDeps{NoAuth: true, Tickets: testTicketer(t)}, make(chan error, 1))
 	if err == nil {
 		_ = srv.Close()
 		t.Fatal("StartHTTP on a taken port = nil error, want a bind error")
@@ -620,7 +620,7 @@ func TestStartHTTPBoundsSlowAndIdleConnections(t *testing.T) {
 	viper.Set(config.DataDir, t.TempDir())
 	viper.Set(config.HttpPort, 0)
 
-	srv, err := StartHTTP(APIDeps{NoAuth: true}, make(chan error, 1))
+	srv, err := StartHTTP(APIDeps{NoAuth: true, Tickets: testTicketer(t)}, make(chan error, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,7 +645,7 @@ func TestStartHTTPFailsWhenDataDirCannotBeOpened(t *testing.T) {
 	viper.Set(config.DataDir, filepath.Join(t.TempDir(), "missing"))
 	viper.Set(config.HttpPort, 0)
 
-	srv, err := StartHTTP(APIDeps{NoAuth: true}, make(chan error, 1))
+	srv, err := StartHTTP(APIDeps{NoAuth: true, Tickets: testTicketer(t)}, make(chan error, 1))
 	if err == nil {
 		_ = srv.Close()
 		t.Fatal("StartHTTP with an unopenable dataDir = nil error, want a startup error")

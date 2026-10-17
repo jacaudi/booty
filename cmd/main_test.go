@@ -368,6 +368,37 @@ func TestRunBadNodeReportKeyFailsBeforeServicesStart(t *testing.T) {
 	}
 }
 
+// TestRunFailsOnBadBootTicketKey: the boot-ticket key loads unconditionally,
+// before the TFTP server, so a bad key file fails startup first (#88).
+func TestRunFailsOnBadBootTicketKey(t *testing.T) {
+	pc, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "udp", ":0")
+	if err != nil {
+		t.Fatalf("occupy UDP port: %v", err)
+	}
+	defer pc.Close()
+	port := udpAddr(t, pc.LocalAddr()).Port
+
+	dataDir := t.TempDir()
+	// A directory where the key file belongs makes keyfile.LoadOrCreate fail.
+	if mkErr := os.Mkdir(filepath.Join(dataDir, "boot-ticket-key"), 0o700); mkErr != nil {
+		t.Fatal(mkErr)
+	}
+	resetCmd(t)
+	var out bytes.Buffer
+	Cmd.SetOut(&out)
+	Cmd.SetErr(&out)
+	Cmd.SetArgs([]string{
+		"--dataDir", dataDir,
+		"--serverIP", "127.0.0.1",
+		"--tftpPort", strconv.Itoa(port),
+		"--httpPort", "0",
+	})
+	err = Cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "boot tickets") {
+		t.Fatalf("Execute() error = %v, want one containing %q", err, "boot tickets")
+	}
+}
+
 // resetCmd restores the process-global Cmd (flags, args, writers) and the
 // viper keys run() overrides, after a test that executes it. It must not call
 // viper.Reset: that would drop the flag bindings made in init().

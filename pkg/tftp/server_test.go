@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,9 +17,11 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/jeefy/booty/pkg/bootscript"
+	"github.com/jeefy/booty/pkg/bootticket"
 	"github.com/jeefy/booty/pkg/config"
 	"github.com/jeefy/booty/pkg/db"
 	"github.com/jeefy/booty/pkg/hardware"
+	"github.com/jeefy/booty/pkg/ostype"
 )
 
 func startTestServer(t *testing.T, dataDir string, bootFiles fs.FS) (*Server, *tftp.Client) {
@@ -33,6 +36,7 @@ func startTestServer(t *testing.T, dataDir string, bootFiles fs.FS) (*Server, *t
 		TopLevelBootFiles: []string{"undionly.kpxe"},
 		BootFiles:         bootFiles,
 		ARP:               func(net.IP) (net.HardwareAddr, error) { return nil, errors.New("no arp in tests") },
+		Tickets:           testTickets(t),
 	}, make(chan error, 1))
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -121,13 +125,13 @@ func TestStartReturnsBindError(t *testing.T) {
 	}
 	defer l.Close()
 	port := udpAddr(t, l.LocalAddr()).Port
-	if _, startErr := Start(Config{Port: port, DataDir: t.TempDir()}, make(chan error, 1)); startErr == nil {
+	if _, startErr := Start(Config{Port: port, DataDir: t.TempDir(), Tickets: testTickets(t)}, make(chan error, 1)); startErr == nil {
 		t.Fatal("Start on a busy port succeeded, want error")
 	}
 }
 
 func TestShutdownIsIdempotent(t *testing.T) {
-	s, err := Start(Config{Port: 0, DataDir: t.TempDir()}, make(chan error, 1))
+	s, err := Start(Config{Port: 0, DataDir: t.TempDir(), Tickets: testTickets(t)}, make(chan error, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +191,7 @@ func TestTFTPStubDoesNotChangeDoInstall(t *testing.T) {
 		Port:    0,
 		DataDir: t.TempDir(),
 		ARP:     func(net.IP) (net.HardwareAddr, error) { return net.ParseMAC(mac) },
+		Tickets: testTickets(t),
 	}, make(chan error, 1))
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -224,4 +229,80 @@ func udpAddr(t *testing.T, a net.Addr) *net.UDPAddr {
 		t.Fatalf("address %v is %T, want *net.UDPAddr", a, a)
 	}
 	return u
+}
+
+// testTickets is a boot-ticket issuer with a fixed test key.
+func testTickets(t *testing.T) *bootticket.Ticketer {
+	t.Helper()
+	tk, err := bootticket.New(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tk
+}
+
+func TestTFTPMenuSelectionCarriesTicket(t *testing.T) {
+	const mac = "aa:bb:cc:dd:ee:d1"
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	dataDir := t.TempDir()
+	viper.Set(config.DataDir, dataDir)
+	viper.Set(config.ServerIP, "127.0.0.1")
+	viper.Set(config.ServerHttpPort, 8080)
+	if err := os.MkdirAll(filepath.Join(dataDir, "cache", "talos", "schemA", "amd64", "v1.10.5"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := db.Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hardware.SetStore(store)
+	t.Cleanup(func() { hardware.SetStore(nil); store.Close() })
+	if err = hardware.WriteMacAddress(mac, hardware.Host{MAC: mac, OS: "flatcar"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = hardware.Approve(mac); err != nil { // boot_mode stays the 'menu' default
+		t.Fatal(err)
+	}
+	tk := testTickets(t)
+	srv, err := Start(Config{
+		Port:    0,
+		DataDir: dataDir,
+		ARP:     func(net.IP) (net.HardwareAddr, error) { return net.ParseMAC(mac) },
+		Tickets: tk,
+	}, make(chan error, 1))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Shutdown() })
+	c, err := tftp.NewClient(net.JoinHostPort("127.0.0.1", strconv.Itoa(udpAddr(t, srv.Addr()).Port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := c.Receive("menu/talos/schemA/amd64/v1.10.5/boot.ipxe", "octet")
+	if err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err = wt.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`ticket=([A-Za-z0-9._-]+)`).FindStringSubmatch(buf.String())
+	if m == nil {
+		t.Fatalf("no ticket in the TFTP menu selection script:\n%s", buf.String())
+	}
+	if err := tk.Check(m[1], mac, ostype.FamilyTalos); err != nil {
+		t.Fatalf("ticket does not verify for talos: %v", err)
+	}
+}
+
+func TestTFTPStartRefusesNilTickets(t *testing.T) {
+	srv, err := Start(Config{Port: 0, DataDir: t.TempDir()}, make(chan error, 1))
+	if err == nil {
+		_ = srv.Shutdown()
+		t.Fatal("Start with nil Tickets = nil error, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "boot ticket") {
+		t.Errorf("Start error = %v, want one naming the boot ticket issuer", err)
+	}
 }

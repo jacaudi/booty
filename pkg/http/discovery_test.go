@@ -73,7 +73,7 @@ func TestDiscoverySource(t *testing.T) {
 
 func TestBootScriptRecordsUnknownMAC(t *testing.T) {
 	s := servingStore(t)
-	h := bootScriptHandler(s, noARPFn)
+	h := bootScriptHandler(s, noARPFn, nil)
 	rr := getBoot(t, h, http.MethodGet, "/booty.ipxe?mac=aa:bb:cc:dd:ee:b0&arch=x86_64", "10.0.0.7:5")
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "not yet approved") {
 		t.Fatalf("status %d body %q, want 200 holding script", rr.Code, rr.Body.String())
@@ -93,8 +93,8 @@ func TestBootScriptRecordsUnknownMAC(t *testing.T) {
 func TestBootScriptBodyUnchangedByRecording(t *testing.T) {
 	s := servingStore(t)
 	const target = "/booty.ipxe?mac=aa:bb:cc:dd:ee:b3&arch=arm64"
-	with := getBoot(t, bootScriptHandler(s, noARPFn), http.MethodGet, target, "10.0.0.7:5")
-	without := getBoot(t, bootScriptHandler(nil, noARPFn), http.MethodGet, target, "10.0.0.7:5")
+	with := getBoot(t, bootScriptHandler(s, noARPFn, nil), http.MethodGet, target, "10.0.0.7:5")
+	without := getBoot(t, bootScriptHandler(nil, noARPFn, nil), http.MethodGet, target, "10.0.0.7:5")
 	if with.Body.String() != without.Body.String() {
 		t.Errorf("recording changed the body:\nwith:    %q\nwithout: %q", with.Body.String(), without.Body.String())
 	}
@@ -102,7 +102,7 @@ func TestBootScriptBodyUnchangedByRecording(t *testing.T) {
 
 func TestBootScriptRepeatIsDebounced(t *testing.T) {
 	s := servingStore(t)
-	h := bootScriptHandler(s, noARPFn)
+	h := bootScriptHandler(s, noARPFn, nil)
 	const target = "/booty.ipxe?mac=aa:bb:cc:dd:ee:b4"
 	getBoot(t, h, http.MethodGet, target, "10.0.0.7:5")
 	getBoot(t, h, http.MethodGet, target, "10.0.0.8:5")
@@ -117,7 +117,7 @@ func TestBootScriptRepeatIsDebounced(t *testing.T) {
 
 func TestBootScriptLimitAppliesOnlyToNewRows(t *testing.T) {
 	s := servingStore(t)
-	h := bootScriptHandler(s, noARPFn)
+	h := bootScriptHandler(s, noARPFn, nil)
 	for range 20 {
 		getBoot(t, h, http.MethodGet, "/booty.ipxe?mac=02:00:00:00:01:00", "10.0.0.20:1")
 	}
@@ -131,7 +131,7 @@ func TestBootScriptLimitAppliesOnlyToNewRows(t *testing.T) {
 
 func TestBootScriptRateLimitsNewRowsPerIP(t *testing.T) {
 	s := servingStore(t)
-	h := bootScriptHandler(s, noARPFn)
+	h := bootScriptHandler(s, noARPFn, nil)
 	newMACs := func(prefix byte, n int, remote string) {
 		t.Helper()
 		for i := range n {
@@ -183,7 +183,7 @@ func TestDiscoveryConstants(t *testing.T) {
 func TestBootScriptFullTableSpendsNoLimiterBudget(t *testing.T) {
 	s := servingStore(t)
 	fillDiscovered(t, s)
-	h := bootScriptHandler(s, noARPFn)
+	h := bootScriptHandler(s, noARPFn, nil)
 	const remote = "10.0.0.41:1"
 	for i := range discoveryPerIP {
 		getBoot(t, h, http.MethodGet, fmt.Sprintf("/booty.ipxe?mac=aa:bb:cc:dd:ee:%02x", i), remote)
@@ -200,7 +200,7 @@ func TestBootScriptFullTableSpendsNoLimiterBudget(t *testing.T) {
 func TestBootScriptRefusesWhenFull(t *testing.T) {
 	s := servingStore(t)
 	fillDiscovered(t, s)
-	h := bootScriptHandler(s, noARPFn)
+	h := bootScriptHandler(s, noARPFn, nil)
 	rr := getBoot(t, h, http.MethodGet, "/booty.ipxe?mac=aa:bb:cc:dd:ee:b1", "10.0.0.40:1")
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "not yet approved") {
 		t.Fatalf("status %d body %q, want 200 holding script", rr.Code, rr.Body.String())
@@ -232,7 +232,7 @@ func TestBootScriptRecordsNothingForRegisteredMAC(t *testing.T) {
 	if err := hardware.WriteMacAddress(mac, hardware.Host{MAC: mac}); err != nil {
 		t.Fatal(err)
 	}
-	getBoot(t, bootScriptHandler(s, noARPFn), http.MethodGet, "/booty.ipxe?mac="+mac, "10.0.0.7:5")
+	getBoot(t, bootScriptHandler(s, noARPFn, nil), http.MethodGet, "/booty.ipxe?mac="+mac, "10.0.0.7:5")
 	if got := countDiscovered(t, s); got != 0 {
 		t.Errorf("count = %d, want 0 for a registered MAC", got)
 	}
@@ -252,7 +252,7 @@ func TestBootScriptRecordsNothingOnLookupError(t *testing.T) {
 	if err := hw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	rr := getBoot(t, bootScriptHandler(rec, noARPFn), http.MethodGet, "/booty.ipxe?mac=aa:bb:cc:dd:ee:b5", "10.0.0.7:5")
+	rr := getBoot(t, bootScriptHandler(rec, noARPFn, nil), http.MethodGet, "/booty.ipxe?mac=aa:bb:cc:dd:ee:b5", "10.0.0.7:5")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
@@ -263,7 +263,7 @@ func TestBootScriptRecordsNothingOnLookupError(t *testing.T) {
 
 func TestBootScriptHeadDoesNotRecord(t *testing.T) {
 	s := servingStore(t)
-	getBoot(t, bootScriptHandler(s, noARPFn), http.MethodHead, "/booty.ipxe?mac=aa:bb:cc:dd:ee:b6", "10.0.0.7:5")
+	getBoot(t, bootScriptHandler(s, noARPFn, nil), http.MethodHead, "/booty.ipxe?mac=aa:bb:cc:dd:ee:b6", "10.0.0.7:5")
 	if got := countDiscovered(t, s); got != 0 {
 		t.Errorf("count = %d, want 0 after HEAD", got)
 	}
@@ -271,7 +271,7 @@ func TestBootScriptHeadDoesNotRecord(t *testing.T) {
 
 func TestBootScriptNilStoreSkipsRecording(t *testing.T) {
 	servingStore(t)
-	rr := getBoot(t, bootScriptHandler(nil, noARPFn), http.MethodGet, "/booty.ipxe?mac=aa:bb:cc:dd:ee:b7", "10.0.0.7:5")
+	rr := getBoot(t, bootScriptHandler(nil, noARPFn, nil), http.MethodGet, "/booty.ipxe?mac=aa:bb:cc:dd:ee:b7", "10.0.0.7:5")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}

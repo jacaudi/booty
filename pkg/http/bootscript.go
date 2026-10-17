@@ -17,7 +17,8 @@ import (
 // OS or menu). The host is identified by ?mac=, with ARP as the fallback. A GET
 // from a MAC that is not registered is also recorded as a discovered host when
 // store is non-nil; recording never changes the script served.
-func bootScriptHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
+// issuer mints the boot ticket in the OS script.
+func bootScriptHandler(store *db.Store, arp arpFunc, issuer bootscript.TicketIssuer) http.HandlerFunc {
 	var d *discoverer
 	if store != nil {
 		d = &discoverer{
@@ -30,7 +31,7 @@ func bootScriptHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 		if d != nil && r.Method == http.MethodGet && host == nil && mac != "" && errors.Is(err, hardware.ErrNotFound) {
 			d.record(r, mac)
 		}
-		script, kind := bootscript.RenderBootScript(host, bootscript.URLHost())
+		script, kind := bootscript.RenderBootScript(host, bootscript.URLHost(), issuer)
 		slog.InfoContext(r.Context(), "boot script", "kind", kind, "mac", loggableMAC(r.URL.Query().Get("mac")))
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		writeBody(w, []byte(script))
@@ -39,10 +40,11 @@ func bootScriptHandler(store *db.Store, arp arpFunc) http.HandlerFunc {
 
 // menuSelectionHandler serves "menu/<os>/<segment>/<arch>/<version>/boot.ipxe",
 // the script for one boot-menu selection, gated on the host being menu-mode.
-func menuSelectionHandler(arp arpFunc) http.HandlerFunc {
+// issuer mints the boot ticket in the OS script.
+func menuSelectionHandler(arp arpFunc, issuer bootscript.TicketIssuer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filename := strings.TrimPrefix(r.URL.Path, "/")
-		script := bootscript.MenuSelectionScript(identifyHostWith(r, arp), filename, bootscript.URLHost())
+		script := bootscript.MenuSelectionScript(identifyHostWith(r, arp), filename, bootscript.URLHost(), issuer)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		writeBody(w, []byte(script))
 	}

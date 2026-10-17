@@ -60,15 +60,24 @@ type OS interface {
 	Artifacts(ctx context.Context, version, arch string, params map[string]string) ([]Artifact, error)
 }
 
+// Family names. They are also the contract between a boot ticket's issuer
+// (pkg/bootscript) and its checker (pkg/http): both must name the same family.
+const (
+	FamilyIgnition = "ignition"
+	FamilyTalos    = "talos"
+	FamilyDebian   = "debian"
+	FamilyTool     = "tool"
+)
+
 // families is the single source of the family contract.
 var families = map[string]Family{
-	"ignition": {Name: "ignition", ConfigKind: "ignition", Template: "ignition.config.url="},
-	"talos":    {Name: "talos", ConfigKind: "machineconfig", Template: "talos.config="},
-	"debian":   {Name: "debian", ConfigKind: "preseed", Template: "auto url="},
+	FamilyIgnition: {Name: FamilyIgnition, ConfigKind: "ignition", Template: "ignition.config.url="},
+	FamilyTalos:    {Name: FamilyTalos, ConfigKind: "machineconfig", Template: "talos.config="},
+	FamilyDebian:   {Name: FamilyDebian, ConfigKind: "preseed", Template: "auto url="},
 	// tool: netboot.xyz-sourced rescue/diagnostic images. They take NO per-host
 	// config, so there is no authorable kind and no config-URL directive to
 	// inject into the kernel cmdline — both fields are deliberately empty.
-	"tool": {Name: "tool", ConfigKind: "", Template: ""},
+	FamilyTool: {Name: FamilyTool, ConfigKind: "", Template: ""},
 }
 
 // FamilyByName returns the named family.

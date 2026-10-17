@@ -56,7 +56,7 @@ func TestRenderBootScriptKinds(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		script, kind := RenderBootScript(c.host, "10.0.0.1:8080")
+		script, kind := RenderBootScript(c.host, "10.0.0.1:8080", nil)
 		if kind != c.kind || !strings.Contains(script, c.marker) {
 			t.Errorf("%s: kind=%q, want %q; marker %q missing:\n%s", c.name, kind, c.kind, c.marker, script)
 		}

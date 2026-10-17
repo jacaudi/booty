@@ -192,6 +192,7 @@ func TestOnlyAllowlistedRoutesAnswerWithoutACredential(t *testing.T) {
 		Auth:        tokenStore(t, "tok"),
 		BootFiles:   fstest.MapFS{"ipxe.efi": {Data: []byte("x")}},
 		NodeReports: &NodeReports{Key: nodeReportKey()},
+		Tickets:     testTicketer(t),
 	}
 	srv, err := StartHTTP(deps, make(chan error, 1))
 	if err != nil {
