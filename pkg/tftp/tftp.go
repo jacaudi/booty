@@ -139,12 +139,15 @@ type Server struct {
 	once sync.Once
 }
 
+// errNoTicketIssuer is Start's refusal when Config.Tickets is nil.
+var errNoTicketIssuer = errors.New("tftp: no boot ticket issuer")
+
 // Start opens dataDir, binds the UDP port and serves TFTP in a background
 // goroutine. Bind errors are returned; serve errors are sent on errCh. The
 // server is read-only: it has no write handler.
 func Start(cfg Config, errCh chan<- error) (*Server, error) {
 	if cfg.Tickets == nil {
-		return nil, errors.New("tftp: no boot ticket issuer")
+		return nil, errNoTicketIssuer
 	}
 	root, err := os.OpenRoot(cfg.DataDir)
 	if err != nil {

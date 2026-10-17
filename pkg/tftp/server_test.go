@@ -302,7 +302,7 @@ func TestTFTPStartRefusesNilTickets(t *testing.T) {
 		_ = srv.Shutdown()
 		t.Fatal("Start with nil Tickets = nil error, want a refusal")
 	}
-	if !strings.Contains(err.Error(), "boot ticket") {
-		t.Errorf("Start error = %v, want one naming the boot ticket issuer", err)
+	if !errors.Is(err, errNoTicketIssuer) {
+		t.Errorf("Start error = %v, want errNoTicketIssuer", err)
 	}
 }

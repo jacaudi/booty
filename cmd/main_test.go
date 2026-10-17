@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -394,8 +395,8 @@ func TestRunFailsOnBadBootTicketKey(t *testing.T) {
 		"--httpPort", "0",
 	})
 	err = Cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "boot tickets") {
-		t.Fatalf("Execute() error = %v, want one containing %q", err, "boot tickets")
+	if !errors.Is(err, syscall.EISDIR) {
+		t.Fatalf("Execute() error = %v, want one wrapping EISDIR from the boot-ticket key load", err)
 	}
 }
 

@@ -88,6 +88,9 @@ func (s *Server) Close() error {
 	return errors.Join(s.Server.Close(), s.dataRoot.Close())
 }
 
+// errNoTicketIssuer is StartHTTP's refusal when APIDeps.Tickets is nil.
+var errNoTicketIssuer = errors.New("http: no boot ticket issuer; refusing to start")
+
 // StartHTTP binds the HTTP port, starts serving in a background goroutine and
 // returns the server so the caller can Shutdown() it during graceful shutdown.
 // Signal handling and the ordered shutdown live with the caller; this function
@@ -105,7 +108,7 @@ func StartHTTP(deps APIDeps, errCh chan<- error) (*Server, error) {
 	// Checked first and unconditionally, --noAuth included: without an issuer
 	// no boot script carries a ticket, so every config route would refuse.
 	if deps.Tickets == nil {
-		return nil, errors.New("http: no boot ticket issuer; refusing to start")
+		return nil, errNoTicketIssuer
 	}
 	if deps.Auth == nil && !deps.NoAuth {
 		return nil, errors.New("http: no Auth token store and --noAuth not set; refusing to start unauthenticated")

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -82,8 +83,8 @@ func TestStartHTTPRefusesNilTickets(t *testing.T) {
 				}
 				t.Fatal("StartHTTP with nil Tickets = nil error, want a refusal")
 			}
-			if !strings.Contains(err.Error(), "boot ticket") {
-				t.Errorf("StartHTTP error = %v, want one naming the boot ticket issuer", err)
+			if !errors.Is(err, errNoTicketIssuer) {
+				t.Errorf("StartHTTP error = %v, want errNoTicketIssuer", err)
 			}
 		})
 	}
