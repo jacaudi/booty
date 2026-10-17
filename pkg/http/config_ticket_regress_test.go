@@ -78,10 +78,11 @@ func routeFor(t *testing.T, path string) ticketRoute {
 }
 
 // regressHandler is the config handler for path, with arp as its ARP lookup and
-// the test boot-ticket checker as its proof.
+// the test boot-ticket checker, wrapped in its refusal log as baseMux wires it,
+// as its proof.
 func regressHandler(t *testing.T, s *db.Store, path string, arp arpFunc) http.HandlerFunc {
 	t.Helper()
-	tk := testTicketer(t)
+	tk := refusalLogFor(t, testTicketer(t))
 	switch path {
 	case "/machineconfig":
 		return machineConfigHandler(s, arp, tk)

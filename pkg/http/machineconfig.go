@@ -22,7 +22,7 @@ import (
 // return 500 + short plaintext. A DB-resolved config (precedence rungs 1–2) is
 // tried before the file-based path (rungs 3–4, reached only for an approved
 // host).
-func machineConfigHandler(store *db.Store, arp arpFunc, proof hostProof) http.HandlerFunc {
+func machineConfigHandler(store *db.Store, arp arpFunc, proof configProof) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.InfoContext(r.Context(), "machineconfig request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
 
@@ -47,8 +47,10 @@ func machineConfigHandler(store *db.Store, arp arpFunc, proof hostProof) http.Ha
 		// A request must also prove it is this host's own boot (#88); without a
 		// valid boot ticket it gets the same 404 as a caller with no host.
 		host = configHost(host)
-		if host == nil || !proven(r, proof, host, ostype.FamilyTalos) {
-			writeError(w, http.StatusNotFound, noApprovedHostBody, nil)
+		if host == nil || !proof.proven(r, host, ostype.FamilyTalos) {
+			// A refusal is the expected answer, not a failure: no ERROR record.
+			// The request line and refusalLog already record it.
+			http.Error(w, noApprovedHostBody, http.StatusNotFound)
 			return
 		}
 

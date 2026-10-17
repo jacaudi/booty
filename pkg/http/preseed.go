@@ -27,14 +27,15 @@ import (
 // no template is rendered (#162). n is the optional node health report unit
 // (nil = feature off, output unchanged); only a DB-bound debianconfig is
 // injected, the raw --preseedFile default never is.
-func preseedHandler(store *db.Store, n *NodeReports, arp arpFunc, proof hostProof) http.HandlerFunc {
+func preseedHandler(store *db.Store, n *NodeReports, arp arpFunc, proof configProof) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.InfoContext(r.Context(), "preseed request", "path", r.URL.Path, "mac", loggableMAC(r.URL.Query().Get("mac")))
 		host := configHost(identifyHostWith(r, arp))
-		if host == nil || !proven(r, proof, host, ostype.FamilyDebian) {
+		if host == nil || !proof.proven(r, host, ostype.FamilyDebian) {
 			// Refused before any template is read, so nothing in the server-default
 			// file, including the join string, can reach this caller (#162, #88).
-			writeError(w, http.StatusNotFound, noApprovedHostBody, nil)
+			// As on /machineconfig, the refusal writes no ERROR record.
+			http.Error(w, noApprovedHostBody, http.StatusNotFound)
 			return
 		}
 

@@ -135,7 +135,10 @@ approved host. A request must also carry a valid **boot ticket** for that host a
 family: booty puts `ticket=v1.…` in the config URL of every OS boot script it renders, and a ticket
 is valid for 1 hour. A request without one gets the same answer as a caller with no approved host,
 and the refusal is logged as `config refused: no valid boot ticket` with the MAC, the family and
-the reason (`no ticket`, `invalid ticket`, `expired ticket`). `/ignition.json` answers every such
+the reason (`no ticket`, `invalid ticket`, `expired ticket`). That record is a warning for the first
+3 refusals a minute from each source address (an IPv6 source counts per /64); further ones from that
+source are logged at debug level (`--debug`), so a noisy client cannot fill the log or mute another
+machine's warnings. `/ignition.json` answers every such
 caller with the reboot config, which needs no template file, so a Flatcar or CoreOS machine reboots
 and fetches a fresh ticket. A Talos node or Debian installer with an expired ticket waits until it
 is rebooted. The ticket key is `<dataDir>/boot-ticket-key`; delete it and restart booty to

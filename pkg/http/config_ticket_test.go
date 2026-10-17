@@ -239,9 +239,10 @@ func TestMemberNeedsTicketAndARP(t *testing.T) {
 	}
 }
 
-// TestConfigRefusalIsLogged: every refusal leaves one Warn record with the
-// reason, so an expired or missing ticket can be told apart from an unknown
-// host. Expiry's reason text is covered in pkg/bootticket (T5).
+// TestConfigRefusalIsLogged: a source's first refusal leaves one Warn record
+// with the reason, so an expired or missing ticket can be told apart from an
+// unknown host. Expiry's reason text is covered in pkg/bootticket (T5); the
+// per-source Warn budget in TestConfigRefusalWarnIsBoundedPerSource.
 func TestConfigRefusalIsLogged(t *testing.T) {
 	const mac = "aa:bb:cc:dd:ee:7c"
 	other, err := bootticket.New(bytes.Repeat([]byte{9}, 32))
