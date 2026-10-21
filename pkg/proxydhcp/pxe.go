@@ -38,6 +38,9 @@ const (
 	// its pxe-service boot items from 32768 the same way (src/option.c).
 	pxeBootServerType uint16 = 0x8000
 
+	// pxeServerPort is the PXE boot-server port (PXE 2.1 spec; iPXE PXE_PORT).
+	pxeServerPort = 4011
+
 	pxeClientPrefix = "PXEClient"
 	pxeMenuText     = "Booty"
 	ipxeUserClass   = "iPXE"
@@ -83,7 +86,7 @@ func (c Config) withDefaults() Config {
 		c.Port67 = dhcpv4.ServerPort
 	}
 	if c.Port4011 == 0 {
-		c.Port4011 = 4011
+		c.Port4011 = pxeServerPort
 	}
 	return c
 }
@@ -334,12 +337,22 @@ func parseSubOptions(b []byte) (map[uint8][]byte, error) {
 // source port: EDK2 sends the boot-server REQUEST from port 4011 and listens
 // only there (NetworkPkg/UefiPxeBcDxe/PxeBcDhcp4.c PxeBcDhcp4Discover), as
 // dnsmasq does (src/dhcp.c dhcp_packet).
+//
+// Only ports 68 and 4011 are honoured. The source address and port are
+// attacker-controlled, so honouring any port lets a LAN host spoof ciaddr and
+// aim the ACK at a chosen victim port (67, 53, a service port; issue #102).
+// 68 is where every reply went before the EDK2 fix, so no client that worked
+// then is affected; 4011 is the one extra port a real client needs: EDK2
+// (observed 4011 to 4011 in docs/plans/2026-10-11-upstream-import/research/qemu-ovmf.md)
+// and iPXE (ipxe src/net/udp/dhcp.c start_pxebs: local port BOOTPC_PORT, 68).
+// A client on another source port gets the old ciaddr:68. UNVERIFIED: a legacy
+// BIOS ROM that sends its boot-server REQUEST from an ephemeral port.
 func replyDestination(pkt *dhcpv4.DHCPv4, src *net.UDPAddr) *net.UDPAddr {
 	if isSet(pkt.GatewayIPAddr) {
 		return &net.UDPAddr{IP: pkt.GatewayIPAddr, Port: dhcpv4.ServerPort}
 	}
 	if isSet(pkt.ClientIPAddr) {
-		if src != nil && src.IP.Equal(pkt.ClientIPAddr) && src.Port != 0 {
+		if src != nil && src.IP.Equal(pkt.ClientIPAddr) && isPXEClientPort(src.Port) {
 			return &net.UDPAddr{IP: src.IP, Port: src.Port}
 		}
 		return &net.UDPAddr{IP: pkt.ClientIPAddr, Port: dhcpv4.ClientPort}
@@ -348,4 +361,10 @@ func replyDestination(pkt *dhcpv4.DHCPv4, src *net.UDPAddr) *net.UDPAddr {
 		return &net.UDPAddr{IP: net.IPv4bcast, Port: dhcpv4.ClientPort}
 	}
 	return &net.UDPAddr{IP: src.IP, Port: src.Port}
+}
+
+// isPXEClientPort reports whether a PXE client is known to listen for its ACK
+// on port p when it sends from p; see replyDestination.
+func isPXEClientPort(p int) bool {
+	return p == dhcpv4.ClientPort || p == pxeServerPort
 }
